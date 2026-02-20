@@ -4,17 +4,68 @@
 
 let agents = [];
 let selectedAgentId = null;
-let selectedDetailTab = 'config';
 let currentMemServerID = null;
 
 // --- Init ---
 
 function init() {
-  loadAgents();
+  loadAgents().then(() => router());
   connectSSE();
-  document.getElementById('btn-settings').addEventListener('click', openSettings);
-  document.getElementById('btn-new-agent').addEventListener('click', openNewAgent);
+  window.addEventListener('hashchange', router);
+  document.getElementById('btn-settings').addEventListener('click', () => navigate('#/config'));
+  document.getElementById('btn-new-agent').addEventListener('click', () => navigate('#/agents/new'));
   document.getElementById('btn-save-config').addEventListener('click', saveConfig);
+}
+
+// --- Router ---
+
+function navigate(hash) {
+  location.hash = hash;
+}
+
+function navigateTab(tab) {
+  if (!selectedAgentId) return;
+  navigate(tab === 'config'
+    ? '#/agents/' + encodeURIComponent(selectedAgentId)
+    : '#/agents/' + encodeURIComponent(selectedAgentId) + '/' + tab);
+}
+
+function router() {
+  const hash = location.hash;
+
+  if (hash === '#/config') {
+    selectedAgentId = null;
+    renderAgentSidebar();
+    showPanel('config');
+    loadConfig();
+    return;
+  }
+
+  if (hash === '#/agents/new') {
+    selectedAgentId = null;
+    renderAgentSidebar();
+    clearNewAgentForm();
+    showPanel('new-agent');
+    return;
+  }
+
+  const m = hash.match(/^#\/agents\/([^/]+?)(?:\/(config|soul|memories))?$/);
+  if (m) {
+    const id = decodeURIComponent(m[1]);
+    const tab = m[2] || 'config';
+    selectedAgentId = id;
+    renderAgentSidebar();
+    const agent = agents.find(a => a.id === id);
+    if (!agent) { showPanel('empty'); return; }
+    populateAgentPanel(agent);
+    showPanel('agent');
+    renderDetailTab(tab);
+    return;
+  }
+
+  selectedAgentId = null;
+  renderAgentSidebar();
+  showPanel('empty');
 }
 
 // --- Agent sidebar ---
@@ -42,28 +93,9 @@ function renderAgentSidebar() {
     item.innerHTML =
       '<span class="agent-item-name">' + esc(a.id) + '</span>' +
       '<span class="agent-item-server">' + esc(a.server_id) + '</span>';
-    item.addEventListener('click', () => selectAgent(a.id));
+    item.addEventListener('click', () => navigate('#/agents/' + encodeURIComponent(a.id)));
     list.appendChild(item);
   });
-}
-
-function selectAgent(id) {
-  selectedAgentId = id;
-  renderAgentSidebar();
-
-  const agent = agents.find(a => a.id === id);
-  if (!agent) return;
-
-  document.getElementById('agent-detail-name').textContent = id;
-  document.getElementById('cfg-server-id').value = agent.server_id || '';
-  document.getElementById('cfg-token').value = '';
-  document.getElementById('cfg-soul-file').value = agent.soul_file || '';
-  document.getElementById('cfg-db-path').value = agent.db_path || '';
-  document.getElementById('cfg-response-mode').value = agent.response_mode || '';
-  document.getElementById('cfg-status').textContent = '';
-
-  showPanel('agent');
-  showDetailTab(selectedDetailTab);
 }
 
 function showPanel(name) {
@@ -74,10 +106,19 @@ function showPanel(name) {
   document.getElementById('btn-settings').classList.toggle('active', name === 'config');
 }
 
-// --- Detail tabs ---
+// --- Agent detail ---
 
-function showDetailTab(tab) {
-  selectedDetailTab = tab;
+function populateAgentPanel(agent) {
+  document.getElementById('agent-detail-name').textContent = agent.id;
+  document.getElementById('cfg-server-id').value = agent.server_id || '';
+  document.getElementById('cfg-token').value = '';
+  document.getElementById('cfg-soul-file').value = agent.soul_file || '';
+  document.getElementById('cfg-db-path').value = agent.db_path || '';
+  document.getElementById('cfg-response-mode').value = agent.response_mode || '';
+  document.getElementById('cfg-status').textContent = '';
+}
+
+function renderDetailTab(tab) {
   ['config', 'soul', 'memories'].forEach(t => {
     document.getElementById('dtab-' + t).classList.toggle('active', t === tab);
     document.getElementById('detail-' + t).hidden = (t !== tab);
@@ -143,11 +184,9 @@ function loadSoul(agentId) {
     .then(r => r.json())
     .then(data => {
       document.getElementById('soul-editor').value = data.content || '';
-      if (data.using_default) {
-        document.getElementById('soul-path-info').textContent = 'No soul file configured — will be auto-created on save.';
-      } else {
-        document.getElementById('soul-path-info').textContent = data.path || '';
-      }
+      document.getElementById('soul-path-info').textContent = data.using_default
+        ? 'No soul file configured — will be auto-created on save.'
+        : (data.path || '');
     })
     .catch(() => {
       document.getElementById('soul-path-info').textContent = 'Failed to load soul.';
@@ -170,7 +209,7 @@ function saveSoul() {
     .then(data => {
       setSoulStatus('Saved.', false);
       document.getElementById('soul-path-info').textContent = data.path;
-      loadAgents(); // refresh sidebar in case soul_file was auto-assigned
+      loadAgents();
     })
     .catch(e => setSoulStatus(e.message, true));
 }
@@ -183,13 +222,6 @@ function setSoulStatus(msg, isError) {
 }
 
 // --- Global config ---
-
-function openSettings() {
-  selectedAgentId = null;
-  renderAgentSidebar();
-  showPanel('config');
-  loadConfig();
-}
 
 function loadConfig() {
   document.getElementById('config-editor').value = '';
@@ -236,11 +268,7 @@ function setConfigStatus(msg, isError) {
 
 // --- New agent ---
 
-function openNewAgent() {
-  selectedAgentId = null;
-  selectedDetailTab = 'config';
-  renderAgentSidebar();
-  showPanel('new-agent');
+function clearNewAgentForm() {
   document.getElementById('na-id').value = '';
   document.getElementById('na-server-id').value = '';
   document.getElementById('na-token').value = '';
@@ -251,7 +279,7 @@ function openNewAgent() {
 }
 
 function cancelNewAgent() {
-  showPanel('empty');
+  navigate('');
 }
 
 function createAgent() {
@@ -276,7 +304,7 @@ function createAgent() {
   })
     .then(r => {
       if (r.ok) {
-        loadAgents().then(() => selectAgent(id));
+        loadAgents().then(() => navigate('#/agents/' + encodeURIComponent(id)));
       } else {
         r.text().then(t => setNewAgentStatus(t || 'Create failed', true));
       }
@@ -299,7 +327,7 @@ function deleteSelectedAgent() {
       if (r.ok) {
         selectedAgentId = null;
         loadAgents();
-        showPanel('empty');
+        navigate('');
       } else {
         r.text().then(t => alert('Delete failed: ' + t));
       }
@@ -417,12 +445,7 @@ function connectSSE() {
   });
 
   sseConn.addEventListener('config_reloaded', () => {
-    const prevSelected = selectedAgentId;
-    loadAgents().then(() => {
-      if (prevSelected && agents.find(a => a.id === prevSelected)) {
-        selectAgent(prevSelected);
-      }
-    });
+    loadAgents().then(() => router());
   });
 
   sseConn.onerror = () => setSseStatus(false);
@@ -488,5 +511,4 @@ function esc(str) {
 
 // --- Boot ---
 
-showPanel('empty');
 init();

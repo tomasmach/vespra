@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header class="top-bar">
@@ -94,9 +94,9 @@
           <button class="btn-danger" onclick="deleteSelectedAgent()">Delete</button>
         </div>
         <div class="detail-tabs">
-          <button class="detail-tab active" id="dtab-config" onclick="showDetailTab('config')">Config</button>
-          <button class="detail-tab" id="dtab-soul" onclick="showDetailTab('soul')">Soul</button>
-          <button class="detail-tab" id="dtab-memories" onclick="showDetailTab('memories')">Memories</button>
+          <button class="detail-tab active" id="dtab-config" onclick="navigateTab('config')">Config</button>
+          <button class="detail-tab" id="dtab-soul" onclick="navigateTab('soul')">Soul</button>
+          <button class="detail-tab" id="dtab-memories" onclick="navigateTab('memories')">Memories</button>
         </div>
 
         <!-- Config tab -->
@@ -178,6 +178,6 @@
     </div>
   </dialog>
 
-  <script src="/static/app.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

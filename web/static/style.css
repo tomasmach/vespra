@@ -204,6 +204,9 @@ body {
   overflow: hidden;
 }
 
+.panel-empty[hidden],
+.panel-section[hidden] { display: none; }
+
 .panel-header {
   display: flex;
   align-items: center;

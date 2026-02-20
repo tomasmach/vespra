@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -56,7 +57,8 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 	mux.HandleFunc("GET /api/agents/{id}/soul", s.handleGetAgentSoul)
 	mux.HandleFunc("PUT /api/agents/{id}/soul", s.handlePutAgentSoul)
-	mux.HandleFunc("/", http.FileServer(http.FS(staticFiles)).ServeHTTP)
+	sub, _ := fs.Sub(staticFiles, "static")
+	mux.HandleFunc("/", http.FileServer(http.FS(sub)).ServeHTTP)
 
 	s.httpServer = &http.Server{
 		Addr:    addr,
