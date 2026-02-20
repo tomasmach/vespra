@@ -138,6 +138,14 @@ func (r *Router) tryHotLoad(serverID string) *AgentResources {
 	return nil
 }
 
+// UnloadAgent removes a hot-loaded agent from the in-memory cache.
+// The next message to that server will find no entry and be silently ignored.
+func (r *Router) UnloadAgent(serverID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.agentsByServerID, serverID)
+}
+
 // Status returns a snapshot of all active channel agents.
 func (r *Router) Status() []ChannelStatus {
 	r.mu.Lock()

@@ -399,8 +399,6 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Note: agent changes take effect on next restart — the live router is not hot-reloaded.
-// Agents with custom tokens always require a restart regardless.
 func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -409,15 +407,15 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 
 	cfg := s.cfgStore.Get()
 	newAgents := make([]config.AgentConfig, 0, len(cfg.Agents))
-	found := false
+	var deletedServerID string
 	for _, a := range cfg.Agents {
 		if a.ID == id {
-			found = true
+			deletedServerID = a.ServerID
 			continue
 		}
 		newAgents = append(newAgents, a)
 	}
-	if !found {
+	if deletedServerID == "" {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
@@ -427,6 +425,8 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save agent", http.StatusInternalServerError)
 		return
 	}
+
+	s.router.UnloadAgent(deletedServerID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
