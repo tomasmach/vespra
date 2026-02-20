@@ -57,13 +57,13 @@ type ToolsConfig struct {
 }
 
 type AgentConfig struct {
-	ID           string          `toml:"id"`
-	ServerID     string          `toml:"server_id"`
+	ID           string          `toml:"id" json:"id"`
+	ServerID     string          `toml:"server_id" json:"server_id"`
 	Token        string          `toml:"token" json:"-"`
-	SoulFile     string          `toml:"soul_file"`
-	DBPath       string          `toml:"db_path"`
-	ResponseMode string          `toml:"response_mode"`
-	Channels     []ChannelConfig `toml:"channels"`
+	SoulFile     string          `toml:"soul_file" json:"soul_file,omitempty"`
+	DBPath       string          `toml:"db_path" json:"db_path,omitempty"`
+	ResponseMode string          `toml:"response_mode" json:"response_mode,omitempty"`
+	Channels     []ChannelConfig `toml:"channels" json:"channels,omitempty"`
 }
 
 // ResolveDBPath returns the DB path for this agent.
@@ -78,8 +78,8 @@ func (a *AgentConfig) ResolveDBPath(defaultDBPath string) string {
 }
 
 type ChannelConfig struct {
-	ID           string `toml:"id"`
-	ResponseMode string `toml:"response_mode"`
+	ID           string `toml:"id" json:"id"`
+	ResponseMode string `toml:"response_mode" json:"response_mode,omitempty"`
 }
 
 func expandPath(path string) string {
