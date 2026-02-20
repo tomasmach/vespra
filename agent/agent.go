@@ -123,7 +123,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 	// 7. Add user message to history
 	userMsg := llm.Message{Role: "user", Content: fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)}
-	msgs := append(a.history, userMsg)
+	msgs := append(append([]llm.Message(nil), a.history...), userMsg)
 
 	// 8. Tool-call loop (up to MaxToolIterations)
 	var assistantContent string
@@ -173,10 +173,13 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 
 	// 10. Update history
-	a.history = append(a.history, userMsg)
+	// If the assistant replied with plain text content, append it to msgs before saving history.
+	// (Tool-based replies are already captured in msgs via the tool-call loop.)
 	if assistantContent != "" {
-		a.history = append(a.history, llm.Message{Role: "assistant", Content: assistantContent})
+		msgs = append(msgs, llm.Message{Role: "assistant", Content: assistantContent})
 	}
+	a.history = make([]llm.Message, len(msgs))
+	copy(a.history, msgs)
 	// trim to HistoryLimit
 	if len(a.history) > a.cfg.Agent.HistoryLimit {
 		a.history = a.history[len(a.history)-a.cfg.Agent.HistoryLimit:]

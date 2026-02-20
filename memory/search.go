@@ -77,7 +77,7 @@ func (s *Store) Recall(ctx context.Context, query, serverID string, topN int) ([
 	for _, id := range merged {
 		var row MemoryRow
 		err := s.db.QueryRowContext(ctx,
-			`SELECT id, content, importance, user_id, channel_id, created_at FROM memories WHERE id = ?`,
+			`SELECT id, content, importance, COALESCE(user_id, ''), COALESCE(channel_id, ''), created_at FROM memories WHERE id = ?`,
 			id,
 		).Scan(&row.ID, &row.Content, &row.Importance, &row.UserID, &row.ChannelID, &row.CreatedAt)
 		if err != nil {

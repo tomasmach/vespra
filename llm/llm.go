@@ -73,12 +73,13 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		body["tools"] = tools
 	}
 
-	delays := []time.Duration{0, 500 * time.Millisecond, 1000 * time.Millisecond}
+	delays := []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
+			delay := delays[attempt-1]
 			select {
-			case <-time.After(delays[attempt]):
+			case <-time.After(delay):
 			case <-ctx.Done():
 				return Choice{}, ctx.Err()
 			}
@@ -137,12 +138,13 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		"input": text,
 	}
 
-	delays := []time.Duration{0, 500 * time.Millisecond, 1000 * time.Millisecond}
+	delays := []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
+			delay := delays[attempt-1]
 			select {
-			case <-time.After(delays[attempt]):
+			case <-time.After(delay):
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}

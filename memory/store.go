@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -44,8 +45,19 @@ type Store struct {
 	cfg *config.MemoryConfig
 }
 
+func expandPath(path string) string {
+	path = os.ExpandEnv(path)
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			path = filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
 func New(cfg *config.MemoryConfig, llmClient *llm.Client) (*Store, error) {
-	path := os.ExpandEnv(cfg.DBPath)
+	path := expandPath(cfg.DBPath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}

@@ -53,6 +53,9 @@ func (b *Bot) Stop() error {
 
 // onMessageCreate handles incoming Discord messages.
 func (b *Bot) onMessageCreate(s *discordgo.Session, msg *discordgo.MessageCreate) {
+	if msg.Author == nil {
+		return
+	}
 	if msg.Author.ID == s.State.User.ID || msg.Author.Bot {
 		return
 	}
