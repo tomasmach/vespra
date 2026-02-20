@@ -140,6 +140,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 		// dispatch each tool call
 		for _, tc := range choice.Message.ToolCalls {
+			slog.Info("tool call", "tool", tc.Function.Name, "channel_id", a.channelID)
 			result, err := reg.Dispatch(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
 			if err != nil {
 				slog.Warn("tool dispatch error", "tool", tc.Function.Name, "error", err)
