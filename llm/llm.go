@@ -55,20 +55,21 @@ type Choice struct {
 }
 
 type Client struct {
-	cfg        *config.LLMConfig
+	cfgStore   *config.Store
 	httpClient *http.Client
 }
 
-func New(cfg *config.LLMConfig) *Client {
+func New(cfgStore *config.Store) *Client {
 	return &Client{
-		cfg:        cfg,
-		httpClient: &http.Client{Timeout: time.Duration(cfg.RequestTimeoutSeconds) * time.Second},
+		cfgStore:   cfgStore,
+		httpClient: &http.Client{Timeout: time.Duration(cfgStore.Get().LLM.RequestTimeoutSeconds) * time.Second},
 	}
 }
 
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (Choice, error) {
+	cfg := c.cfgStore.Get().LLM
 	body := map[string]any{
-		"model":    c.cfg.Model,
+		"model":    cfg.Model,
 		"messages": messages,
 	}
 	if len(tools) > 0 {
@@ -92,8 +93,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 }
 
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
+	cfg := c.cfgStore.Get().LLM
 	body := map[string]any{
-		"model": c.cfg.EmbeddingModel,
+		"model": cfg.EmbeddingModel,
 		"input": text,
 	}
 
@@ -141,7 +143,7 @@ func (c *Client) post(ctx context.Context, url string, body any) (io.ReadCloser,
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}
-		req.Header.Set("Authorization", "Bearer "+c.cfg.OpenRouterKey)
+		req.Header.Set("Authorization", "Bearer "+c.cfgStore.Get().LLM.OpenRouterKey)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("HTTP-Referer", "https://github.com/tomasmach/mnemon-bot")
 
