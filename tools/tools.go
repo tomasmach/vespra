@@ -1,9 +1,13 @@
+// Package tools defines the AI tool registry and tool implementations.
 package tools
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 
@@ -149,7 +153,8 @@ func (t *memoryRecallTool) Call(ctx context.Context, args json.RawMessage) (stri
 }
 
 type memoryForgetTool struct {
-	store *memory.Store
+	store    *memory.Store
+	serverID string
 }
 
 func (t *memoryForgetTool) Name() string { return "memory_forget" }
@@ -172,7 +177,7 @@ func (t *memoryForgetTool) Call(ctx context.Context, args json.RawMessage) (stri
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
 	}
-	if err := t.store.Forget(ctx, p.MemoryID); err != nil {
+	if err := t.store.Forget(ctx, t.serverID, p.MemoryID); err != nil {
 		return "", err
 	}
 	return "Memory forgotten.", nil
@@ -202,7 +207,7 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
 	}
-	parts := splitMessage(p.Content, 2000)
+	parts := SplitMessage(p.Content, 2000)
 	for _, part := range parts {
 		if err := t.send(part); err != nil {
 			return "", err
@@ -211,8 +216,8 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	return "Replied.", nil
 }
 
-// splitMessage splits s into chunks of at most limit Unicode code points.
-func splitMessage(s string, limit int) []string {
+// SplitMessage splits s into chunks of at most limit Unicode code points.
+func SplitMessage(s string, limit int) []string {
 	if utf8.RuneCountInString(s) <= limit {
 		return []string{s}
 	}
@@ -256,13 +261,93 @@ func (t *reactTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	return "Reacted.", t.react(p.Emoji)
 }
 
+type webSearchTool struct {
+	apiKey string
+}
+
+func (t *webSearchTool) Name() string { return "web_search" }
+func (t *webSearchTool) Description() string {
+	return "Search the web for current information using Brave Search."
+}
+func (t *webSearchTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "The search query."}
+        },
+        "required": ["query"]
+    }`)
+}
+func (t *webSearchTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", err
+	}
+
+	endpoint := "https://api.search.brave.com/res/v1/web/search"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	q := url.Values{}
+	q.Set("q", p.Query)
+	q.Set("count", "5")
+	req.URL.RawQuery = q.Encode()
+	req.Header.Set("X-Subscription-Token", t.apiKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("search request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("search HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response: %w", err)
+	}
+
+	var result struct {
+		Web struct {
+			Results []struct {
+				Title       string `json:"title"`
+				URL         string `json:"url"`
+				Description string `json:"description"`
+			} `json:"results"`
+		} `json:"web"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+
+	if len(result.Web.Results) == 0 {
+		return "No results found.", nil
+	}
+
+	var sb strings.Builder
+	for _, r := range result.Web.Results {
+		fmt.Fprintf(&sb, "%s\n%s\n%s\n\n", r.Title, r.URL, r.Description)
+	}
+	return strings.TrimSpace(sb.String()), nil
+}
+
 // NewDefaultRegistry creates a registry with standard tools.
-func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, react ReactFunc) *Registry {
+// If webSearchKey is non-empty, the web_search tool is also registered.
+func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, react ReactFunc, webSearchKey string) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID})
-	r.Register(&memoryForgetTool{store: store})
+	r.Register(&memoryForgetTool{store: store, serverID: serverID})
 	r.Register(&replyTool{send: send})
 	r.Register(&reactTool{react: react})
+	if webSearchKey != "" {
+		r.Register(&webSearchTool{apiKey: webSearchKey})
+	}
 	return r
 }

@@ -1,3 +1,4 @@
+// Package bot provides the Discord gateway wrapper and message routing.
 package bot
 
 import (

@@ -1,3 +1,4 @@
+// Package config handles TOML configuration loading and path resolution.
 package config
 
 import (

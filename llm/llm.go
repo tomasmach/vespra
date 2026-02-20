@@ -1,3 +1,4 @@
+// Package llm provides an OpenRouter HTTP client for chat completions and embeddings.
 package llm
 
 import (

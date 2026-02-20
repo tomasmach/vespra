@@ -1,3 +1,4 @@
+// Package agent manages per-channel conversation goroutines and the agent router.
 package agent
 
 import (
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
 	"github.com/tomasmach/mnemon-bot/config"
 	"github.com/tomasmach/mnemon-bot/llm"
 	"github.com/tomasmach/mnemon-bot/memory"
@@ -52,20 +54,15 @@ func (a *ChannelAgent) run(ctx context.Context) {
 			slog.Info("channel agent idle timeout", "channel_id", a.channelID)
 			return
 		case <-ctx.Done():
-			// drain with 30s deadline
-			deadline := time.After(30 * time.Second)
-			for {
-				select {
-				case msg := <-a.msgCh:
-					drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					a.handleMessage(drainCtx, msg)
-					cancel()
-				case <-deadline:
-					return
-				default:
-					return
-				}
+			// drain only messages already buffered; no new ones can arrive after b.Stop()
+			n := len(a.msgCh)
+			for i := 0; i < n; i++ {
+				msg := <-a.msgCh
+				drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				a.handleMessage(drainCtx, msg)
+				cancel()
 			}
+			return
 		}
 	}
 }
@@ -113,7 +110,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 
 	// Build tool registry
-	reg := tools.NewDefaultRegistry(a.mem, a.serverID, sendFn, reactFn)
+	reg := tools.NewDefaultRegistry(a.mem, a.serverID, sendFn, reactFn, a.cfg.Tools.WebSearchKey)
 
 	// Add user message to history
 	userMsg := llm.Message{Role: "user", Content: fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)}
@@ -127,7 +124,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		choice, err := a.llm.Chat(ctx, buildMessages(systemPrompt, msgs), reg.Definitions())
 		if err != nil {
 			slog.Error("llm chat error", "error", err, "channel_id", a.channelID)
-			sendFn("I encountered an error. Please try again.")
+			if err := sendFn("I encountered an error. Please try again."); err != nil {
+				slog.Error("send message", "err", err)
+			}
 			return
 		}
 
@@ -155,16 +154,20 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 
 		if iter == a.cfg.Agent.MaxToolIterations-1 {
-			sendFn("I got stuck in a loop. Please try again.")
+			if err := sendFn("I got stuck in a loop. Please try again."); err != nil {
+				slog.Error("send message", "err", err)
+			}
 			return
 		}
 	}
 
 	// If assistant replied with text content (not via reply tool), send it
 	if assistantContent != "" {
-		parts := splitMessage(assistantContent, 2000)
+		parts := tools.SplitMessage(assistantContent, 2000)
 		for _, p := range parts {
-			sendFn(p)
+			if err := sendFn(p); err != nil {
+				slog.Error("send message", "err", err)
+			}
 		}
 	}
 
@@ -175,7 +178,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if len(msgs) > a.cfg.Agent.HistoryLimit {
 		msgs = msgs[len(msgs)-a.cfg.Agent.HistoryLimit:]
 	}
-	a.history = msgs
+	historyCopy := make([]llm.Message, len(msgs))
+	copy(historyCopy, msgs)
+	a.history = historyCopy
 }
 
 // buildMessages constructs the message slice for the LLM with system prompt prepended.
@@ -184,22 +189,4 @@ func buildMessages(systemPrompt string, history []llm.Message) []llm.Message {
 	msgs = append(msgs, llm.Message{Role: "system", Content: systemPrompt})
 	msgs = append(msgs, history...)
 	return msgs
-}
-
-// splitMessage splits s into chunks of at most limit runes.
-func splitMessage(s string, limit int) []string {
-	runes := []rune(s)
-	if len(runes) <= limit {
-		return []string{s}
-	}
-	var parts []string
-	for len(runes) > 0 {
-		end := limit
-		if end > len(runes) {
-			end = len(runes)
-		}
-		parts = append(parts, string(runes[:end]))
-		runes = runes[end:]
-	}
-	return parts
 }

@@ -1,3 +1,4 @@
+// Package soul loads the personality system prompt for the bot.
 package soul
 
 import (

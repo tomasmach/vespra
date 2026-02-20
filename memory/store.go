@@ -1,3 +1,4 @@
+// Package memory provides SQLite-backed persistent memory storage with hybrid search.
 package memory
 
 import (
@@ -42,7 +43,6 @@ CREATE INDEX IF NOT EXISTS idx_memories_user   ON memories(server_id, user_id);
 type Store struct {
 	db  *sql.DB
 	llm *llm.Client
-	cfg *config.MemoryConfig
 }
 
 func expandPath(path string) string {
@@ -66,11 +66,11 @@ func New(cfg *config.MemoryConfig, llmClient *llm.Client) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	if _, err := db.Exec(migrationSQL); err != nil {
+	if _, err := db.ExecContext(context.Background(), migrationSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("run migration: %w", err)
 	}
-	return &Store{db: db, llm: llmClient, cfg: cfg}, nil
+	return &Store{db: db, llm: llmClient}, nil
 }
 
 func newID() (string, error) {
@@ -110,10 +110,10 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 	return id, nil
 }
 
-func (s *Store) Forget(ctx context.Context, memoryID string) error {
+func (s *Store) Forget(ctx context.Context, serverID, memoryID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE memories SET forgotten = 1, updated_at = ? WHERE id = ?`,
-		time.Now().UTC(), memoryID,
+		`UPDATE memories SET forgotten = 1, updated_at = ? WHERE id = ? AND server_id = ?`,
+		time.Now().UTC(), memoryID, serverID,
 	)
 	return err
 }
