@@ -132,11 +132,11 @@ func Load(path string) (*Config, error) {
 	}
 	for _, agent := range cfg.Agents {
 		if agent.ResponseMode != "" && !validModes[agent.ResponseMode] {
-			return nil, fmt.Errorf("agent %s response_mode %q is invalid", agent.ID, agent.ResponseMode)
+			return nil, fmt.Errorf("agent %s response_mode %q is invalid (must be smart, mention, all, or none)", agent.ID, agent.ResponseMode)
 		}
 		for _, ch := range agent.Channels {
 			if ch.ResponseMode != "" && !validModes[ch.ResponseMode] {
-				return nil, fmt.Errorf("agent %s channel %s response_mode %q is invalid", agent.ID, ch.ID, ch.ResponseMode)
+				return nil, fmt.Errorf("agent %s channel %s response_mode %q is invalid (must be smart, mention, all, or none)", agent.ID, ch.ID, ch.ResponseMode)
 			}
 		}
 	}
