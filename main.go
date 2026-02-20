@@ -28,18 +28,20 @@ func main() {
 		cfgPath = *configPath
 	}
 
-	cfg, err := config.Load(cfgPath)
+	cfgStore, err := config.NewStore(cfgPath)
 	if err != nil {
 		slog.Error("failed to load config", "error", err, "path", cfgPath)
 		os.Exit(1)
 	}
 	slog.Info("config loaded", "path", cfgPath)
 
+	cfg := cfgStore.Get()
+
 	if cfg.Tools.WebSearchKey == "" {
 		slog.Warn("tools.web_search_key not set, web_search tool disabled")
 	}
 
-	llmClient := llm.New(&cfg.LLM)
+	llmClient := llm.New(cfgStore)
 
 	mem, err := memory.New(&cfg.Memory, llmClient)
 	if err != nil {
@@ -57,7 +59,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	router := agent.NewRouter(ctx, cfg, llmClient, mem, b.Session())
+	router := agent.NewRouter(ctx, cfgStore, llmClient, mem, b.Session())
 	b.SetRouter(router)
 
 	if err := b.Start(); err != nil {

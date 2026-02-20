@@ -12,27 +12,35 @@ import (
 	"github.com/tomasmach/mnemon-bot/memory"
 )
 
+// ChannelStatus describes the current state of an active channel agent.
+type ChannelStatus struct {
+	ChannelID  string    `json:"channel_id"`
+	ServerID   string    `json:"server_id"`
+	LastActive time.Time `json:"last_active"`
+	QueueDepth int       `json:"queue_depth"`
+}
+
 // Router manages per-channel ChannelAgents.
 type Router struct {
-	mu      sync.Mutex
-	agents  map[string]*ChannelAgent // keyed by channelID
-	ctx     context.Context
-	cfg     *config.Config
-	llm     *llm.Client
-	mem     *memory.Store
-	session *discordgo.Session
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	agents   map[string]*ChannelAgent // keyed by channelID
+	ctx      context.Context
+	cfgStore *config.Store
+	llm      *llm.Client
+	mem      *memory.Store
+	session  *discordgo.Session
+	wg       sync.WaitGroup
 }
 
 // NewRouter creates a new Router.
-func NewRouter(ctx context.Context, cfg *config.Config, llmClient *llm.Client, mem *memory.Store, session *discordgo.Session) *Router {
+func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Client, mem *memory.Store, session *discordgo.Session) *Router {
 	return &Router{
-		agents:  make(map[string]*ChannelAgent),
-		ctx:     ctx,
-		cfg:     cfg,
-		llm:     llmClient,
-		mem:     mem,
-		session: session,
+		agents:   make(map[string]*ChannelAgent),
+		ctx:      ctx,
+		cfgStore: cfgStore,
+		llm:      llmClient,
+		mem:      mem,
+		session:  session,
 	}
 }
 
@@ -59,7 +67,7 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 	}
 
 	// spawn new agent
-	a := newChannelAgent(channelID, serverID, r.cfg, r.llm, r.mem, r.session)
+	a := newChannelAgent(channelID, serverID, r.cfgStore, r.llm, r.mem, r.session)
 	r.agents[channelID] = a
 	r.wg.Add(1)
 	go func() {
@@ -72,6 +80,23 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 		r.mu.Unlock()
 	}()
 	a.msgCh <- msg // guaranteed to succeed (buffer just created, size 100)
+}
+
+// Status returns a snapshot of all active channel agents.
+func (r *Router) Status() []ChannelStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	statuses := make([]ChannelStatus, 0, len(r.agents))
+	for _, a := range r.agents {
+		statuses = append(statuses, ChannelStatus{
+			ChannelID:  a.channelID,
+			ServerID:   a.serverID,
+			LastActive: time.Unix(0, a.lastActive.Load()),
+			QueueDepth: len(a.msgCh),
+		})
+	}
+	return statuses
 }
 
 // WaitForDrain waits for all active agents to finish, up to 30 seconds.

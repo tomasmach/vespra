@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -19,33 +20,34 @@ import (
 
 // ChannelAgent is a per-channel conversation goroutine.
 type ChannelAgent struct {
-	channelID string
-	serverID  string
-	cfg       *config.Config
-	llm       *llm.Client
-	mem       *memory.Store
-	session   *discordgo.Session
-	soulText  string
-	history   []llm.Message               // capped to cfg.Agent.HistoryLimit
-	msgCh     chan *discordgo.MessageCreate // buffered 100
+	channelID  string
+	serverID   string
+	cfgStore   *config.Store
+	llm        *llm.Client
+	mem        *memory.Store
+	session    *discordgo.Session
+	soulText   string
+	history    []llm.Message               // capped to cfg.Agent.HistoryLimit
+	msgCh      chan *discordgo.MessageCreate // buffered 100
+	lastActive atomic.Int64                 // UnixNano; written by agent goroutine, read by Status()
 }
 
-func newChannelAgent(channelID, serverID string, cfg *config.Config, llmClient *llm.Client, mem *memory.Store, session *discordgo.Session) *ChannelAgent {
+func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClient *llm.Client, mem *memory.Store, session *discordgo.Session) *ChannelAgent {
 	return &ChannelAgent{
 		channelID: channelID,
 		serverID:  serverID,
-		cfg:       cfg,
+		cfgStore:  cfgStore,
 		llm:       llmClient,
 		mem:       mem,
 		session:   session,
-		soulText:  soul.Load(cfg, serverID),
+		soulText:  soul.Load(cfgStore.Get(), serverID),
 		history:   make([]llm.Message, 0),
 		msgCh:     make(chan *discordgo.MessageCreate, 100),
 	}
 }
 
 func (a *ChannelAgent) run(ctx context.Context) {
-	idleTimeout := time.Duration(a.cfg.Agent.IdleTimeoutMinutes) * time.Minute
+	idleTimeout := time.Duration(a.cfgStore.Get().Agent.IdleTimeoutMinutes) * time.Minute
 	for {
 		select {
 		case msg := <-a.msgCh:
@@ -68,8 +70,12 @@ func (a *ChannelAgent) run(ctx context.Context) {
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
+	a.lastActive.Store(time.Now().UnixNano())
+
+	cfg := a.cfgStore.Get()
+
 	// Check response mode
-	mode := a.cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
+	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
 	switch mode {
 	case "none":
 		return
@@ -110,7 +116,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 
 	// Build tool registry
-	reg := tools.NewDefaultRegistry(a.mem, a.serverID, sendFn, reactFn, a.cfg.Tools.WebSearchKey)
+	reg := tools.NewDefaultRegistry(a.mem, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
 
 	// Add user message to history
 	userMsg := llm.Message{Role: "user", Content: fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)}
@@ -120,7 +126,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 	// Tool-call loop
 	var assistantContent string
-	for iter := 0; iter < a.cfg.Agent.MaxToolIterations; iter++ {
+	for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
 		choice, err := a.llm.Chat(ctx, buildMessages(systemPrompt, msgs), reg.Definitions())
 		if err != nil {
 			slog.Error("llm chat error", "error", err, "channel_id", a.channelID)
@@ -154,7 +160,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 			})
 		}
 
-		if iter == a.cfg.Agent.MaxToolIterations-1 {
+		if iter == cfg.Agent.MaxToolIterations-1 {
 			if err := sendFn("I got stuck in a loop. Please try again."); err != nil {
 				slog.Error("send message", "err", err)
 			}
@@ -176,8 +182,8 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if assistantContent != "" {
 		msgs = append(msgs, llm.Message{Role: "assistant", Content: assistantContent})
 	}
-	if len(msgs) > a.cfg.Agent.HistoryLimit {
-		msgs = msgs[len(msgs)-a.cfg.Agent.HistoryLimit:]
+	if len(msgs) > cfg.Agent.HistoryLimit {
+		msgs = msgs[len(msgs)-cfg.Agent.HistoryLimit:]
 	}
 	historyCopy := make([]llm.Message, len(msgs))
 	copy(historyCopy, msgs)
