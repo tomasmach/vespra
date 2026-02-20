@@ -5,68 +5,81 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Mnemon-bot Dashboard</title>
   <link rel="stylesheet" href="/static/style.css">
-  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 </head>
 <body>
-  <h1>Mnemon-bot</h1>
-
-  <nav class="tabs">
-    <button onclick="showTab('config')" id="tab-config" class="tab-btn active">Config</button>
-    <button onclick="showTab('memories')" id="tab-memories" class="tab-btn">Memories</button>
-    <button onclick="showTab('monitor')" id="tab-monitor" class="tab-btn">Monitor</button>
-  </nav>
-
-  <div id="tab-config-content" class="tab-content">
-    <form
-      hx-post="/api/config"
-      hx-encoding="text/plain"
-      hx-on::after-request="onConfigSave(event)"
-    >
-      <textarea id="config-editor" name="body" spellcheck="false"></textarea>
-      <div class="row">
-        <button type="submit" class="btn-primary">Save</button>
-        <span id="config-status"></span>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <span class="logo-icon">🧠</span>
+        <span class="logo-text">Mnemon</span>
       </div>
-    </form>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" id="nav-config" onclick="showView('config')">
+          <span class="nav-icon">⚙</span> Config
+        </button>
+        <button class="nav-item" id="nav-memories" onclick="showView('memories')">
+          <span class="nav-icon">🗄</span> Memories
+        </button>
+        <button class="nav-item" id="nav-monitor" onclick="showView('monitor')">
+          <span class="nav-icon">📡</span> Monitor
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <span id="sse-dot" class="sse-dot"></span>
+        <span id="sse-label" class="sse-label">Connecting…</span>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <!-- Config view -->
+      <div id="view-config" class="view">
+        <div class="card">
+          <div class="card-header">
+            <h2>Configuration</h2>
+            <button class="btn-primary" onclick="saveConfig()">Save</button>
+          </div>
+          <textarea id="config-editor" spellcheck="false"></textarea>
+          <span id="config-status" class="status-msg"></span>
+        </div>
+      </div>
+
+      <!-- Memories view -->
+      <div id="view-memories" class="view" hidden>
+        <div class="card">
+          <div class="search-row">
+            <input id="mem-server" type="text" placeholder="Server ID (required)">
+            <input id="mem-user" type="text" placeholder="User ID (optional)">
+            <input id="mem-query" type="text" placeholder="Search (optional)">
+            <button class="btn-primary" onclick="loadMemories()">Search</button>
+          </div>
+          <span id="mem-status" class="status-msg"></span>
+        </div>
+        <span id="mem-count" class="result-count" hidden></span>
+        <div id="mem-grid" class="card-grid"></div>
+      </div>
+
+      <!-- Monitor view -->
+      <div id="view-monitor" class="view" hidden>
+        <div class="monitor-header">
+          <span id="agent-count-dot" class="status-dot"></span>
+          <span id="monitor-status">Waiting for data…</span>
+        </div>
+        <div id="agent-grid" class="card-grid"></div>
+      </div>
+    </main>
   </div>
 
-  <div id="tab-memories-content" class="tab-content" hidden>
-    <div class="filters">
-      <input id="mem-server" type="text" placeholder="Server ID (required)">
-      <input id="mem-user" type="text" placeholder="User ID (optional)">
-      <input id="mem-query" type="text" placeholder="Search (optional)">
-      <button class="btn-primary" onclick="loadMemories()">Search</button>
+  <!-- Edit modal -->
+  <dialog id="edit-modal">
+    <div class="modal-content">
+      <h3>Edit Memory</h3>
+      <textarea id="edit-textarea"></textarea>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeEditModal()">Cancel</button>
+        <button class="btn-primary" onclick="confirmEdit()">Save</button>
+      </div>
     </div>
-    <p id="mem-status"></p>
-    <table id="mem-table">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Content</th>
-          <th>Server</th>
-          <th>User</th>
-          <th>Created</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="mem-body"></tbody>
-    </table>
-  </div>
-
-  <div id="tab-monitor-content" class="tab-content" hidden>
-    <p id="monitor-status">Waiting for data...</p>
-    <table id="agent-table">
-      <thead>
-        <tr>
-          <th>Channel ID</th>
-          <th>Server ID</th>
-          <th>Last Active</th>
-          <th>Queue Depth</th>
-        </tr>
-      </thead>
-      <tbody id="agent-body"></tbody>
-    </table>
-  </div>
+  </dialog>
 
   <script src="/static/app.js"></script>
 </body>
