@@ -99,7 +99,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	router := agent.NewRouter(ctx, cfgStore, llmClient, agentsByServerID)
+	router := agent.NewRouter(ctx, cfgStore, llmClient, defaultBot.Session(), agentsByServerID)
 
 	// Wire router to all bots
 	defaultBot.SetRouter(router)
