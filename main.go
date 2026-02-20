@@ -2,17 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/tomasmach/mnemon-bot/agent"
 	"github.com/tomasmach/mnemon-bot/bot"
 	"github.com/tomasmach/mnemon-bot/config"
 	"github.com/tomasmach/mnemon-bot/llm"
 	"github.com/tomasmach/mnemon-bot/memory"
+	"github.com/tomasmach/mnemon-bot/web"
 )
 
 func main() {
@@ -68,11 +72,27 @@ func main() {
 	}
 	slog.Info("bot started")
 
+	webAddr := cfgStore.Get().Web.Addr
+	if webAddr == "" {
+		webAddr = ":8080"
+	}
+	webServer := web.New(webAddr, cfgStore, cfgPath, mem, router)
+	webServer.StartStatusPoller(ctx)
+	go func() {
+		if err := webServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("web server", "error", err)
+		}
+	}()
+	slog.Info("web server started", "addr", webAddr)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	<-sigCh
 
 	slog.Info("shutting down")
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutCancel()
+	_ = webServer.Shutdown(shutCtx)
 	b.Stop()
 	cancel()
 	router.WaitForDrain()
