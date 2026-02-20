@@ -377,16 +377,36 @@ function renderMemories(data, serverID) {
           '<span class="meta-time">' + esc(created) + '</span>' +
         '</div>' +
         '<div class="memory-actions">' +
-          '<button class="btn-edit" onclick="openEditModal(' + JSON.stringify(m.ID) + ',' + JSON.stringify(m.Content) + ',' + JSON.stringify(serverID) + ')">Edit</button>' +
-          '<button class="btn-danger" onclick="deleteMemory(' + JSON.stringify(m.ID) + ',' + JSON.stringify(serverID) + ')">Delete</button>' +
+          '<button class="btn-edit">Edit</button>' +
+          '<button class="btn-danger">Delete</button>' +
         '</div>' +
       '</div>';
+    card.querySelector('.btn-edit').addEventListener('click', () => openEditModal(m.ID, m.Content, serverID));
+    card.querySelector('.btn-danger').addEventListener('click', () => deleteMemory(m.ID, serverID));
     grid.appendChild(card);
   });
 }
 
+let pendingDeleteID = null;
+let pendingDeleteServerID = null;
+
 function deleteMemory(id, serverID) {
-  if (!confirm('Delete this memory?')) return;
+  pendingDeleteID = id;
+  pendingDeleteServerID = serverID;
+  document.getElementById('delete-modal').showModal();
+}
+
+function closeDeleteModal() {
+  document.getElementById('delete-modal').close();
+  pendingDeleteID = null;
+  pendingDeleteServerID = null;
+}
+
+function confirmDelete() {
+  if (pendingDeleteID === null) return;
+  const id = pendingDeleteID;
+  const serverID = pendingDeleteServerID;
+  closeDeleteModal();
   fetch('/api/memories/' + encodeURIComponent(id) + '?server_id=' + encodeURIComponent(serverID), { method: 'DELETE' })
     .then(r => { if (r.ok) searchMemories(); else r.text().then(t => alert('Delete failed: ' + t)); })
     .catch(() => alert('Delete failed.'));
