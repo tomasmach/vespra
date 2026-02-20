@@ -138,6 +138,30 @@ body {
   flex-shrink: 0;
 }
 
+.btn-settings {
+  width: 100%;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--ink-dull);
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.825rem;
+  transition: background 0.12s, color 0.12s;
+  margin-bottom: 0.4rem;
+}
+
+.btn-settings:hover {
+  background: hsl(var(--hue), 15%, 13%);
+  color: var(--ink);
+}
+
+.btn-settings.active {
+  background: hsl(var(--hue), 15%, 14%);
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
 .btn-new-agent {
   width: 100%;
   background: none;
@@ -241,7 +265,7 @@ body {
   border-radius: 4px;
 }
 
-#soul-editor {
+#soul-editor, #config-editor {
   width: 100%;
   min-height: 420px;
   background: var(--bg-card-dark);
@@ -253,10 +277,10 @@ body {
   font-size: 13px;
   resize: vertical;
   display: block;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s;
 }
 
-#soul-editor:focus {
+#soul-editor:focus, #config-editor:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-glow);

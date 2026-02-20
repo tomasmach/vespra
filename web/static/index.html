@@ -27,7 +27,8 @@
       <div class="sidebar-agents-label">Agents</div>
       <div id="agent-sidebar-list" class="agent-sidebar-list"></div>
       <div class="sidebar-footer">
-        <button class="btn-new-agent" onclick="openNewAgent()">+ New Agent</button>
+        <button class="btn-settings" id="btn-settings">⚙ Settings</button>
+        <button class="btn-new-agent" id="btn-new-agent">+ New Agent</button>
       </div>
     </aside>
 
@@ -35,6 +36,21 @@
       <!-- No agent selected -->
       <div id="panel-empty" class="panel-empty">
         <p>Select an agent from the sidebar, or create a new one.</p>
+      </div>
+
+      <!-- Global config editor -->
+      <div id="panel-config" class="panel-section" hidden>
+        <div class="panel-header">
+          <h2>Global Config</h2>
+        </div>
+        <div class="detail-content">
+          <div id="config-path-info" class="soul-path-info"></div>
+          <textarea id="config-editor" spellcheck="false"></textarea>
+          <div class="form-actions">
+            <button class="btn-primary" id="btn-save-config">Save Config</button>
+          </div>
+          <span id="config-status" class="status-msg"></span>
+        </div>
       </div>
 
       <!-- New agent form -->

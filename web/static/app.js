@@ -12,6 +12,9 @@ let currentMemServerID = null;
 function init() {
   loadAgents();
   connectSSE();
+  document.getElementById('btn-settings').addEventListener('click', openSettings);
+  document.getElementById('btn-new-agent').addEventListener('click', openNewAgent);
+  document.getElementById('btn-save-config').addEventListener('click', saveConfig);
 }
 
 // --- Agent sidebar ---
@@ -65,8 +68,10 @@ function selectAgent(id) {
 
 function showPanel(name) {
   document.getElementById('panel-empty').hidden = (name !== 'empty');
+  document.getElementById('panel-config').hidden = (name !== 'config');
   document.getElementById('panel-new-agent').hidden = (name !== 'new-agent');
   document.getElementById('panel-agent').hidden = (name !== 'agent');
+  document.getElementById('btn-settings').classList.toggle('active', name === 'config');
 }
 
 // --- Detail tabs ---
@@ -172,6 +177,59 @@ function saveSoul() {
 
 function setSoulStatus(msg, isError) {
   const el = document.getElementById('soul-status');
+  el.textContent = msg;
+  el.className = 'status-msg' + (isError ? ' error' : '');
+  if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
+}
+
+// --- Config tab ---
+
+function openSettings() {
+  selectedAgentId = null;
+  selectedDetailTab = 'config';
+  renderAgentSidebar();
+  showPanel('config');
+  loadConfig();
+}
+
+function loadConfig() {
+  document.getElementById('config-editor').value = '';
+  document.getElementById('config-path-info').textContent = 'Loading…';
+  document.getElementById('config-status').textContent = '';
+
+  fetch('/api/config')
+    .then(r => {
+      if (!r.ok) throw new Error('Failed to load config');
+      return r.text();
+    })
+    .then(text => {
+      document.getElementById('config-editor').value = text;
+      document.getElementById('config-path-info').textContent = 'Global config (TOML)';
+    })
+    .catch(() => {
+      document.getElementById('config-path-info').textContent = 'Failed to load config.';
+    });
+}
+
+function saveConfig() {
+  const content = document.getElementById('config-editor').value;
+  fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: content,
+  })
+    .then(r => {
+      if (r.ok) {
+        setConfigStatus('Saved.', false);
+      } else {
+        r.text().then(t => setConfigStatus(t || 'Save failed', true));
+      }
+    })
+    .catch(() => setConfigStatus('Save failed', true));
+}
+
+function setConfigStatus(msg, isError) {
+  const el = document.getElementById('config-status');
   el.textContent = msg;
   el.className = 'status-msg' + (isError ? ' error' : '');
   if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
