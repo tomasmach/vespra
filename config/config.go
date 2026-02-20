@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/BurntSushi/toml"
@@ -14,11 +15,11 @@ type Config struct {
 	Bot      BotConfig
 	LLM      LLMConfig
 	Memory   MemoryConfig
-	Agent    AgentConfig
+	Agent    TurnConfig    `toml:"agent"`
 	Response ResponseConfig
 	Tools    ToolsConfig
 	Web      WebConfig
-	Servers  []ServerConfig
+	Agents   []AgentConfig `toml:"agents"`
 }
 
 type WebConfig struct {
@@ -41,7 +42,7 @@ type MemoryConfig struct {
 	DBPath string `toml:"db_path"`
 }
 
-type AgentConfig struct {
+type TurnConfig struct {
 	HistoryLimit       int `toml:"history_limit"`
 	IdleTimeoutMinutes int `toml:"idle_timeout_minutes"`
 	MaxToolIterations  int `toml:"max_tool_iterations"`
@@ -55,16 +56,39 @@ type ToolsConfig struct {
 	WebSearchKey string `toml:"web_search_key" json:"-"`
 }
 
-type ServerConfig struct {
+type AgentConfig struct {
 	ID           string          `toml:"id"`
+	ServerID     string          `toml:"server_id"`
+	Token        string          `toml:"token" json:"-"`
 	SoulFile     string          `toml:"soul_file"`
+	DBPath       string          `toml:"db_path"`
 	ResponseMode string          `toml:"response_mode"`
 	Channels     []ChannelConfig `toml:"channels"`
+}
+
+// ResolveDBPath returns the DB path for this agent.
+// If db_path is set, it expands and returns it.
+// Otherwise derives: dir(defaultDBPath)/agents/<server_id>/memory.db
+func (a *AgentConfig) ResolveDBPath(defaultDBPath string) string {
+	if a.DBPath != "" {
+		return expandPath(a.DBPath)
+	}
+	dir := filepath.Dir(expandPath(defaultDBPath))
+	return filepath.Join(dir, "agents", a.ServerID, "memory.db")
 }
 
 type ChannelConfig struct {
 	ID           string `toml:"id"`
 	ResponseMode string `toml:"response_mode"`
+}
+
+func expandPath(path string) string {
+	path = os.ExpandEnv(path)
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[2:])
+	}
+	return path
 }
 
 func Load(path string) (*Config, error) {
@@ -106,13 +130,13 @@ func Load(path string) (*Config, error) {
 	if !validModes[cfg.Response.DefaultMode] {
 		return nil, fmt.Errorf("response.default_mode %q is invalid (must be smart, mention, all, or none)", cfg.Response.DefaultMode)
 	}
-	for _, server := range cfg.Servers {
-		if server.ResponseMode != "" && !validModes[server.ResponseMode] {
-			return nil, fmt.Errorf("server %s response_mode %q is invalid (must be smart, mention, all, or none)", server.ID, server.ResponseMode)
+	for _, agent := range cfg.Agents {
+		if agent.ResponseMode != "" && !validModes[agent.ResponseMode] {
+			return nil, fmt.Errorf("agent %s response_mode %q is invalid", agent.ID, agent.ResponseMode)
 		}
-		for _, ch := range server.Channels {
+		for _, ch := range agent.Channels {
 			if ch.ResponseMode != "" && !validModes[ch.ResponseMode] {
-				return nil, fmt.Errorf("server %s channel %s response_mode %q is invalid (must be smart, mention, all, or none)", server.ID, ch.ID, ch.ResponseMode)
+				return nil, fmt.Errorf("agent %s channel %s response_mode %q is invalid", agent.ID, ch.ID, ch.ResponseMode)
 			}
 		}
 	}
@@ -169,19 +193,19 @@ func (s *Store) Reload() (*Config, error) {
 }
 
 // ResolveResponseMode returns the effective response mode for a server/channel pair.
-// Priority: channel-level > server-level > global default.
+// Priority: channel-level > agent-level > global default.
 func (cfg *Config) ResolveResponseMode(serverID, channelID string) string {
-	for _, server := range cfg.Servers {
-		if server.ID != serverID {
+	for _, agent := range cfg.Agents {
+		if agent.ServerID != serverID {
 			continue
 		}
-		for _, ch := range server.Channels {
+		for _, ch := range agent.Channels {
 			if ch.ID == channelID && ch.ResponseMode != "" {
 				return ch.ResponseMode
 			}
 		}
-		if server.ResponseMode != "" {
-			return server.ResponseMode
+		if agent.ResponseMode != "" {
+			return agent.ResponseMode
 		}
 		break
 	}
