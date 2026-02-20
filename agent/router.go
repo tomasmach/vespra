@@ -20,27 +20,32 @@ type ChannelStatus struct {
 	QueueDepth int       `json:"queue_depth"`
 }
 
+// AgentResources holds the Discord session and memory store for a configured agent.
+type AgentResources struct {
+	Config  *config.AgentConfig
+	Memory  *memory.Store
+	Session *discordgo.Session
+}
+
 // Router manages per-channel ChannelAgents.
 type Router struct {
-	mu       sync.Mutex
-	agents   map[string]*ChannelAgent // keyed by channelID
-	ctx      context.Context
-	cfgStore *config.Store
-	llm      *llm.Client
-	mem      *memory.Store
-	session  *discordgo.Session
-	wg       sync.WaitGroup
+	mu               sync.Mutex
+	agents           map[string]*ChannelAgent // keyed by channelID
+	ctx              context.Context
+	cfgStore         *config.Store
+	llm              *llm.Client
+	agentsByServerID map[string]*AgentResources
+	wg               sync.WaitGroup
 }
 
 // NewRouter creates a new Router.
-func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Client, mem *memory.Store, session *discordgo.Session) *Router {
+func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Client, agentsByServerID map[string]*AgentResources) *Router {
 	return &Router{
-		agents:   make(map[string]*ChannelAgent),
-		ctx:      ctx,
-		cfgStore: cfgStore,
-		llm:      llmClient,
-		mem:      mem,
-		session:  session,
+		agents:           make(map[string]*ChannelAgent),
+		ctx:              ctx,
+		cfgStore:         cfgStore,
+		llm:              llmClient,
+		agentsByServerID: agentsByServerID,
 	}
 }
 
@@ -50,6 +55,11 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 	serverID := msg.GuildID
 	if serverID == "" {
 		serverID = "DM:" + msg.Author.ID
+	}
+
+	resources, ok := r.agentsByServerID[serverID]
+	if !ok {
+		return // unconfigured server, silently ignore
 	}
 
 	r.mu.Lock()
@@ -67,7 +77,7 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 	}
 
 	// spawn new agent
-	a := newChannelAgent(channelID, serverID, r.cfgStore, r.llm, r.mem, r.session)
+	a := newChannelAgent(channelID, serverID, r.cfgStore, r.llm, resources)
 	r.agents[channelID] = a
 	r.wg.Add(1)
 	go func() {
@@ -80,6 +90,14 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 		r.mu.Unlock()
 	}()
 	a.msgCh <- msg // guaranteed to succeed (buffer just created, size 100)
+}
+
+// MemoryForServer returns the memory store for a configured server, or nil if not configured.
+func (r *Router) MemoryForServer(serverID string) *memory.Store {
+	if res, ok := r.agentsByServerID[serverID]; ok {
+		return res.Memory
+	}
+	return nil
 }
 
 // Status returns a snapshot of all active channel agents.
