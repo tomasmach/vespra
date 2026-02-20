@@ -2,7 +2,7 @@
 
 // --- View switching ---
 
-const VIEWS = ['config', 'memories', 'monitor'];
+const VIEWS = ['config', 'agents', 'memories', 'monitor'];
 
 function showView(name) {
   VIEWS.forEach(v => {
@@ -10,6 +10,8 @@ function showView(name) {
     document.getElementById('nav-' + v).classList.toggle('active', v === name);
   });
   if (name === 'config' && !configLoaded) loadConfig();
+  if (name === 'agents') loadAgents();
+  if (name === 'memories') loadAgentList(); // populate dropdown
 }
 
 // --- Config tab ---
@@ -41,6 +43,127 @@ function saveConfig() {
 
 function setConfigStatus(msg, isError) {
   const el = document.getElementById('config-status');
+  el.textContent = msg;
+  el.className = 'status-msg' + (isError ? ' error' : '');
+  if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
+}
+
+// --- Agents tab ---
+
+let editingAgentID = null;
+
+function loadAgents() {
+  fetch('/api/agents')
+    .then(r => r.json())
+    .then(renderAgentList)
+    .catch(() => setAgentsStatus('Failed to load agents', true));
+}
+
+function renderAgentList(agents) {
+  const list = document.getElementById('agents-list');
+  list.innerHTML = '';
+  if (!agents || agents.length === 0) {
+    list.innerHTML = '<p class="empty-msg">No agents configured.</p>';
+    return;
+  }
+  agents.forEach(a => {
+    const row = document.createElement('div');
+    row.className = 'agent-row';
+    row.innerHTML =
+      '<div class="agent-row-info">' +
+        '<strong>' + esc(a.id) + '</strong>' +
+        ' <span class="meta-id">' + esc(a.server_id) + '</span>' +
+        (a.has_token ? ' <span class="badge badge-green">custom token</span>' : '') +
+        (a.soul_file ? ' <span class="meta-id">' + esc(a.soul_file) + '</span>' : '') +
+        (a.response_mode ? ' <span class="badge badge-amber">' + esc(a.response_mode) + '</span>' : '') +
+      '</div>' +
+      '<div class="agent-row-actions">' +
+        '<button class="btn-edit" onclick="editAgent(' + JSON.stringify(a) + ')">Edit</button>' +
+        '<button class="btn-danger" onclick="deleteAgent(' + JSON.stringify(a.id) + ')">Delete</button>' +
+      '</div>';
+    list.appendChild(row);
+  });
+}
+
+function openNewAgentForm() {
+  editingAgentID = null;
+  document.getElementById('agent-form-title').textContent = 'New Agent';
+  document.getElementById('af-id').value = '';
+  document.getElementById('af-id').disabled = false;
+  document.getElementById('af-server-id').value = '';
+  document.getElementById('af-token').value = '';
+  document.getElementById('af-soul-file').value = '';
+  document.getElementById('af-db-path').value = '';
+  document.getElementById('af-response-mode').value = '';
+  document.getElementById('agent-form-card').hidden = false;
+}
+
+function editAgent(a) {
+  editingAgentID = a.id;
+  document.getElementById('agent-form-title').textContent = 'Edit Agent';
+  document.getElementById('af-id').value = a.id;
+  document.getElementById('af-id').disabled = true;
+  document.getElementById('af-server-id').value = a.server_id;
+  document.getElementById('af-token').value = ''; // never pre-fill token
+  document.getElementById('af-soul-file').value = a.soul_file || '';
+  document.getElementById('af-db-path').value = a.db_path || '';
+  document.getElementById('af-response-mode').value = a.response_mode || '';
+  document.getElementById('agent-form-card').hidden = false;
+}
+
+function closeAgentForm() {
+  document.getElementById('agent-form-card').hidden = true;
+  editingAgentID = null;
+}
+
+function saveAgent() {
+  const id = document.getElementById('af-id').value.trim();
+  const serverID = document.getElementById('af-server-id').value.trim();
+  if (!id) { setAgentsStatus('ID is required', true); return; }
+  if (!serverID) { setAgentsStatus('Server ID is required', true); return; }
+
+  const body = {
+    id: id,
+    server_id: serverID,
+    token: document.getElementById('af-token').value,
+    soul_file: document.getElementById('af-soul-file').value.trim(),
+    db_path: document.getElementById('af-db-path').value.trim(),
+    response_mode: document.getElementById('af-response-mode').value,
+  };
+
+  const isEdit = editingAgentID !== null;
+  const url = isEdit ? '/api/agents/' + encodeURIComponent(editingAgentID) : '/api/agents';
+  const method = isEdit ? 'PUT' : 'POST';
+
+  fetch(url, {
+    method: method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+    .then(r => {
+      if (r.ok) {
+        closeAgentForm();
+        loadAgents();
+        setAgentsStatus(isEdit ? 'Agent updated.' : 'Agent created.', false);
+      } else {
+        r.text().then(t => setAgentsStatus(t || 'Save failed', true));
+      }
+    })
+    .catch(() => setAgentsStatus('Save failed', true));
+}
+
+function deleteAgent(id) {
+  if (!confirm('Delete agent "' + id + '"? The memory DB will not be deleted.')) return;
+  fetch('/api/agents/' + encodeURIComponent(id), { method: 'DELETE' })
+    .then(r => {
+      if (r.ok) loadAgents();
+      else r.text().then(t => alert('Delete failed: ' + t));
+    })
+    .catch(() => alert('Delete failed.'));
+}
+
+function setAgentsStatus(msg, isError) {
+  const el = document.getElementById('agents-status');
   el.textContent = msg;
   el.className = 'status-msg' + (isError ? ' error' : '');
   if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
@@ -107,6 +230,32 @@ function deleteMemory(id, serverID) {
   fetch('/api/memories/' + encodeURIComponent(id) + '?server_id=' + encodeURIComponent(serverID), { method: 'DELETE' })
     .then(r => { if (r.ok) loadMemories(); else r.text().then(t => alert('Delete failed: ' + t)); })
     .catch(() => alert('Delete failed.'));
+}
+
+// populate agent dropdown for memories tab
+function loadAgentList() {
+  fetch('/api/agents')
+    .then(r => r.json())
+    .then(agents => {
+      const sel = document.getElementById('mem-agent-select');
+      // keep the first "— select agent —" option
+      sel.options.length = 1;
+      (agents || []).forEach(a => {
+        const opt = document.createElement('option');
+        opt.value = a.server_id;
+        opt.textContent = a.id + ' (' + a.server_id + ')';
+        sel.appendChild(opt);
+      });
+    })
+    .catch(() => {});
+}
+
+function onMemAgentChange() {
+  const sel = document.getElementById('mem-agent-select');
+  const serverInput = document.getElementById('mem-server');
+  if (sel.value) {
+    serverInput.value = sel.value;
+  }
 }
 
 // --- Edit modal ---

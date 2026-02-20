@@ -473,3 +473,29 @@ dialog::backdrop { background: hsla(235, 20%, 4%, 0.75); }
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* Agent list rows */
+.agent-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.agent-row:last-child { border-bottom: none; }
+.agent-row-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-row-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* Form grid for agent form */
+.form-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 16px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.form-grid label { font-size: 0.85rem; color: var(--fg-muted); white-space: nowrap; }
+.form-grid input, .form-grid select { width: 100%; }
+
+/* Empty message */
+.empty-msg { color: var(--fg-muted); font-style: italic; padding: 16px 0; margin: 0; }

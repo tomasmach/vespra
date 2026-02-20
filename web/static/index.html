@@ -17,6 +17,9 @@
         <button class="nav-item active" id="nav-config" onclick="showView('config')">
           <span class="nav-icon">⚙</span> Config
         </button>
+        <button class="nav-item" id="nav-agents" onclick="showView('agents')">
+          <span class="nav-icon">🤖</span> Agents
+        </button>
         <button class="nav-item" id="nav-memories" onclick="showView('memories')">
           <span class="nav-icon">🗄</span> Memories
         </button>
@@ -43,11 +46,57 @@
         </div>
       </div>
 
+      <!-- Agents view -->
+      <div id="view-agents" class="view" hidden>
+        <div class="card">
+          <div class="card-header">
+            <h2>Agents</h2>
+            <button class="btn-primary" onclick="openNewAgentForm()">+ New Agent</button>
+          </div>
+          <div id="agents-list"></div>
+          <span id="agents-status" class="status-msg"></span>
+        </div>
+
+        <!-- New / Edit agent form (hidden by default) -->
+        <div id="agent-form-card" class="card" hidden>
+          <div class="card-header">
+            <h2 id="agent-form-title">New Agent</h2>
+          </div>
+          <div class="form-grid">
+            <label>ID (unique name)</label>
+            <input id="af-id" type="text" placeholder="my-server">
+            <label>Server ID (Discord guild ID)</label>
+            <input id="af-server-id" type="text" placeholder="123456789">
+            <label>Token (optional, overrides default)</label>
+            <input id="af-token" type="password" placeholder="Leave blank to use default bot token">
+            <label>Soul File (optional)</label>
+            <input id="af-soul-file" type="text" placeholder="~/.config/mnemon-bot/soul.txt">
+            <label>DB Path (optional, auto-derived if blank)</label>
+            <input id="af-db-path" type="text" placeholder="auto">
+            <label>Response Mode (optional)</label>
+            <select id="af-response-mode">
+              <option value="">inherit from global</option>
+              <option value="smart">smart</option>
+              <option value="mention">mention</option>
+              <option value="all">all</option>
+              <option value="none">none</option>
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button class="btn-secondary" onclick="closeAgentForm()">Cancel</button>
+            <button class="btn-primary" onclick="saveAgent()">Save</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Memories view -->
       <div id="view-memories" class="view" hidden>
         <div class="card">
           <div class="search-row">
-            <input id="mem-server" type="text" placeholder="Server ID (required)">
+            <select id="mem-agent-select" onchange="onMemAgentChange()">
+              <option value="">— select agent —</option>
+            </select>
+            <input id="mem-server" type="text" placeholder="Server ID (manual)">
             <input id="mem-user" type="text" placeholder="User ID (optional)">
             <input id="mem-query" type="text" placeholder="Search (optional)">
             <button class="btn-primary" onclick="loadMemories()">Search</button>
