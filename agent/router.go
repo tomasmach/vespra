@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/tomasmach/mnemon-bot/config"
@@ -73,7 +74,16 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 	a.msgCh <- msg // guaranteed to succeed (buffer just created, size 100)
 }
 
-// WaitForDrain waits for all active agents to finish (up to the context deadline).
+// WaitForDrain waits for all active agents to finish, up to 30 seconds.
 func (r *Router) WaitForDrain() {
-	r.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		slog.Warn("drain timeout: some agents did not finish within 30s")
+	}
 }
