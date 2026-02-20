@@ -44,6 +44,10 @@ Mnemon-bot is a Discord AI companion (~1,400 lines of Go) with persistent memory
 
 **`migrations/`** — Single SQL migration defining the `memories` and `embeddings` tables.
 
+## Code Style
+
+See [GO_CODE_STYLE.md](./GO_CODE_STYLE.md) for naming, error handling, logging, goroutine, and other Go conventions used in this project.
+
 ## Key Design Decisions
 
 - One goroutine per active Discord channel; idle timeout after `IdleTimeoutMinutes`
