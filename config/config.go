@@ -92,6 +92,22 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("llm.openrouter_key is required")
 	}
 
+	// Validate response mode values
+	validModes := map[string]bool{"smart": true, "mention": true, "all": true, "none": true}
+	if !validModes[cfg.Response.DefaultMode] {
+		return nil, fmt.Errorf("response.default_mode %q is invalid (must be smart, mention, all, or none)", cfg.Response.DefaultMode)
+	}
+	for _, server := range cfg.Servers {
+		if server.ResponseMode != "" && !validModes[server.ResponseMode] {
+			return nil, fmt.Errorf("server %s response_mode %q is invalid (must be smart, mention, all, or none)", server.ID, server.ResponseMode)
+		}
+		for _, ch := range server.Channels {
+			if ch.ResponseMode != "" && !validModes[ch.ResponseMode] {
+				return nil, fmt.Errorf("server %s channel %s response_mode %q is invalid (must be smart, mention, all, or none)", server.ID, ch.ID, ch.ResponseMode)
+			}
+		}
+	}
+
 	return &cfg, nil
 }
 
