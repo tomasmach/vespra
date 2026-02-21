@@ -313,13 +313,17 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 func (a *ChannelAgent) startTyping(ctx context.Context) context.CancelFunc {
 	typingCtx, cancel := context.WithCancel(ctx)
 	go func() {
-		_ = a.resources.Session.ChannelTyping(a.channelID)
+		if err := a.resources.Session.ChannelTyping(a.channelID); err != nil {
+			a.logger.Warn("channel typing error", "error", err, "channel_id", a.channelID)
+		}
 		ticker := time.NewTicker(8 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				_ = a.resources.Session.ChannelTyping(a.channelID)
+				if err := a.resources.Session.ChannelTyping(a.channelID); err != nil {
+					a.logger.Debug("channel typing refresh error", "error", err, "channel_id", a.channelID)
+				}
 			case <-typingCtx.Done():
 				return
 			}
