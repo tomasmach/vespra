@@ -15,6 +15,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
 	"github.com/tomasmach/mnemon-bot/config"
 	"github.com/tomasmach/mnemon-bot/llm"
 )
@@ -56,19 +57,8 @@ type Store struct {
 	llm *llm.Client
 }
 
-func expandPath(path string) string {
-	path = os.ExpandEnv(path)
-	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			path = filepath.Join(home, path[2:])
-		}
-	}
-	return path
-}
-
 func New(cfg *config.MemoryConfig, llmClient *llm.Client) (*Store, error) {
-	path := expandPath(cfg.DBPath)
+	path := config.ExpandPath(cfg.DBPath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
@@ -153,11 +143,8 @@ func (s *Store) List(ctx context.Context, opts ListOptions) ([]MemoryRow, int, e
 		args = append(args, opts.UserID)
 	}
 	if opts.Query != "" {
-		escaped := strings.ReplaceAll(opts.Query, `\`, `\\`)
-		escaped = strings.ReplaceAll(escaped, `%`, `\%`)
-		escaped = strings.ReplaceAll(escaped, `_`, `\_`)
 		where += ` AND content LIKE ? ESCAPE '\'`
-		args = append(args, "%"+escaped+"%")
+		args = append(args, "%"+escapeLIKE(opts.Query)+"%")
 	}
 
 	var total int
@@ -268,6 +255,14 @@ func (s *Store) ListConversations(ctx context.Context, channelID string, limit, 
 		out = append(out, row)
 	}
 	return out, total, rows.Err()
+}
+
+// escapeLIKE escapes SQL LIKE special characters (%, _, \) for literal matching.
+func escapeLIKE(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
 
 func (s *Store) allEmbeddings(ctx context.Context, serverID string) (map[string][]float32, error) {

@@ -117,9 +117,8 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 		llm:        llmClient,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		resources:  resources,
-		soulText:   soul.Load(cfgStore.Get(), serverID),
-		history:    make([]llm.Message, 0),
-		msgCh:      make(chan *discordgo.MessageCreate, 100),
+		soulText: soul.Load(cfgStore.Get(), serverID),
+		msgCh:    make(chan *discordgo.MessageCreate, 100),
 		logger:     slog.With("server_id", serverID, "channel_id", channelID),
 	}
 }

@@ -12,11 +12,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
+
 	"github.com/tomasmach/mnemon-bot/agent"
 	"github.com/tomasmach/mnemon-bot/config"
 	"github.com/tomasmach/mnemon-bot/logstore"
@@ -113,12 +115,9 @@ func (s *Server) subscribe() chan string {
 func (s *Server) unsubscribe(ch chan string) {
 	s.ssesMu.Lock()
 	defer s.ssesMu.Unlock()
-	for i, sub := range s.sseSubs {
-		if sub == ch {
-			s.sseSubs = append(s.sseSubs[:i], s.sseSubs[i+1:]...)
-			return
-		}
-	}
+	s.sseSubs = slices.DeleteFunc(s.sseSubs, func(sub chan string) bool {
+		return sub == ch
+	})
 }
 
 func (s *Server) broadcast(msg string) {
@@ -367,9 +366,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	newAgents := make([]config.AgentConfig, len(cfg.Agents)+1)
-	copy(newAgents, cfg.Agents)
-	newAgents[len(cfg.Agents)] = input
+	newAgents := append(slices.Clone(cfg.Agents), input)
 	if err := s.writeAgents(newAgents); err != nil {
 		slog.Error("write agents", "error", err)
 		http.Error(w, "failed to save agent", http.StatusInternalServerError)
@@ -400,8 +397,7 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	oldServerID := cfg.Agents[idx].ServerID
 
-	newAgents := make([]config.AgentConfig, len(cfg.Agents))
-	copy(newAgents, cfg.Agents)
+	newAgents := slices.Clone(cfg.Agents)
 	if input.Token == "" {
 		input.Token = newAgents[idx].Token // preserve existing token if not updated
 	}
@@ -434,12 +430,7 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	serverID := cfg.Agents[idx].ServerID
 
-	newAgents := make([]config.AgentConfig, 0, len(cfg.Agents)-1)
-	for i, a := range cfg.Agents {
-		if i != idx {
-			newAgents = append(newAgents, a)
-		}
-	}
+	newAgents := slices.Delete(slices.Clone(cfg.Agents), idx, idx+1)
 
 	if err := s.writeAgents(newAgents); err != nil {
 		slog.Error("write agents", "error", err)
@@ -610,8 +601,7 @@ func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if needsConfigUpdate {
-		newAgents := make([]config.AgentConfig, len(cfg.Agents))
-		copy(newAgents, cfg.Agents)
+		newAgents := slices.Clone(cfg.Agents)
 		newAgents[agentIdx].SoulFile = soulPath
 		if err := s.writeAgents(newAgents); err != nil {
 			slog.Error("write agents config", "error", err)
