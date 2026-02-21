@@ -348,15 +348,6 @@ func (t *webSearchTool) Call(ctx context.Context, args json.RawMessage) (string,
 	return strings.TrimSpace(sb.String()), nil
 }
 
-// NewMemoryOnlyRegistry creates a registry with only memory_save and memory_recall.
-// Used by the background memory extraction pass.
-func NewMemoryOnlyRegistry(store *memory.Store, serverID string) *Registry {
-	r := NewRegistry()
-	r.Register(&memorySaveTool{store: store, serverID: serverID})
-	r.Register(&memoryRecallTool{store: store, serverID: serverID})
-	return r
-}
-
 // NewDefaultRegistry creates a registry with standard tools.
 // If webSearchKey is non-empty, the web_search tool is also registered.
 func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, react ReactFunc, webSearchKey string) *Registry {
@@ -369,5 +360,14 @@ func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, rea
 	if webSearchKey != "" {
 		r.Register(&webSearchTool{apiKey: webSearchKey})
 	}
+	return r
+}
+
+// NewMemoryOnlyRegistry creates a registry with only memory_save and memory_recall.
+// Used by the background memory extraction pass.
+func NewMemoryOnlyRegistry(store *memory.Store, serverID string) *Registry {
+	r := NewRegistry()
+	r.Register(&memorySaveTool{store: store, serverID: serverID})
+	r.Register(&memoryRecallTool{store: store, serverID: serverID})
 	return r
 }
