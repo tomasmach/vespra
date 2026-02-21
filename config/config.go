@@ -37,6 +37,8 @@ type LLMConfig struct {
 	APIKey                string `toml:"api_key" json:"-"`
 	Model                 string `toml:"model"`
 	VisionModel           string `toml:"vision_model"`
+	VisionBaseURL         string `toml:"vision_base_url" json:"-"`
+	VisionKey             string `toml:"vision_key" json:"-"`
 	EmbeddingModel        string `toml:"embedding_model"`
 	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
 	BaseURL               string `toml:"base_url" json:"-"`
