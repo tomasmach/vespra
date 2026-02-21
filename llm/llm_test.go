@@ -140,3 +140,44 @@ func TestChatRetries429(t *testing.T) {
 		t.Errorf("expected 2 calls, got %d", callCount.Load())
 	}
 }
+
+func TestMessageMarshalStringContent(t *testing.T) {
+	msg := llm.Message{Role: "user", Content: "hello"}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	json.Unmarshal(data, &out)
+	if s, ok := out["content"].(string); !ok || s != "hello" {
+		t.Errorf("expected content to be string %q, got %v", "hello", out["content"])
+	}
+}
+
+func TestMessageMarshalContentParts(t *testing.T) {
+	msg := llm.Message{
+		Role: "user",
+		ContentParts: []llm.ContentPart{
+			{Type: "text", Text: "describe this"},
+			{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://cdn.discordapp.com/img.png"}},
+		},
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	json.Unmarshal(data, &out)
+	parts, ok := out["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("expected content to be array of 2, got %v", out["content"])
+	}
+	first := parts[0].(map[string]any)
+	if first["type"] != "text" {
+		t.Errorf("expected first part type=text, got %v", first["type"])
+	}
+	second := parts[1].(map[string]any)
+	if second["type"] != "image_url" {
+		t.Errorf("expected second part type=image_url, got %v", second["type"])
+	}
+}
