@@ -382,8 +382,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 	a.history = msgs
 	a.turnCount++
-	cfg2 := a.cfgStore.Get()
-	if interval := cfg2.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
+	if interval := cfg.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
 		a.runMemoryExtraction(a.history)
 	}
 }
