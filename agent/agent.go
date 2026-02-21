@@ -3,9 +3,12 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -23,14 +26,15 @@ type ChannelAgent struct {
 	channelID string
 	serverID  string
 
-	cfgStore  *config.Store
-	llm       *llm.Client
-	resources *AgentResources
-	logger    *slog.Logger
+	cfgStore   *config.Store
+	llm        *llm.Client
+	httpClient *http.Client
+	resources  *AgentResources
+	logger     *slog.Logger
 
 	soulText   string
-	history    []llm.Message  // capped to cfg.Agent.HistoryLimit
-	lastActive atomic.Int64   // UnixNano; written by agent goroutine, read by Status()
+	history    []llm.Message // capped to cfg.Agent.HistoryLimit
+	lastActive atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
 
 	msgCh chan *discordgo.MessageCreate // buffered 100
 }
@@ -44,9 +48,10 @@ func historyUserContent(m *discordgo.Message) string {
 	return fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
 }
 
-// buildUserMessage converts a Discord message into an llm.Message, attaching
-// any image URLs as vision content parts when present.
-func buildUserMessage(msg *discordgo.MessageCreate) llm.Message {
+// buildUserMessage converts a Discord message into an llm.Message, downloading
+// any image attachments as base64 data URLs for vision content parts.
+// Discord CDN URLs require authentication, so images must be fetched server-side.
+func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate) llm.Message {
 	text := fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)
 
 	var images []*discordgo.MessageAttachment
@@ -62,25 +67,58 @@ func buildUserMessage(msg *discordgo.MessageCreate) llm.Message {
 	parts := make([]llm.ContentPart, 0, 1+len(images))
 	parts = append(parts, llm.ContentPart{Type: "text", Text: text})
 	for _, a := range images {
+		dataURL, err := downloadImageAsDataURL(ctx, httpClient, a)
+		if err != nil {
+			slog.Warn("failed to download image attachment, skipping", "error", err, "url", a.URL)
+			continue
+		}
 		parts = append(parts, llm.ContentPart{
 			Type:     "image_url",
-			ImageURL: &llm.ImageURL{URL: a.URL},
+			ImageURL: &llm.ImageURL{URL: dataURL},
 		})
+	}
+	if len(parts) == 1 {
+		// all image downloads failed; fall back to plain text
+		return llm.Message{Role: "user", Content: text}
 	}
 	return llm.Message{Role: "user", ContentParts: parts}
 }
 
+// downloadImageAsDataURL fetches an image attachment and returns it encoded as a base64 data URL.
+func downloadImageAsDataURL(ctx context.Context, client *http.Client, a *discordgo.MessageAttachment) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	mediaType := a.ContentType
+	if mediaType == "" {
+		mediaType = "image/jpeg"
+	}
+	encoded := base64.StdEncoding.EncodeToString(data)
+	return fmt.Sprintf("data:%s;base64,%s", mediaType, encoded), nil
+}
+
 func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClient *llm.Client, resources *AgentResources) *ChannelAgent {
 	return &ChannelAgent{
-		channelID: channelID,
-		serverID:  serverID,
-		cfgStore:  cfgStore,
-		llm:       llmClient,
-		resources: resources,
-		soulText:  soul.Load(cfgStore.Get(), serverID),
-		history:   make([]llm.Message, 0),
-		msgCh:     make(chan *discordgo.MessageCreate, 100),
-		logger:    slog.With("server_id", serverID, "channel_id", channelID),
+		channelID:  channelID,
+		serverID:   serverID,
+		cfgStore:   cfgStore,
+		llm:        llmClient,
+		httpClient: &http.Client{},
+		resources:  resources,
+		soulText:   soul.Load(cfgStore.Get(), serverID),
+		history:    make([]llm.Message, 0),
+		msgCh:      make(chan *discordgo.MessageCreate, 100),
+		logger:     slog.With("server_id", serverID, "channel_id", channelID),
 	}
 }
 
@@ -212,7 +250,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
 
 	// Add user message to history
-	userMsg := buildUserMessage(msg)
+	userMsg := buildUserMessage(ctx, a.httpClient, msg)
 	msgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(msgs, a.history)
 	msgs = append(msgs, userMsg)
