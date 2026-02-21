@@ -88,26 +88,25 @@ func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discord
 func downloadImageAsDataURL(ctx context.Context, client *http.Client, a *discordgo.MessageAttachment) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("build image request: %w", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("fetch image: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("fetch image: HTTP %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read image body: %w", err)
 	}
 	mediaType := a.ContentType
 	if mediaType == "" {
 		mediaType = "image/jpeg"
 	}
-	encoded := base64.StdEncoding.EncodeToString(data)
-	return fmt.Sprintf("data:%s;base64,%s", mediaType, encoded), nil
+	return fmt.Sprintf("data:%s;base64,%s", mediaType, base64.StdEncoding.EncodeToString(data)), nil
 }
 
 func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClient *llm.Client, resources *AgentResources) *ChannelAgent {
