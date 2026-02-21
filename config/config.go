@@ -36,6 +36,7 @@ type LLMConfig struct {
 	OpenRouterKey         string `toml:"openrouter_key" json:"-"`
 	APIKey                string `toml:"api_key" json:"-"`
 	Model                 string `toml:"model"`
+	VisionModel           string `toml:"vision_model"`
 	EmbeddingModel        string `toml:"embedding_model"`
 	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
 	BaseURL               string `toml:"base_url" json:"-"`

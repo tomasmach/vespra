@@ -154,6 +154,97 @@ func TestMessageMarshalStringContent(t *testing.T) {
 	}
 }
 
+func clientWithVisionModel(t *testing.T, baseURL string) *llm.Client {
+	t.Helper()
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "test-key",
+			Model:                 "default-model",
+			VisionModel:           "vision-model",
+			EmbeddingModel:        "test-embed-model",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               baseURL,
+		},
+	}
+	cfgStore := config.NewStoreFromConfig(cfg)
+	return llm.New(cfgStore)
+}
+
+func captureModelServer(t *testing.T) (*httptest.Server, *string) {
+	t.Helper()
+	var capturedModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		capturedModel, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &capturedModel
+}
+
+// TestVisionModelUsedForCurrentImageMessage verifies that the vision model is used
+// when the last (current) message contains image parts.
+func TestVisionModelUsedForCurrentImageMessage(t *testing.T) {
+	srv, capturedModel := captureModelServer(t)
+	client := clientWithVisionModel(t, srv.URL)
+
+	messages := []llm.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi there"},
+		{
+			Role: "user",
+			ContentParts: []llm.ContentPart{
+				{Type: "text", Text: "what's in this image?"},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://example.com/img.png"}},
+			},
+		},
+	}
+
+	_, err := client.Chat(context.Background(), messages, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if *capturedModel != "vision-model" {
+		t.Errorf("expected vision-model for image message, got %q", *capturedModel)
+	}
+}
+
+// TestVisionModelNotUsedForHistoricalImageMessage verifies that the vision model is NOT used
+// when only a past history message had images, and the current message is plain text.
+func TestVisionModelNotUsedForHistoricalImageMessage(t *testing.T) {
+	srv, capturedModel := captureModelServer(t)
+	client := clientWithVisionModel(t, srv.URL)
+
+	messages := []llm.Message{
+		{Role: "user", Content: "hello"},
+		// past message that had an image
+		{
+			Role: "user",
+			ContentParts: []llm.ContentPart{
+				{Type: "text", Text: "look at this"},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://example.com/old.png"}},
+			},
+		},
+		{Role: "assistant", Content: "nice image"},
+		// current plain-text message
+		{Role: "user", Content: "what do you think about it?"},
+	}
+
+	_, err := client.Chat(context.Background(), messages, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if *capturedModel != "default-model" {
+		t.Errorf("expected default-model for plain-text follow-up, got %q", *capturedModel)
+	}
+}
+
 func TestMessageMarshalContentParts(t *testing.T) {
 	msg := llm.Message{
 		Role: "user",
