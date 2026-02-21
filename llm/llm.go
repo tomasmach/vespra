@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tomasmach/mnemon-bot/config"
@@ -158,11 +159,13 @@ func (c *Client) embeddingKey() string {
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (Choice, error) {
 	cfg := c.cfgStore.Get().LLM
 	model := cfg.Model
-	if cfg.VisionModel != "" && len(messages) > 0 {
-		last := messages[len(messages)-1]
-		if len(last.ContentParts) > 0 {
-			model = cfg.VisionModel
-		}
+
+	last := len(messages) - 1
+	switch {
+	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "":
+		model = cfg.VisionModel
+	case cfg.VisionModel == "" && messagesHaveImages(messages):
+		messages = stripImages(messages)
 	}
 	body := map[string]any{
 		"model":    model,
@@ -255,13 +258,59 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			resp.Body.Close()
-			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		}
 
 		return resp.Body, nil
 	}
 	return nil, lastErr
+}
+
+// messagesHaveImages reports whether any message contains image content parts.
+func messagesHaveImages(messages []Message) bool {
+	for i := range messages {
+		if len(messages[i].ContentParts) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// stripImages returns a copy of messages with image content parts removed.
+// Each stripped message gets a short text note so the model knows an image was
+// shared even though it cannot see it.
+func stripImages(messages []Message) []Message {
+	out := make([]Message, len(messages))
+	copy(out, messages)
+	for i := range out {
+		if len(out[i].ContentParts) == 0 {
+			continue
+		}
+		var text string
+		var imageCount int
+		for _, p := range out[i].ContentParts {
+			switch p.Type {
+			case "text":
+				text = p.Text
+			case "image_url":
+				imageCount++
+			}
+		}
+		if imageCount == 0 {
+			continue
+		}
+		note := fmt.Sprintf("[%d image(s) attached — vision not supported by current model]", imageCount)
+		if text != "" {
+			text += "\n" + note
+		} else {
+			text = note
+		}
+		out[i].ContentParts = nil
+		out[i].Content = text
+	}
+	return out
 }
 
 // VectorToBlob converts float32 slice to little-endian bytes.

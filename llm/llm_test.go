@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -242,6 +243,101 @@ func TestVisionModelNotUsedForHistoricalImageMessage(t *testing.T) {
 	}
 	if *capturedModel != "default-model" {
 		t.Errorf("expected default-model for plain-text follow-up, got %q", *capturedModel)
+	}
+}
+
+func captureBodyServer(t *testing.T) (*httptest.Server, *map[string]any) {
+	t.Helper()
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &capturedBody
+}
+
+func capturedMessages(t *testing.T, body *map[string]any) []any {
+	t.Helper()
+	msgs, ok := (*body)["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		t.Fatalf("expected messages array, got %v", (*body)["messages"])
+	}
+	return msgs
+}
+
+// TestNoVisionModelStripsImages verifies that when no vision_model is configured,
+// image content parts are stripped and the request reaches the server as plain text.
+func TestNoVisionModelStripsImages(t *testing.T) {
+	srv, capturedBody := captureBodyServer(t)
+	client := clientWithBaseURL(t, srv.URL)
+
+	messages := []llm.Message{
+		{
+			Role: "user",
+			ContentParts: []llm.ContentPart{
+				{Type: "text", Text: "what's in this image?"},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://cdn.discordapp.com/img.png"}},
+			},
+		},
+	}
+
+	_, err := client.Chat(context.Background(), messages, nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	msgs := capturedMessages(t, capturedBody)
+	lastMsg := msgs[len(msgs)-1].(map[string]any)
+
+	content, ok := lastMsg["content"].(string)
+	if !ok {
+		t.Fatalf("expected content to be a string (images stripped), got %T: %v", lastMsg["content"], lastMsg["content"])
+	}
+	if !strings.Contains(content, "image(s) attached") {
+		t.Errorf("expected note about image in content, got %q", content)
+	}
+	if !strings.Contains(content, "what's in this image?") {
+		t.Errorf("expected original text preserved in content, got %q", content)
+	}
+}
+
+// TestNoVisionModelStripsHistoricalImages verifies that when no vision_model is configured,
+// image content parts in historical (non-last) messages are also stripped.
+func TestNoVisionModelStripsHistoricalImages(t *testing.T) {
+	srv, capturedBody := captureBodyServer(t)
+	client := clientWithBaseURL(t, srv.URL)
+
+	messages := []llm.Message{
+		{
+			Role: "user",
+			ContentParts: []llm.ContentPart{
+				{Type: "text", Text: "look at this"},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://cdn.discordapp.com/old.png"}},
+			},
+		},
+		{Role: "assistant", Content: "nice image"},
+		{Role: "user", Content: "what do you think?"},
+	}
+
+	_, err := client.Chat(context.Background(), messages, nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	msgs := capturedMessages(t, capturedBody)
+	firstMsg := msgs[0].(map[string]any)
+	content, ok := firstMsg["content"].(string)
+	if !ok {
+		t.Fatalf("expected historical message content to be a string (images stripped), got %T: %v", firstMsg["content"], firstMsg["content"])
+	}
+	if !strings.Contains(content, "image(s) attached") {
+		t.Errorf("expected note about image in historical message content, got %q", content)
 	}
 }
 
