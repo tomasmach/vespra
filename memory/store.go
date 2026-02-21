@@ -38,6 +38,16 @@ CREATE TABLE IF NOT EXISTS embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_memories_server ON memories(server_id);
 CREATE INDEX IF NOT EXISTS idx_memories_user   ON memories(server_id, user_id);
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id TEXT NOT NULL,
+    user_msg   TEXT NOT NULL,
+    tool_calls TEXT,  -- JSON array [{name, result}]
+    response   TEXT NOT NULL,
+    ts         DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conv_channel ON conversations(channel_id);
 `
 
 type Store struct {
@@ -180,6 +190,69 @@ func (s *Store) UpdateContent(ctx context.Context, id, serverID, content string)
 		content, time.Now().UTC(), id, serverID,
 	)
 	return err
+}
+
+type ConversationRow struct {
+	ID        int64     `json:"id"`
+	ChannelID string    `json:"channel_id"`
+	UserMsg   string    `json:"user_msg"`
+	ToolCalls string    `json:"tool_calls,omitempty"`
+	Response  string    `json:"response"`
+	Ts        time.Time `json:"ts"`
+}
+
+func (s *Store) LogConversation(ctx context.Context, channelID, userMsg, toolCallsJSON, response string) error {
+	var tc any
+	if toolCallsJSON != "" {
+		tc = toolCallsJSON
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO conversations (channel_id, user_msg, tool_calls, response, ts) VALUES (?, ?, ?, ?, ?)`,
+		channelID, userMsg, tc, response, time.Now().UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("insert conversation: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListConversations(ctx context.Context, channelID string, limit, offset int) ([]ConversationRow, int, error) {
+	if limit == 0 {
+		limit = 50
+	}
+
+	var (
+		where string
+		args  []any
+	)
+	if channelID != "" {
+		where = "WHERE channel_id = ?"
+		args = []any{channelID}
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversations "+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count conversations: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id, channel_id, user_msg, COALESCE(tool_calls, ''), response, ts FROM conversations "+where+" ORDER BY id DESC LIMIT ? OFFSET ?",
+		append(args, limit, offset)...,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list conversations: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ConversationRow
+	for rows.Next() {
+		var row ConversationRow
+		if err := rows.Scan(&row.ID, &row.ChannelID, &row.UserMsg, &row.ToolCalls, &row.Response, &row.Ts); err != nil {
+			return nil, 0, fmt.Errorf("scan conversation: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, total, rows.Err()
 }
 
 func (s *Store) allEmbeddings(ctx context.Context, serverID string) (map[string][]float32, error) {
