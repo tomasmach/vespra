@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tomasmach/mnemon-bot/config"
@@ -158,10 +159,14 @@ func (c *Client) embeddingKey() string {
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (Choice, error) {
 	cfg := c.cfgStore.Get().LLM
 	model := cfg.Model
-	if cfg.VisionModel != "" && len(messages) > 0 {
-		last := messages[len(messages)-1]
+	if len(messages) > 0 {
+		last := &messages[len(messages)-1]
 		if len(last.ContentParts) > 0 {
-			model = cfg.VisionModel
+			if cfg.VisionModel != "" {
+				model = cfg.VisionModel
+			} else {
+				messages = stripImages(messages)
+			}
 		}
 	}
 	body := map[string]any{
@@ -255,13 +260,44 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			resp.Body.Close()
-			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 		}
 
 		return resp.Body, nil
 	}
 	return nil, lastErr
+}
+
+// stripImages returns a copy of messages with image content parts removed.
+// Image parts are replaced with a short text note so the model is aware an
+// image was shared even though it cannot see it.
+func stripImages(messages []Message) []Message {
+	out := make([]Message, len(messages))
+	copy(out, messages)
+	last := &out[len(out)-1]
+	if len(last.ContentParts) == 0 {
+		return out
+	}
+	var text string
+	imageCount := 0
+	for _, p := range last.ContentParts {
+		if p.Type == "text" {
+			text = p.Text
+		} else if p.Type == "image_url" {
+			imageCount++
+		}
+	}
+	note := fmt.Sprintf("[%d image(s) attached — vision not supported by current model]", imageCount)
+	if text != "" {
+		text = text + "\n" + note
+	} else {
+		text = note
+	}
+	last.ContentParts = nil
+	last.Content = text
+	return out
 }
 
 // VectorToBlob converts float32 slice to little-endian bytes.

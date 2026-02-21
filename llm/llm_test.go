@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -242,6 +243,57 @@ func TestVisionModelNotUsedForHistoricalImageMessage(t *testing.T) {
 	}
 	if *capturedModel != "default-model" {
 		t.Errorf("expected default-model for plain-text follow-up, got %q", *capturedModel)
+	}
+}
+
+// TestNoVisionModelStripsImages verifies that when no vision_model is configured,
+// image content parts are stripped and the request reaches the server as plain text.
+func TestNoVisionModelStripsImages(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	client := clientWithBaseURL(t, srv.URL) // no VisionModel set
+
+	messages := []llm.Message{
+		{
+			Role: "user",
+			ContentParts: []llm.ContentPart{
+				{Type: "text", Text: "what's in this image?"},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://cdn.discordapp.com/img.png"}},
+			},
+		},
+	}
+
+	_, err := client.Chat(context.Background(), messages, nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	msgs, ok := capturedBody["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		t.Fatalf("expected messages array, got %v", capturedBody["messages"])
+	}
+	lastMsg := msgs[len(msgs)-1].(map[string]any)
+
+	// content must be a plain string, not an array
+	content, ok := lastMsg["content"].(string)
+	if !ok {
+		t.Fatalf("expected content to be a string (images stripped), got %T: %v", lastMsg["content"], lastMsg["content"])
+	}
+	if !strings.Contains(content, "image(s) attached") {
+		t.Errorf("expected note about image in content, got %q", content)
+	}
+	if !strings.Contains(content, "what's in this image?") {
+		t.Errorf("expected original text preserved in content, got %q", content)
 	}
 }
 
