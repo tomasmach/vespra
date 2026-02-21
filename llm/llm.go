@@ -16,11 +16,70 @@ import (
 )
 
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	Name       string     `json:"name,omitempty"`
+	Role         string        `json:"role"`
+	Content      string        `json:"-"` // use MarshalJSON/UnmarshalJSON
+	ContentParts []ContentPart `json:"-"` // use MarshalJSON
+	ToolCallID   string        `json:"tool_call_id,omitempty"`
+	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
+	Name         string        `json:"name,omitempty"`
+}
+
+// MarshalJSON serializes content as a string when no image parts are present,
+// or as a content-part array when images are included (OpenAI vision format).
+func (m Message) MarshalJSON() ([]byte, error) {
+	if len(m.ContentParts) > 0 {
+		return json.Marshal(struct {
+			Role       string        `json:"role"`
+			Content    []ContentPart `json:"content"`
+			ToolCallID string        `json:"tool_call_id,omitempty"`
+			ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
+			Name       string        `json:"name,omitempty"`
+		}{m.Role, m.ContentParts, m.ToolCallID, m.ToolCalls, m.Name})
+	}
+	return json.Marshal(struct {
+		Role       string     `json:"role"`
+		Content    string     `json:"content,omitempty"`
+		ToolCallID string     `json:"tool_call_id,omitempty"`
+		ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+		Name       string     `json:"name,omitempty"`
+	}{m.Role, m.Content, m.ToolCallID, m.ToolCalls, m.Name})
+}
+
+// UnmarshalJSON decodes a message from JSON, handling string content from API responses.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		ToolCallID string          `json:"tool_call_id,omitempty"`
+		ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+		Name       string          `json:"name,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Role = raw.Role
+	m.ToolCallID = raw.ToolCallID
+	m.ToolCalls = raw.ToolCalls
+	m.Name = raw.Name
+	if len(raw.Content) > 0 {
+		var s string
+		if err := json.Unmarshal(raw.Content, &s); err == nil {
+			m.Content = s
+		}
+	}
+	return nil
+}
+
+// ContentPart is a single element in a multimodal message content array.
+type ContentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL holds the URL for an image content part.
+type ImageURL struct {
+	URL string `json:"url"`
 }
 
 type ToolCall struct {
