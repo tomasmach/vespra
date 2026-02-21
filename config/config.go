@@ -100,6 +100,11 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 
+	// Env var overrides (take priority over config file)
+	if v := os.Getenv("MNEMON_DB_PATH"); v != "" {
+		cfg.Memory.DBPath = v
+	}
+
 	// Apply defaults
 	if cfg.Web.Addr == "" {
 		cfg.Web.Addr = ":8080"

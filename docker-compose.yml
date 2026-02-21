@@ -6,4 +6,6 @@ services:
     volumes:
       - ./data:/data
       - ./config:/config
+    environment:
+      - MNEMON_DB_PATH=/data/mnemon.db
     restart: unless-stopped
