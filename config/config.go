@@ -83,7 +83,6 @@ func (a *AgentConfig) ResolveDBPath(defaultDBPath string) string {
 type ChannelConfig struct {
 	ID           string `toml:"id" json:"id"`
 	ResponseMode string `toml:"response_mode" json:"response_mode,omitempty"`
-	Language     string `toml:"language" json:"language,omitempty"`
 }
 
 // ResolveDataDir returns the directory that should contain all DB files.
@@ -245,19 +244,14 @@ func (cfg *Config) ResolveResponseMode(serverID, channelID string) string {
 	return cfg.Response.DefaultMode
 }
 
-// ResolveLanguage returns the configured language for a server/channel pair.
-// Priority: channel-level > agent-level > "" (no language override).
+// ResolveLanguage returns the configured language for a server.
+// Priority: agent-level > "" (no language override).
 func (cfg *Config) ResolveLanguage(serverID, channelID string) string {
-	for _, a := range cfg.Agents {
-		if a.ServerID != serverID {
+	for _, agent := range cfg.Agents {
+		if agent.ServerID != serverID {
 			continue
 		}
-		for _, ch := range a.Channels {
-			if ch.ID == channelID && ch.Language != "" {
-				return ch.Language
-			}
-		}
-		return a.Language
+		return agent.Language
 	}
 	return ""
 }

@@ -184,7 +184,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 			systemPrompt += fmt.Sprintf("- [%s] %s\n", m.ID, m.Content)
 		}
 	}
-	if lang := cfg.ResolveLanguage(a.serverID, a.channelID); lang != "" {
+	if lang := cfg.ResolveLanguage(a.serverID, msg.ChannelID); lang != "" {
 		systemPrompt += "\n\nAlways respond in " + lang + "."
 	}
 
