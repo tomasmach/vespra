@@ -328,8 +328,8 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(views)
 }
 
-// Note: agent changes take effect on next restart — the live router is not hot-reloaded.
-// Agents with custom tokens always require a restart regardless.
+// Note: tokenless agents are hot-loaded on the next incoming message via tryHotLoad.
+// Agents with custom tokens require a restart to open a new Discord session.
 func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	var input config.AgentConfig
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -372,8 +372,8 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-// Note: agent changes take effect on next restart — the live router is not hot-reloaded.
-// Agents with custom tokens always require a restart regardless.
+// Note: tokenless agents are hot-loaded on the next incoming message via tryHotLoad.
+// Agents with custom tokens require a restart to open a new Discord session.
 func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var input config.AgentConfig
@@ -406,8 +406,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save agent", http.StatusInternalServerError)
 		return
 	}
+	s.router.UnloadAgent(oldServerID)
 	if input.ServerID != oldServerID {
-		s.router.UnloadAgent(oldServerID)
+		s.router.UnloadAgent(input.ServerID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

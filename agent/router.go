@@ -37,11 +37,17 @@ type Router struct {
 	llm              *llm.Client
 	defaultSession   *discordgo.Session
 	agentsByServerID map[string]*AgentResources
+	dmMemory         *memory.Store
 	wg               sync.WaitGroup
 }
 
 // NewRouter creates a new Router.
 func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Client, defaultSession *discordgo.Session, agentsByServerID map[string]*AgentResources) *Router {
+	cfg := cfgStore.Get()
+	dmMem, err := memory.New(&config.MemoryConfig{DBPath: config.ExpandPath(cfg.Memory.DBPath)}, llmClient)
+	if err != nil {
+		slog.Error("failed to open DM memory store", "error", err)
+	}
 	return &Router{
 		agents:           make(map[string]*ChannelAgent),
 		ctx:              ctx,
@@ -49,6 +55,7 @@ func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Clien
 		llm:              llmClient,
 		defaultSession:   defaultSession,
 		agentsByServerID: agentsByServerID,
+		dmMemory:         dmMem,
 	}
 }
 
@@ -120,12 +127,11 @@ func (r *Router) tryHotLoad(serverID string) *AgentResources {
 	cfg := r.cfgStore.Get()
 
 	if strings.HasPrefix(serverID, "DM:") {
-		mem, err := memory.New(&config.MemoryConfig{DBPath: config.ExpandPath(cfg.Memory.DBPath)}, r.llm)
-		if err != nil {
-			slog.Error("failed to open memory store for DM", "server_id", serverID, "error", err)
+		if r.dmMemory == nil {
+			slog.Error("DM memory store not initialized", "server_id", serverID)
 			return nil
 		}
-		res := &AgentResources{Config: &config.AgentConfig{}, Memory: mem, Session: r.defaultSession}
+		res := &AgentResources{Config: &config.AgentConfig{}, Memory: r.dmMemory, Session: r.defaultSession}
 		r.agentsByServerID[serverID] = res
 		slog.Info("created DM agent resources", "server_id", serverID)
 		return res
