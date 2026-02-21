@@ -101,12 +101,8 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 	// Check spam rate limit.
 	blocked, justBlocked := r.checkSpam(serverID, msg.Author.ID)
 	if blocked {
-		if justBlocked {
-			if session := resources.Session; session != nil {
-				cid := channelID
-				uid := msg.Author.ID
-				go session.ChannelMessageSend(cid, fmt.Sprintf("<@%s> You've been sending too many messages. I'll be back in %s.", uid, spamCooldown))
-			}
+		if justBlocked && resources.Session != nil {
+			go resources.Session.ChannelMessageSend(channelID, fmt.Sprintf("<@%s> You've been sending too many messages. I'll be back in %s.", msg.Author.ID, spamCooldown))
 		}
 		return
 	}
@@ -223,7 +219,6 @@ func (r *Router) Status() []ChannelStatus {
 // Returns (blocked, justBlocked): blocked=true means the message should be dropped;
 // justBlocked=true means this call is what triggered the block (send a notification).
 func (r *Router) checkSpam(serverID, userID string) (blocked bool, justBlocked bool) {
-	// For DMs, serverID is "DM:<userID>", so the key becomes "DM:<userID>:<userID>" (user ID appears twice, but is still unique and consistent).
 	key := serverID + ":" + userID
 	now := time.Now()
 
@@ -235,12 +230,6 @@ func (r *Router) checkSpam(serverID, userID string) (blocked bool, justBlocked b
 
 	if now.Before(rec.blockedUntil) {
 		return true, false
-	}
-
-	// Cooldown expired; evict if no recent timestamps to prevent unbounded map growth.
-	if ok && len(rec.timestamps) == 0 {
-		delete(r.spamMap, key)
-		return false, false
 	}
 
 	// Trim timestamps outside the window.

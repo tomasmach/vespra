@@ -159,11 +159,19 @@ func (c *Client) embeddingKey() string {
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (Choice, error) {
 	cfg := c.cfgStore.Get().LLM
 	model := cfg.Model
+	apiBase := c.apiBase()
+	apiKey := c.chatKey()
 
 	last := len(messages) - 1
 	switch {
 	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "":
 		model = cfg.VisionModel
+		if cfg.VisionBaseURL != "" {
+			apiBase = cfg.VisionBaseURL
+		}
+		if cfg.VisionKey != "" {
+			apiKey = cfg.VisionKey
+		}
 	case cfg.VisionModel == "" && messagesHaveImages(messages):
 		messages = stripImages(messages)
 	}
@@ -175,7 +183,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		body["tools"] = tools
 	}
 
-	respBody, err := c.post(ctx, c.apiBase()+"/chat/completions", c.chatKey(), body)
+	respBody, err := c.post(ctx, apiBase+"/chat/completions", apiKey, body)
 	if err != nil {
 		return Choice{}, err
 	}
