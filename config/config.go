@@ -44,9 +44,10 @@ type MemoryConfig struct {
 }
 
 type TurnConfig struct {
-	HistoryLimit       int `toml:"history_limit"`
-	IdleTimeoutMinutes int `toml:"idle_timeout_minutes"`
-	MaxToolIterations  int `toml:"max_tool_iterations"`
+	HistoryLimit         int `toml:"history_limit"`
+	IdleTimeoutMinutes   int `toml:"idle_timeout_minutes"`
+	MaxToolIterations    int `toml:"max_tool_iterations"`
+	HistoryBackfillLimit int `toml:"history_backfill_limit"`
 }
 
 type ResponseConfig struct {
@@ -114,6 +115,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Agent.MaxToolIterations == 0 {
 		cfg.Agent.MaxToolIterations = 10
+	}
+	if cfg.Agent.HistoryBackfillLimit == 0 {
+		cfg.Agent.HistoryBackfillLimit = 50
 	}
 	if cfg.Response.DefaultMode == "" {
 		cfg.Response.DefaultMode = "smart"

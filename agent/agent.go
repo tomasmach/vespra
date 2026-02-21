@@ -66,6 +66,36 @@ func (a *ChannelAgent) run(ctx context.Context) {
 	}
 }
 
+func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []llm.Message {
+	limit := a.cfgStore.Get().Agent.HistoryBackfillLimit
+	if limit <= 0 {
+		return nil
+	}
+	if limit > 100 {
+		limit = 100 // Discord API max
+	}
+	msgs, err := a.resources.Session.ChannelMessages(a.channelID, limit, beforeID, "", "")
+	if err != nil {
+		slog.Warn("failed to backfill channel history", "error", err, "channel_id", a.channelID)
+		return nil
+	}
+	botID := a.resources.Session.State.User.ID
+	// msgs is newest-first; reverse to chronological order
+	history := make([]llm.Message, 0, len(msgs))
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Author == nil || m.Content == "" {
+			continue
+		}
+		if m.Author.ID == botID {
+			history = append(history, llm.Message{Role: "assistant", Content: m.Content})
+		} else if !m.Author.Bot {
+			history = append(history, llm.Message{Role: "user", Content: fmt.Sprintf("%s: %s", m.Author.Username, m.Content)})
+		}
+	}
+	return history
+}
+
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
 	a.lastActive.Store(time.Now().UnixNano())
 
@@ -90,6 +120,13 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		// always respond
 	case "smart":
 		// always respond; model decides whether to use reply tool
+	}
+
+	if len(a.history) == 0 {
+		a.history = a.backfillHistory(ctx, msg.ID)
+		if len(a.history) > cfg.Agent.HistoryLimit {
+			a.history = a.history[len(a.history)-cfg.Agent.HistoryLimit:]
+		}
 	}
 
 	// Recall memories
