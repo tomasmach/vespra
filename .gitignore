@@ -2,3 +2,4 @@ mnemon-bot
 *.png
 .playwright-mcp/
 .worktrees/
+CLAUDE.LOCAL.md
