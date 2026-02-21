@@ -92,9 +92,10 @@ func (s *Store) prune(ctx context.Context) {
 	var serverIDs []string
 	for rows.Next() {
 		var sid string
-		if rows.Scan(&sid) == nil {
-			serverIDs = append(serverIDs, sid)
+		if err := rows.Scan(&sid); err != nil {
+			continue
 		}
+		serverIDs = append(serverIDs, sid)
 	}
 	rows.Close()
 

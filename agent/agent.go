@@ -206,7 +206,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		if err != nil {
 			a.logger.Error("llm chat error", "error", err)
 			if err := sendFn("I encountered an error. Please try again."); err != nil {
-				a.logger.Error("send message", "err", err)
+				a.logger.Error("send message", "error", err)
 			}
 			return
 		}
@@ -238,7 +238,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 		if iter == cfg.Agent.MaxToolIterations-1 {
 			if err := sendFn("I got stuck in a loop. Please try again."); err != nil {
-				a.logger.Error("send message", "err", err)
+				a.logger.Error("send message", "error", err)
 			}
 			return
 		}
@@ -268,7 +268,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		parts := tools.SplitMessage(assistantContent, 2000)
 		for _, p := range parts {
 			if err := sendFn(p); err != nil {
-				a.logger.Error("send message", "err", err)
+				a.logger.Error("send message", "error", err)
 			}
 		}
 	}

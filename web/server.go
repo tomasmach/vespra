@@ -469,6 +469,20 @@ func (s *Server) agentServerID(id string) (string, bool) {
 	return cfg.Agents[idx].ServerID, true
 }
 
+// queryInt parses a query parameter as an integer, returning defaultVal
+// when the parameter is absent or invalid.
+func queryInt(r *http.Request, key string, defaultVal, minVal int) int {
+	v := r.URL.Query().Get(key)
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < minVal {
+		return defaultVal
+	}
+	return n
+}
+
 func (s *Server) handleGetAgentLogs(w http.ResponseWriter, r *http.Request) {
 	if s.logStore == nil {
 		http.Error(w, "log store not available", http.StatusServiceUnavailable)
@@ -482,20 +496,9 @@ func (s *Server) handleGetAgentLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q := r.URL.Query()
-	level := q.Get("level")
-	limit := 100
-	offset := 0
-	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if v := q.Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
-	}
+	level := r.URL.Query().Get("level")
+	limit := queryInt(r, "limit", 100, 1)
+	offset := queryInt(r, "offset", 0, 0)
 
 	rows, total, err := s.logStore.List(r.Context(), serverID, level, limit, offset)
 	if err != nil {
@@ -529,20 +532,9 @@ func (s *Server) handleGetAgentConversations(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	q := r.URL.Query()
-	channelID := q.Get("channel_id")
-	limit := 50
-	offset := 0
-	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
-	if v := q.Get("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
-	}
+	channelID := r.URL.Query().Get("channel_id")
+	limit := queryInt(r, "limit", 50, 1)
+	offset := queryInt(r, "offset", 0, 0)
 
 	rows, total, err := mem.ListConversations(r.Context(), channelID, limit, offset)
 	if err != nil {
