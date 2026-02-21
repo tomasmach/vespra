@@ -284,6 +284,12 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		assistantContent = ""
 	}
 
+	// Suppress stage-direction non-replies like "(staying silent)" in all modes.
+	if assistantContent != "" && !reg.Replied && isStageDirection(assistantContent) {
+		a.logger.Debug("suppressed stage-direction non-reply", "content", assistantContent)
+		assistantContent = ""
+	}
+
 	// Log conversation on success — either plain-text reply or reply-tool response.
 	if assistantContent != "" || reg.Replied {
 		var toolCallsJSON string
@@ -360,6 +366,13 @@ func looksLikeToolCall(s string, defs []llm.ToolDefinition) bool {
 		}
 	}
 	return false
+}
+
+// isStageDirection reports whether s is a parenthesized stage direction
+// like "(staying silent)" that the model sometimes emits as a non-reply.
+func isStageDirection(s string) bool {
+	s = strings.TrimSpace(s)
+	return strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")")
 }
 
 // buildMessages constructs the message slice for the LLM with system prompt prepended.
