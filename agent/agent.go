@@ -84,6 +84,20 @@ type ChannelAgent struct {
 	cancel     context.CancelFunc           // cancels this agent's context
 }
 
+// resolveMentions replaces raw Discord mention syntax (<@ID> and <@!ID>) with
+// readable display names using the resolved User objects Discord provides.
+func resolveMentions(content string, mentions []*discordgo.User) string {
+	for _, u := range mentions {
+		name := u.GlobalName
+		if name == "" {
+			name = u.Username
+		}
+		content = strings.ReplaceAll(content, "<@"+u.ID+">", "@"+name)
+		content = strings.ReplaceAll(content, "<@!"+u.ID+">", "@"+name)
+	}
+	return content
+}
+
 // hasImageAttachments reports whether the message has at least one image attachment.
 func hasImageAttachments(m *discordgo.Message) bool {
 	for _, a := range m.Attachments {
@@ -140,9 +154,9 @@ func formatMessageContent(content, botID, botName string) string {
 // annotating reply-to context when the message is a Discord reply and
 // sanitizing bot mentions into readable form.
 func historyUserContent(m *discordgo.Message, botID, botName string) string {
-	content := formatMessageContent(m.Content, botID, botName)
+	content := resolveMentions(formatMessageContent(m.Content, botID, botName), m.Mentions)
 	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil {
-		refContent := formatMessageContent(m.ReferencedMessage.Content, botID, botName)
+		refContent := resolveMentions(formatMessageContent(m.ReferencedMessage.Content, botID, botName), m.ReferencedMessage.Mentions)
 		if len(refContent) > 200 {
 			refContent = refContent[:200] + "..."
 		}
