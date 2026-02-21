@@ -35,6 +35,15 @@ type ChannelAgent struct {
 	msgCh chan *discordgo.MessageCreate // buffered 100
 }
 
+// historyUserContent formats the text content for a user message in backfilled
+// history, annotating reply-to context when the message is a Discord reply.
+func historyUserContent(m *discordgo.Message) string {
+	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil {
+		return fmt.Sprintf("%s (replying to %s): %s", m.Author.Username, m.ReferencedMessage.Author.Username, m.Content)
+	}
+	return fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
+}
+
 // buildUserMessage converts a Discord message into an llm.Message, attaching
 // any image URLs as vision content parts when present.
 func buildUserMessage(msg *discordgo.MessageCreate) llm.Message {
@@ -122,7 +131,7 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 		if m.Author.ID == botID {
 			history = append(history, llm.Message{Role: "assistant", Content: m.Content})
 		} else if !m.Author.Bot {
-			history = append(history, llm.Message{Role: "user", Content: fmt.Sprintf("%s: %s", m.Author.Username, m.Content)})
+			history = append(history, llm.Message{Role: "user", Content: historyUserContent(m)})
 		}
 	}
 	return history

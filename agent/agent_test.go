@@ -70,6 +70,47 @@ func TestBuildUserMessageMixedAttachments(t *testing.T) {
 	}
 }
 
+func TestHistoryUserContentNoReply(t *testing.T) {
+	m := &discordgo.Message{
+		Author:  &discordgo.User{Username: "alice"},
+		Content: "hello",
+	}
+	got := historyUserContent(m)
+	want := "alice: hello"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestHistoryUserContentWithReply(t *testing.T) {
+	m := &discordgo.Message{
+		Author:  &discordgo.User{Username: "alice"},
+		Content: "I agree",
+		ReferencedMessage: &discordgo.Message{
+			Author: &discordgo.User{Username: "bob"},
+		},
+	}
+	got := historyUserContent(m)
+	want := "alice (replying to bob): I agree"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestHistoryUserContentReplyNoAuthor(t *testing.T) {
+	// ReferencedMessage exists but author is nil (deleted user) — should not panic
+	m := &discordgo.Message{
+		Author:            &discordgo.User{Username: "alice"},
+		Content:           "hello",
+		ReferencedMessage: &discordgo.Message{},
+	}
+	got := historyUserContent(m)
+	want := "alice: hello"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestBuildUserMessageEmptyText(t *testing.T) {
 	// image with no text caption
 	m := buildUserMessage(msg("", attachment("image/gif", "https://cdn.example.com/anim.gif")))
