@@ -144,17 +144,19 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 	// Check response mode
 	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
+	botID := a.resources.Session.State.User.ID
+	isDM := msg.GuildID == ""
+	isMentioned := strings.Contains(msg.Content, "<@"+botID+">")
+	isReplyToBot := msg.MessageReference != nil &&
+		msg.ReferencedMessage != nil &&
+		msg.ReferencedMessage.Author != nil &&
+		msg.ReferencedMessage.Author.ID == botID
+	isDirectlyAddressed := isDM || isMentioned || isReplyToBot
 	switch mode {
 	case "none":
 		return
 	case "mention":
-		isDM := msg.GuildID == ""
-		isMentioned := strings.Contains(msg.Content, "<@"+a.resources.Session.State.User.ID+">")
-		isReplyToBot := msg.MessageReference != nil &&
-			msg.ReferencedMessage != nil &&
-			msg.ReferencedMessage.Author != nil &&
-			msg.ReferencedMessage.Author.ID == a.resources.Session.State.User.ID
-		if !isDM && !isMentioned && !isReplyToBot {
+		if !isDirectlyAddressed {
 			return
 		}
 	case "all":
@@ -163,7 +165,10 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		// model responds only via reply/react tools; plain-text output without a tool call is suppressed
 	}
 
-	stopTyping := a.startTyping(ctx)
+	stopTyping := func() {}
+	if mode != "smart" || isDirectlyAddressed {
+		stopTyping = a.startTyping(ctx)
+	}
 	defer stopTyping()
 
 	if len(a.history) == 0 {
