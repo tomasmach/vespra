@@ -246,9 +246,8 @@ func TestVisionModelNotUsedForHistoricalImageMessage(t *testing.T) {
 	}
 }
 
-// TestNoVisionModelStripsImages verifies that when no vision_model is configured,
-// image content parts are stripped and the request reaches the server as plain text.
-func TestNoVisionModelStripsImages(t *testing.T) {
+func captureBodyServer(t *testing.T) (*httptest.Server, *map[string]any) {
+	t.Helper()
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&capturedBody)
@@ -260,8 +259,23 @@ func TestNoVisionModelStripsImages(t *testing.T) {
 		})
 	}))
 	t.Cleanup(srv.Close)
+	return srv, &capturedBody
+}
 
-	client := clientWithBaseURL(t, srv.URL) // no VisionModel set
+func capturedMessages(t *testing.T, body *map[string]any) []any {
+	t.Helper()
+	msgs, ok := (*body)["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		t.Fatalf("expected messages array, got %v", (*body)["messages"])
+	}
+	return msgs
+}
+
+// TestNoVisionModelStripsImages verifies that when no vision_model is configured,
+// image content parts are stripped and the request reaches the server as plain text.
+func TestNoVisionModelStripsImages(t *testing.T) {
+	srv, capturedBody := captureBodyServer(t)
+	client := clientWithBaseURL(t, srv.URL)
 
 	messages := []llm.Message{
 		{
@@ -278,13 +292,9 @@ func TestNoVisionModelStripsImages(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	msgs, ok := capturedBody["messages"].([]any)
-	if !ok || len(msgs) == 0 {
-		t.Fatalf("expected messages array, got %v", capturedBody["messages"])
-	}
+	msgs := capturedMessages(t, capturedBody)
 	lastMsg := msgs[len(msgs)-1].(map[string]any)
 
-	// content must be a plain string, not an array
 	content, ok := lastMsg["content"].(string)
 	if !ok {
 		t.Fatalf("expected content to be a string (images stripped), got %T: %v", lastMsg["content"], lastMsg["content"])
@@ -300,22 +310,10 @@ func TestNoVisionModelStripsImages(t *testing.T) {
 // TestNoVisionModelStripsHistoricalImages verifies that when no vision_model is configured,
 // image content parts in historical (non-last) messages are also stripped.
 func TestNoVisionModelStripsHistoricalImages(t *testing.T) {
-	var capturedBody map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&capturedBody)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]any{"role": "assistant", "content": "ok"}},
-			},
-		})
-	}))
-	t.Cleanup(srv.Close)
-
-	client := clientWithBaseURL(t, srv.URL) // no VisionModel set
+	srv, capturedBody := captureBodyServer(t)
+	client := clientWithBaseURL(t, srv.URL)
 
 	messages := []llm.Message{
-		// historical image message
 		{
 			Role: "user",
 			ContentParts: []llm.ContentPart{
@@ -324,7 +322,6 @@ func TestNoVisionModelStripsHistoricalImages(t *testing.T) {
 			},
 		},
 		{Role: "assistant", Content: "nice image"},
-		// current plain-text follow-up — no ContentParts
 		{Role: "user", Content: "what do you think?"},
 	}
 
@@ -333,11 +330,7 @@ func TestNoVisionModelStripsHistoricalImages(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
-	msgs, ok := capturedBody["messages"].([]any)
-	if !ok || len(msgs) == 0 {
-		t.Fatalf("expected messages array, got %v", capturedBody["messages"])
-	}
-
+	msgs := capturedMessages(t, capturedBody)
 	firstMsg := msgs[0].(map[string]any)
 	content, ok := firstMsg["content"].(string)
 	if !ok {
