@@ -163,6 +163,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		// always respond; model decides whether to use reply tool
 	}
 
+	stopTyping := a.startTyping(ctx)
+	defer stopTyping()
+
 	if len(a.history) == 0 {
 		a.history = a.backfillHistory(ctx, msg.ID)
 		if len(a.history) > cfg.Agent.HistoryLimit {
@@ -303,6 +306,30 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		msgs = msgs[len(msgs)-cfg.Agent.HistoryLimit:]
 	}
 	a.history = msgs
+}
+
+// startTyping sends a typing indicator immediately and refreshes every 8 seconds
+// until the returned cancel function is called.
+func (a *ChannelAgent) startTyping(ctx context.Context) context.CancelFunc {
+	typingCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		if err := a.resources.Session.ChannelTyping(a.channelID); err != nil {
+			a.logger.Warn("channel typing error", "error", err, "channel_id", a.channelID)
+		}
+		ticker := time.NewTicker(8 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := a.resources.Session.ChannelTyping(a.channelID); err != nil {
+					a.logger.Debug("channel typing refresh error", "error", err, "channel_id", a.channelID)
+				}
+			case <-typingCtx.Done():
+				return
+			}
+		}
+	}()
+	return cancel
 }
 
 // looksLikeToolCall returns true when any line of s looks like a text-based
