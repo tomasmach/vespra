@@ -157,8 +157,17 @@ func (c *Client) embeddingKey() string {
 
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (Choice, error) {
 	cfg := c.cfgStore.Get().LLM
+	model := cfg.Model
+	if cfg.VisionModel != "" {
+		for _, m := range messages {
+			if len(m.ContentParts) > 0 {
+				model = cfg.VisionModel
+				break
+			}
+		}
+	}
 	body := map[string]any{
-		"model":    cfg.Model,
+		"model":    model,
 		"messages": messages,
 	}
 	if len(tools) > 0 {
