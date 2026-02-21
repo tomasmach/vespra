@@ -275,6 +275,11 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 	}
 
+	if assistantContent != "" && looksLikeToolCall(assistantContent, reg.Definitions()) {
+		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
+		assistantContent = ""
+	}
+
 	// If assistant replied with text content (not via reply tool), send it
 	if assistantContent != "" && !reg.Replied {
 		parts := tools.SplitMessage(assistantContent, 2000)
@@ -293,6 +298,17 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		msgs = msgs[len(msgs)-cfg.Agent.HistoryLimit:]
 	}
 	a.history = msgs
+}
+
+// looksLikeToolCall returns true when s looks like a text-based tool-call
+// invocation (e.g. memory_save(content="...", ...)) rather than prose.
+func looksLikeToolCall(s string, defs []llm.ToolDefinition) bool {
+	for _, d := range defs {
+		if strings.HasPrefix(s, d.Function.Name+"(") {
+			return true
+		}
+	}
+	return false
 }
 
 // buildMessages constructs the message slice for the LLM with system prompt prepended.
