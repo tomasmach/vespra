@@ -272,6 +272,8 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 	}
 
+	// In smart mode the model should only communicate via reply/react tools.
+	// Suppress any leftover plain-text content that was not sent through a tool.
 	if mode == "smart" && assistantContent != "" && !reg.Replied {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
 		assistantContent = ""
