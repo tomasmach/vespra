@@ -1,18 +1,22 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/tomasmach/mnemon-bot/agent"
 	"github.com/tomasmach/mnemon-bot/config"
 	"github.com/tomasmach/mnemon-bot/memory"
@@ -24,18 +28,17 @@ var staticFiles embed.FS
 type Server struct {
 	cfgStore   *config.Store
 	cfgPath    string
-	mem        *memory.Store
 	router     *agent.Router
 	sseSubs    []chan string
 	ssesMu     sync.Mutex
+	writeMu    sync.Mutex  // guards config file writes
 	httpServer *http.Server
 }
 
-func New(addr string, cfgStore *config.Store, cfgPath string, mem *memory.Store, router *agent.Router) *Server {
+func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Router) *Server {
 	s := &Server{
 		cfgStore: cfgStore,
 		cfgPath:  cfgPath,
-		mem:      mem,
 		router:   router,
 	}
 
@@ -47,7 +50,16 @@ func New(addr string, cfgStore *config.Store, cfgPath string, mem *memory.Store,
 	mux.HandleFunc("PATCH /api/memories/{id}", s.handlePatchMemory)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/events", s.handleSSE)
-	mux.HandleFunc("/", http.FileServer(http.FS(staticFiles)).ServeHTTP)
+	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("POST /api/agents", s.handleCreateAgent)
+	mux.HandleFunc("PUT /api/agents/{id}", s.handleUpdateAgent)
+	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
+	mux.HandleFunc("GET /api/agents/{id}/soul", s.handleGetAgentSoul)
+	mux.HandleFunc("PUT /api/agents/{id}/soul", s.handlePutAgentSoul)
+	mux.HandleFunc("GET /api/soul", s.handleGetGlobalSoul)
+	mux.HandleFunc("PUT /api/soul", s.handlePutGlobalSoul)
+	sub, _ := fs.Sub(staticFiles, "static")
+	mux.HandleFunc("/", http.FileServer(http.FS(sub)).ServeHTTP)
 
 	s.httpServer = &http.Server{
 		Addr:    addr,
@@ -128,6 +140,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "failed to read body", http.StatusBadRequest)
@@ -163,10 +178,25 @@ func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
+// memoryForRequest extracts the server_id query param and looks up the memory store.
+// Returns nil, "", false and writes the appropriate HTTP error if not found.
+func (s *Server) memoryForRequest(w http.ResponseWriter, r *http.Request) (*memory.Store, string, bool) {
 	serverID := r.URL.Query().Get("server_id")
 	if serverID == "" {
 		http.Error(w, "server_id is required", http.StatusBadRequest)
+		return nil, "", false
+	}
+	mem := s.router.MemoryForServer(serverID)
+	if mem == nil {
+		http.Error(w, "server not configured", http.StatusNotFound)
+		return nil, "", false
+	}
+	return mem, serverID, true
+}
+
+func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
+	mem, serverID, ok := s.memoryForRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -182,7 +212,7 @@ func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
 		opts.Offset, _ = strconv.Atoi(v)
 	}
 
-	rows, total, err := s.mem.List(r.Context(), opts)
+	rows, total, err := mem.List(r.Context(), opts)
 	if err != nil {
 		slog.Error("list memories", "error", err)
 		http.Error(w, "failed to list memories", http.StatusInternalServerError)
@@ -201,14 +231,13 @@ func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
-	serverID := r.URL.Query().Get("server_id")
-	if serverID == "" {
-		http.Error(w, "server_id is required", http.StatusBadRequest)
+	mem, serverID, ok := s.memoryForRequest(w, r)
+	if !ok {
 		return
 	}
 
 	id := r.PathValue("id")
-	if err := s.mem.Forget(r.Context(), serverID, id); err != nil {
+	if err := mem.Forget(r.Context(), serverID, id); err != nil {
 		slog.Error("forget memory", "error", err, "id", id)
 		http.Error(w, "failed to delete memory", http.StatusInternalServerError)
 		return
@@ -217,9 +246,8 @@ func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePatchMemory(w http.ResponseWriter, r *http.Request) {
-	serverID := r.URL.Query().Get("server_id")
-	if serverID == "" {
-		http.Error(w, "server_id is required", http.StatusBadRequest)
+	mem, serverID, ok := s.memoryForRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -232,7 +260,7 @@ func (s *Server) handlePatchMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	if err := s.mem.UpdateContent(r.Context(), id, serverID, body.Content); err != nil {
+	if err := mem.UpdateContent(r.Context(), id, serverID, body.Content); err != nil {
 		slog.Error("update memory content", "error", err, "id", id)
 		http.Error(w, "failed to update memory", http.StatusInternalServerError)
 		return
@@ -271,4 +299,381 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfgStore.Get()
+	type agentView struct {
+		ID           string                `json:"id"`
+		ServerID     string                `json:"server_id"`
+		HasToken     bool                  `json:"has_token"`
+		SoulFile     string                `json:"soul_file,omitempty"`
+		DBPath       string                `json:"db_path,omitempty"`
+		ResponseMode string                `json:"response_mode,omitempty"`
+		Channels     []config.ChannelConfig `json:"channels,omitempty"`
+	}
+	views := make([]agentView, len(cfg.Agents))
+	for i, a := range cfg.Agents {
+		views[i] = agentView{
+			ID:           a.ID,
+			ServerID:     a.ServerID,
+			HasToken:     a.Token != "",
+			SoulFile:     a.SoulFile,
+			DBPath:       a.DBPath,
+			ResponseMode: a.ResponseMode,
+			Channels:     a.Channels,
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(views)
+}
+
+// Note: tokenless agents are hot-loaded on the next incoming message via tryHotLoad.
+// Agents with custom tokens require a restart to open a new Discord session.
+func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
+	var input config.AgentConfig
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if input.ID == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+	if input.ServerID == "" {
+		http.Error(w, "server_id is required", http.StatusBadRequest)
+		return
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	cfg := s.cfgStore.Get()
+	if findAgentIndex(cfg.Agents, input.ID) != -1 {
+		http.Error(w, "agent id already exists", http.StatusConflict)
+		return
+	}
+	for _, a := range cfg.Agents {
+		if a.ServerID == input.ServerID {
+			http.Error(w, "server_id already exists", http.StatusConflict)
+			return
+		}
+	}
+
+	newAgents := make([]config.AgentConfig, len(cfg.Agents)+1)
+	copy(newAgents, cfg.Agents)
+	newAgents[len(cfg.Agents)] = input
+	if err := s.writeAgents(newAgents); err != nil {
+		slog.Error("write agents", "error", err)
+		http.Error(w, "failed to save agent", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// Note: tokenless agents are hot-loaded on the next incoming message via tryHotLoad.
+// Agents with custom tokens require a restart to open a new Discord session.
+func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var input config.AgentConfig
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	cfg := s.cfgStore.Get()
+	idx := findAgentIndex(cfg.Agents, id)
+	if idx == -1 {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+	oldServerID := cfg.Agents[idx].ServerID
+
+	newAgents := make([]config.AgentConfig, len(cfg.Agents))
+	copy(newAgents, cfg.Agents)
+	if input.Token == "" {
+		input.Token = newAgents[idx].Token // preserve existing token if not updated
+	}
+	input.ID = id // ensure ID unchanged
+	newAgents[idx] = input
+
+	if err := s.writeAgents(newAgents); err != nil {
+		slog.Error("write agents", "error", err)
+		http.Error(w, "failed to save agent", http.StatusInternalServerError)
+		return
+	}
+	s.router.UnloadAgent(oldServerID)
+	if input.ServerID != oldServerID {
+		s.router.UnloadAgent(input.ServerID)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	cfg := s.cfgStore.Get()
+	idx := findAgentIndex(cfg.Agents, id)
+	if idx == -1 {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+	serverID := cfg.Agents[idx].ServerID
+
+	newAgents := make([]config.AgentConfig, 0, len(cfg.Agents)-1)
+	for i, a := range cfg.Agents {
+		if i != idx {
+			newAgents = append(newAgents, a)
+		}
+	}
+
+	if err := s.writeAgents(newAgents); err != nil {
+		slog.Error("write agents", "error", err)
+		http.Error(w, "failed to save agent", http.StatusInternalServerError)
+		return
+	}
+
+	s.router.UnloadAgent(serverID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// findAgentIndex returns the index of the agent with the given ID, or -1 if not found.
+func findAgentIndex(agents []config.AgentConfig, id string) int {
+	for i, a := range agents {
+		if a.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Server) handleGetAgentSoul(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	cfg := s.cfgStore.Get()
+	idx := findAgentIndex(cfg.Agents, id)
+	if idx == -1 {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+	respondSoulFile(w, cfg.Agents[idx].SoulFile)
+}
+
+func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	cfg := s.cfgStore.Get()
+	agentIdx := findAgentIndex(cfg.Agents, id)
+	if agentIdx == -1 {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	agent := cfg.Agents[agentIdx]
+	var soulPath string
+	needsConfigUpdate := false
+
+	if agent.SoulFile == "" {
+		soulPath = filepath.Join(filepath.Dir(s.cfgPath), "souls", id+".md")
+		needsConfigUpdate = true
+	} else {
+		soulPath = config.ExpandPath(agent.SoulFile)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(soulPath), 0o755); err != nil {
+		slog.Error("create soul dir", "error", err)
+		http.Error(w, "failed to create directory", http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(soulPath, []byte(body.Content), 0o644); err != nil {
+		slog.Error("write soul file", "error", err)
+		http.Error(w, "failed to write soul file", http.StatusInternalServerError)
+		return
+	}
+
+	if needsConfigUpdate {
+		newAgents := make([]config.AgentConfig, len(cfg.Agents))
+		copy(newAgents, cfg.Agents)
+		newAgents[agentIdx].SoulFile = soulPath
+		if err := s.writeAgents(newAgents); err != nil {
+			slog.Error("write agents config", "error", err)
+			http.Error(w, "failed to update config", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"path": soulPath})
+}
+
+func (s *Server) handleGetGlobalSoul(w http.ResponseWriter, r *http.Request) {
+	respondSoulFile(w, s.cfgStore.Get().Bot.SoulFile)
+}
+
+// respondSoulFile reads a soul file path and writes the JSON response.
+// If soulFile is empty, responds with using_default: true.
+func respondSoulFile(w http.ResponseWriter, soulFile string) {
+	w.Header().Set("Content-Type", "application/json")
+	if soulFile == "" {
+		json.NewEncoder(w).Encode(map[string]any{
+			"content":       "",
+			"path":          "",
+			"using_default": true,
+		})
+		return
+	}
+	expanded := config.ExpandPath(soulFile)
+	data, err := os.ReadFile(expanded)
+	if err != nil {
+		if os.IsNotExist(err) {
+			json.NewEncoder(w).Encode(map[string]any{"content": "", "path": expanded})
+			return
+		}
+		slog.Error("read soul file", "error", err)
+		http.Error(w, "failed to read soul file", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"content": string(data), "path": expanded})
+}
+
+func (s *Server) handlePutGlobalSoul(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	cfg := s.cfgStore.Get()
+	var soulPath string
+	needsConfigUpdate := false
+
+	if cfg.Bot.SoulFile == "" {
+		soulPath = filepath.Join(filepath.Dir(s.cfgPath), "soul.md")
+		needsConfigUpdate = true
+	} else {
+		soulPath = config.ExpandPath(cfg.Bot.SoulFile)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(soulPath), 0o755); err != nil {
+		slog.Error("create soul dir", "error", err)
+		http.Error(w, "failed to create directory", http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(soulPath, []byte(body.Content), 0o644); err != nil {
+		slog.Error("write global soul file", "error", err)
+		http.Error(w, "failed to write soul file", http.StatusInternalServerError)
+		return
+	}
+
+	if needsConfigUpdate {
+		if err := s.patchConfig(func(raw map[string]any) {
+			bot, _ := raw["bot"].(map[string]any)
+			if bot == nil {
+				bot = make(map[string]any)
+			}
+			bot["soul_file"] = soulPath
+			raw["bot"] = bot
+		}); err != nil {
+			slog.Error("update config for global soul", "error", err)
+			http.Error(w, fmt.Sprintf("failed to update config: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"path": soulPath})
+}
+
+// writeAgents replaces the [[agents]] section in the config file and reloads.
+func (s *Server) writeAgents(agents []config.AgentConfig) error {
+	// Build token map before marshaling — Token has json:"-" so Marshal drops it
+	tokenByID := make(map[string]string, len(agents))
+	for _, a := range agents {
+		tokenByID[a.ID] = a.Token
+	}
+
+	agentsJSON, err := json.Marshal(agents)
+	if err != nil {
+		return err
+	}
+	var agentsRaw []any
+	if err := json.Unmarshal(agentsJSON, &agentsRaw); err != nil {
+		return err
+	}
+	// Restore tokens dropped by json:"-"
+	for _, item := range agentsRaw {
+		if m, ok := item.(map[string]any); ok {
+			id, _ := m["id"].(string)
+			if tok := tokenByID[id]; tok != "" {
+				m["token"] = tok
+			}
+		}
+	}
+
+	return s.patchConfig(func(raw map[string]any) {
+		if len(agentsRaw) == 0 {
+			delete(raw, "agents")
+		} else {
+			raw["agents"] = agentsRaw
+		}
+	})
+}
+
+// patchConfig reads the config TOML into a generic map, applies mutate to modify it,
+// then validates, writes atomically, reloads the store, and broadcasts a config_reloaded event.
+func (s *Server) patchConfig(mutate func(raw map[string]any)) error {
+	data, err := os.ReadFile(s.cfgPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	mutate(raw)
+
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(raw); err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+
+	tmpPath := s.cfgPath + ".tmp"
+	if err := os.WriteFile(tmpPath, buf.Bytes(), 0o644); err != nil {
+		return err
+	}
+	if _, err := config.Load(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("invalid config: %w", err)
+	}
+	if err := os.Rename(tmpPath, s.cfgPath); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if _, err := s.cfgStore.Reload(); err != nil {
+		return fmt.Errorf("reload: %w", err)
+	}
+	s.broadcast("event: config_reloaded\ndata: {}\n\n")
+	return nil
 }

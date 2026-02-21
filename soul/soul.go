@@ -2,6 +2,7 @@
 package soul
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,16 +18,17 @@ You have access to memory tools to save and recall information. Use them proacti
 
 // Load returns the soul/system prompt for the given server.
 // Resolution order:
-// 1. Server-specific soul file (from cfg.Servers match on serverID)
+// 1. Agent-specific soul file (from cfg.Agents match on serverID)
 // 2. Global soul file (cfg.Bot.SoulFile)
 // 3. Built-in default constant
 func Load(cfg *config.Config, serverID string) string {
-	// 1. Server-specific soul file
-	for _, s := range cfg.Servers {
-		if s.ID == serverID && s.SoulFile != "" {
-			if content := readFile(s.SoulFile); content != "" {
+	// 1. Agent-specific soul file
+	for _, a := range cfg.Agents {
+		if a.ServerID == serverID && a.SoulFile != "" {
+			if content := readFile(a.SoulFile); content != "" {
 				return content
 			}
+			slog.Warn("configured soul file not readable, falling back", "path", a.SoulFile, "server_id", serverID)
 			break
 		}
 	}
@@ -36,6 +38,7 @@ func Load(cfg *config.Config, serverID string) string {
 		if content := readFile(cfg.Bot.SoulFile); content != "" {
 			return content
 		}
+		slog.Warn("configured global soul file not readable, falling back", "path", cfg.Bot.SoulFile)
 	}
 
 	// 3. Built-in default

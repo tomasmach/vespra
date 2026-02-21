@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,27 +21,41 @@ type ChannelStatus struct {
 	QueueDepth int       `json:"queue_depth"`
 }
 
+// AgentResources holds the config, memory store, and Discord session for a configured agent.
+type AgentResources struct {
+	Config  *config.AgentConfig
+	Memory  *memory.Store
+	Session *discordgo.Session
+}
+
 // Router manages per-channel ChannelAgents.
 type Router struct {
-	mu       sync.Mutex
-	agents   map[string]*ChannelAgent // keyed by channelID
-	ctx      context.Context
-	cfgStore *config.Store
-	llm      *llm.Client
-	mem      *memory.Store
-	session  *discordgo.Session
-	wg       sync.WaitGroup
+	mu               sync.Mutex
+	agents           map[string]*ChannelAgent // keyed by channelID
+	ctx              context.Context
+	cfgStore         *config.Store
+	llm              *llm.Client
+	defaultSession   *discordgo.Session
+	agentsByServerID map[string]*AgentResources
+	dmMemory         *memory.Store
+	wg               sync.WaitGroup
 }
 
 // NewRouter creates a new Router.
-func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Client, mem *memory.Store, session *discordgo.Session) *Router {
+func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Client, defaultSession *discordgo.Session, agentsByServerID map[string]*AgentResources) *Router {
+	cfg := cfgStore.Get()
+	dmMem, err := memory.New(&config.MemoryConfig{DBPath: config.ExpandPath(cfg.Memory.DBPath)}, llmClient)
+	if err != nil {
+		slog.Error("failed to open DM memory store", "error", err)
+	}
 	return &Router{
-		agents:   make(map[string]*ChannelAgent),
-		ctx:      ctx,
-		cfgStore: cfgStore,
-		llm:      llmClient,
-		mem:      mem,
-		session:  session,
+		agents:           make(map[string]*ChannelAgent),
+		ctx:              ctx,
+		cfgStore:         cfgStore,
+		llm:              llmClient,
+		defaultSession:   defaultSession,
+		agentsByServerID: agentsByServerID,
+		dmMemory:         dmMem,
 	}
 }
 
@@ -55,6 +70,14 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	resources, ok := r.agentsByServerID[serverID]
+	if !ok {
+		resources = r.tryHotLoad(serverID)
+		if resources == nil {
+			return // unconfigured server, silently ignore
+		}
+	}
+
 	if agent, ok := r.agents[channelID]; ok {
 		select {
 		case agent.msgCh <- msg:
@@ -67,7 +90,7 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 	}
 
 	// spawn new agent
-	a := newChannelAgent(channelID, serverID, r.cfgStore, r.llm, r.mem, r.session)
+	a := newChannelAgent(channelID, serverID, r.cfgStore, r.llm, resources)
 	r.agents[channelID] = a
 	r.wg.Add(1)
 	go func() {
@@ -80,6 +103,69 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 		r.mu.Unlock()
 	}()
 	a.msgCh <- msg // guaranteed to succeed (buffer just created, size 100)
+}
+
+// MemoryForServer returns the memory store for a configured server, or nil if not configured.
+func (r *Router) MemoryForServer(serverID string) *memory.Store {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if res, ok := r.agentsByServerID[serverID]; ok {
+		return res.Memory
+	}
+	if res := r.tryHotLoad(serverID); res != nil {
+		return res.Memory
+	}
+	return nil
+}
+
+// tryHotLoad checks cfgStore for a newly added agent and loads it into agentsByServerID.
+// Must be called with r.mu held. Only loads agents without custom tokens (those require restart).
+// DM server IDs (prefixed with "DM:") are handled specially: they use the global default config
+// and the default memory store so DMs are always served without requiring explicit configuration.
+// Returns the resources if successfully loaded, nil otherwise.
+func (r *Router) tryHotLoad(serverID string) *AgentResources {
+	cfg := r.cfgStore.Get()
+
+	if strings.HasPrefix(serverID, "DM:") {
+		if r.dmMemory == nil {
+			slog.Error("DM memory store not initialized", "server_id", serverID)
+			return nil
+		}
+		res := &AgentResources{Config: &config.AgentConfig{}, Memory: r.dmMemory, Session: r.defaultSession}
+		r.agentsByServerID[serverID] = res
+		slog.Info("created DM agent resources", "server_id", serverID)
+		return res
+	}
+
+	for i := range cfg.Agents {
+		a := &cfg.Agents[i]
+		if a.ServerID != serverID {
+			continue
+		}
+		if a.Token != "" {
+			// Custom token agents require a restart to open a new Discord session.
+			slog.Warn("agent has custom token and was added after startup; restart required", "agent", a.ID)
+			return nil
+		}
+		mem, err := memory.New(&config.MemoryConfig{DBPath: a.ResolveDBPath(cfg.Memory.DBPath)}, r.llm)
+		if err != nil {
+			slog.Error("failed to hot-load memory store for agent", "agent", a.ID, "error", err)
+			return nil
+		}
+		res := &AgentResources{Config: a, Memory: mem, Session: r.defaultSession}
+		r.agentsByServerID[serverID] = res
+		slog.Info("hot-loaded agent from config", "agent", a.ID, "server_id", serverID)
+		return res
+	}
+	return nil
+}
+
+// UnloadAgent removes a hot-loaded agent from the in-memory cache.
+// The next message to that server will find no entry and be silently ignored.
+func (r *Router) UnloadAgent(serverID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.agentsByServerID, serverID)
 }
 
 // Status returns a snapshot of all active channel agents.

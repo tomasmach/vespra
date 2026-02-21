@@ -1,73 +1,220 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Mnemon-bot Dashboard</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['"IBM Plex Mono"', 'monospace'],
+            sans: ['"IBM Plex Sans"', 'system-ui', 'sans-serif'],
+          },
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-  <div class="layout">
-    <aside class="sidebar">
-      <div class="sidebar-logo">
-        <span class="logo-icon">🧠</span>
-        <span class="logo-text">Mnemon</span>
-      </div>
-      <nav class="sidebar-nav">
-        <button class="nav-item active" id="nav-config" onclick="showView('config')">
-          <span class="nav-icon">⚙</span> Config
+<body class="h-full flex flex-col font-sans bg-zinc-950 text-zinc-100 overflow-hidden">
+
+  <!-- Top bar -->
+  <header class="h-11 flex-shrink-0 flex items-center justify-between px-5 bg-zinc-900 border-b border-zinc-800">
+    <div class="flex items-center gap-2.5">
+      <span class="text-base">🧠</span>
+      <span class="font-semibold tracking-wide text-sm text-zinc-100">Mnemon</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="sse-dot" class="sse-dot"></span>
+      <span id="sse-label" class="text-xs text-zinc-500 font-mono">Connecting…</span>
+      <button onclick="toggleMonitor()" class="px-3 py-1 text-xs font-medium text-zinc-400 hover:text-zinc-100 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-md transition-colors">Monitor</button>
+    </div>
+  </header>
+
+  <!-- Layout -->
+  <div class="flex-1 flex overflow-hidden">
+
+    <!-- Sidebar -->
+    <aside class="w-52 flex-shrink-0 bg-zinc-900 border-r border-zinc-800 flex flex-col overflow-hidden">
+      <div class="px-4 pt-4 pb-2 text-[10px] font-semibold tracking-widest text-zinc-600 uppercase flex-shrink-0">Agents</div>
+      <div id="agent-sidebar-list" class="flex-1 overflow-y-auto px-2 py-1"></div>
+      <div class="p-3 border-t border-zinc-800 flex-shrink-0 flex flex-col gap-1.5">
+        <button id="btn-settings" class="w-full text-left text-xs text-zinc-400 hover:text-zinc-100 border border-zinc-700/60 hover:border-zinc-600 bg-transparent hover:bg-zinc-800 rounded-md py-2 px-3 transition-colors flex items-center gap-1.5">
+          <span class="text-zinc-500">⚙</span> Settings
         </button>
-        <button class="nav-item" id="nav-memories" onclick="showView('memories')">
-          <span class="nav-icon">🗄</span> Memories
+        <button id="btn-new-agent" class="w-full text-left text-xs text-zinc-500 hover:text-zinc-100 border border-dashed border-zinc-700/60 hover:border-violet-500/60 bg-transparent hover:bg-zinc-800/50 rounded-md py-2 px-3 transition-colors">
+          + New Agent
         </button>
-        <button class="nav-item" id="nav-monitor" onclick="showView('monitor')">
-          <span class="nav-icon">📡</span> Monitor
-        </button>
-      </nav>
-      <div class="sidebar-footer">
-        <span id="sse-dot" class="sse-dot"></span>
-        <span id="sse-label" class="sse-label">Connecting…</span>
       </div>
     </aside>
 
-    <main class="main-content">
-      <!-- Config view -->
-      <div id="view-config" class="view">
-        <div class="card">
-          <div class="card-header">
-            <h2>Configuration</h2>
-            <button class="btn-primary" onclick="saveConfig()">Save</button>
+    <!-- Main detail panel -->
+    <main class="flex-1 flex flex-col overflow-hidden">
+
+      <!-- Empty state -->
+      <div id="panel-empty" class="flex-1 flex flex-col items-center justify-center gap-3 text-zinc-600">
+        <span class="text-3xl opacity-30">🧠</span>
+        <p class="text-sm">Select an agent or open Settings.</p>
+      </div>
+
+      <!-- Global config / soul -->
+      <div id="panel-config" class="flex flex-col h-full overflow-hidden" hidden>
+        <div class="flex-shrink-0 px-6 pt-5 pb-0">
+          <h2 class="text-sm font-semibold text-zinc-200 tracking-wide">Global Config</h2>
+        </div>
+        <div class="flex px-6 mt-4 border-b border-zinc-800 flex-shrink-0 gap-1">
+          <button id="ctab-config" class="detail-tab active" onclick="navigateConfigTab('config')">Config</button>
+          <button id="ctab-soul" class="detail-tab" onclick="navigateConfigTab('soul')">Soul</button>
+        </div>
+        <div id="global-config" class="flex flex-col flex-1 overflow-hidden px-6 py-5">
+          <div id="config-path-info" class="path-info mb-3 flex-shrink-0"></div>
+          <textarea id="config-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
+          <div class="flex gap-2 mt-3 flex-shrink-0">
+            <button class="btn-primary" onclick="saveConfig()">Save Config</button>
           </div>
-          <textarea id="config-editor" spellcheck="false"></textarea>
           <span id="config-status" class="status-msg"></span>
         </div>
+        <div id="global-soul" class="flex flex-col flex-1 overflow-hidden px-6 py-5" hidden>
+          <div id="global-soul-path-info" class="path-info mb-3 flex-shrink-0"></div>
+          <textarea id="global-soul-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
+          <div class="flex gap-2 mt-3 flex-shrink-0">
+            <button class="btn-primary" onclick="saveGlobalSoul()">Save Soul</button>
+          </div>
+          <span id="global-soul-status" class="status-msg"></span>
+        </div>
       </div>
 
-      <!-- Memories view -->
-      <div id="view-memories" class="view" hidden>
-        <div class="card">
+      <!-- New agent form -->
+      <div id="panel-new-agent" class="flex flex-col h-full overflow-hidden" hidden>
+        <div class="flex-shrink-0 px-6 pt-5 pb-0">
+          <h2 class="text-sm font-semibold text-zinc-200 tracking-wide">New Agent</h2>
+        </div>
+        <div class="flex-1 overflow-y-auto px-6 py-5">
+          <div class="form-grid">
+            <label>ID (unique name)</label>
+            <input id="na-id" type="text" placeholder="my-server">
+            <label>Server ID (Discord guild ID)</label>
+            <input id="na-server-id" type="text" placeholder="123456789">
+            <label>Token (optional)</label>
+            <input id="na-token" type="password" placeholder="Leave blank to use default bot token">
+            <label>Soul File (optional)</label>
+            <input id="na-soul-file" type="text" placeholder="~/.config/mnemon-bot/soul.md">
+            <label>DB Path (optional)</label>
+            <input id="na-db-path" type="text" placeholder="auto">
+            <label>Response Mode</label>
+            <select id="na-response-mode">
+              <option value="">inherit from global</option>
+              <option value="smart">smart</option>
+              <option value="mention">mention</option>
+              <option value="all">all</option>
+              <option value="none">none</option>
+            </select>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn-secondary" onclick="cancelNewAgent()">Cancel</button>
+            <button class="btn-primary" onclick="createAgent()">Create Agent</button>
+          </div>
+          <span id="new-agent-status" class="status-msg"></span>
+        </div>
+      </div>
+
+      <!-- Agent detail -->
+      <div id="panel-agent" class="flex flex-col h-full overflow-hidden" hidden>
+        <div class="flex-shrink-0 flex items-center justify-between px-6 pt-5 pb-0">
+          <h2 id="agent-detail-name" class="text-sm font-semibold text-zinc-200 tracking-wide"></h2>
+          <button class="btn-danger text-xs" onclick="deleteSelectedAgent()">Delete</button>
+        </div>
+        <div class="flex px-6 mt-4 border-b border-zinc-800 flex-shrink-0 gap-1">
+          <button class="detail-tab active" id="dtab-config" onclick="navigateTab('config')">Config</button>
+          <button class="detail-tab" id="dtab-soul" onclick="navigateTab('soul')">Soul</button>
+          <button class="detail-tab" id="dtab-memories" onclick="navigateTab('memories')">Memories</button>
+        </div>
+
+        <!-- Agent config tab -->
+        <div id="detail-config" class="flex-1 overflow-y-auto px-6 py-5">
+          <div class="form-grid">
+            <label>Server ID (Discord guild ID)</label>
+            <input id="cfg-server-id" type="text">
+            <label>Token (optional)</label>
+            <input id="cfg-token" type="password" placeholder="Leave blank to keep existing token">
+            <label>Soul File (optional)</label>
+            <input id="cfg-soul-file" type="text" placeholder="~/.config/mnemon-bot/soul.md">
+            <label>DB Path (optional)</label>
+            <input id="cfg-db-path" type="text" placeholder="auto">
+            <label>Response Mode</label>
+            <select id="cfg-response-mode">
+              <option value="">inherit from global</option>
+              <option value="smart">smart</option>
+              <option value="mention">mention</option>
+              <option value="all">all</option>
+              <option value="none">none</option>
+            </select>
+          </div>
+          <div class="flex gap-2">
+            <button class="btn-primary" onclick="saveAgentConfig()">Save Config</button>
+          </div>
+          <span id="cfg-status" class="status-msg"></span>
+        </div>
+
+        <!-- Agent soul tab -->
+        <div id="detail-soul" class="flex flex-col flex-1 overflow-hidden px-6 py-5" hidden>
+          <div id="soul-path-info" class="path-info mb-3 flex-shrink-0"></div>
+          <textarea id="soul-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
+          <div class="flex gap-2 mt-3 flex-shrink-0">
+            <button class="btn-primary" onclick="saveSoul()">Save Soul</button>
+          </div>
+          <span id="soul-status" class="status-msg"></span>
+        </div>
+
+        <!-- Agent memories tab -->
+        <div id="detail-memories" class="flex-1 overflow-y-auto px-6 py-5" hidden>
           <div class="search-row">
-            <input id="mem-server" type="text" placeholder="Server ID (required)">
             <input id="mem-user" type="text" placeholder="User ID (optional)">
             <input id="mem-query" type="text" placeholder="Search (optional)">
-            <button class="btn-primary" onclick="loadMemories()">Search</button>
+            <button class="btn-primary" onclick="searchMemories()">Search</button>
           </div>
           <span id="mem-status" class="status-msg"></span>
+          <span id="mem-count" class="result-count" hidden></span>
+          <div id="mem-grid" class="card-grid"></div>
         </div>
-        <span id="mem-count" class="result-count" hidden></span>
-        <div id="mem-grid" class="card-grid"></div>
       </div>
 
-      <!-- Monitor view -->
-      <div id="view-monitor" class="view" hidden>
-        <div class="monitor-header">
+    </main>
+  </div>
+
+  <!-- Monitor overlay -->
+  <div id="monitor-overlay" class="monitor-overlay" hidden>
+    <div class="monitor-panel">
+      <div class="monitor-panel-header">
+        <div class="monitor-panel-title">
           <span id="agent-count-dot" class="status-dot"></span>
           <span id="monitor-status">Waiting for data…</span>
         </div>
+        <button class="btn-icon" onclick="toggleMonitor()">✕</button>
+      </div>
+      <div class="monitor-panel-content">
         <div id="agent-grid" class="card-grid"></div>
       </div>
-    </main>
+    </div>
   </div>
+
+  <!-- Delete confirm modal -->
+  <dialog id="delete-modal">
+    <div class="modal-content">
+      <h3>Delete Memory</h3>
+      <p class="modal-description">This memory will be permanently removed.</p>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeDeleteModal()">Cancel</button>
+        <button class="btn-danger" onclick="confirmDelete()">Delete</button>
+      </div>
+    </div>
+  </dialog>
 
   <!-- Edit modal -->
   <dialog id="edit-modal">
@@ -81,6 +228,6 @@
     </div>
   </dialog>
 
-  <script src="/static/app.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

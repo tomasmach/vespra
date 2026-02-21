@@ -13,7 +13,6 @@ import (
 
 	"github.com/tomasmach/mnemon-bot/config"
 	"github.com/tomasmach/mnemon-bot/llm"
-	"github.com/tomasmach/mnemon-bot/memory"
 	"github.com/tomasmach/mnemon-bot/soul"
 	"github.com/tomasmach/mnemon-bot/tools"
 )
@@ -24,22 +23,20 @@ type ChannelAgent struct {
 	serverID   string
 	cfgStore   *config.Store
 	llm        *llm.Client
-	mem        *memory.Store
-	session    *discordgo.Session
+	resources  *AgentResources
 	soulText   string
-	history    []llm.Message               // capped to cfg.Agent.HistoryLimit
+	history    []llm.Message                // capped to cfg.Agent.HistoryLimit
 	msgCh      chan *discordgo.MessageCreate // buffered 100
 	lastActive atomic.Int64                 // UnixNano; written by agent goroutine, read by Status()
 }
 
-func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClient *llm.Client, mem *memory.Store, session *discordgo.Session) *ChannelAgent {
+func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClient *llm.Client, resources *AgentResources) *ChannelAgent {
 	return &ChannelAgent{
 		channelID: channelID,
 		serverID:  serverID,
 		cfgStore:  cfgStore,
 		llm:       llmClient,
-		mem:       mem,
-		session:   session,
+		resources: resources,
 		soulText:  soul.Load(cfgStore.Get(), serverID),
 		history:   make([]llm.Message, 0),
 		msgCh:     make(chan *discordgo.MessageCreate, 100),
@@ -81,7 +78,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		return
 	case "mention":
 		isDM := msg.GuildID == ""
-		isMentioned := strings.Contains(msg.Content, "<@"+a.session.State.User.ID+">")
+		isMentioned := strings.Contains(msg.Content, "<@"+a.resources.Session.State.User.ID+">")
 		if !isDM && !isMentioned {
 			return
 		}
@@ -92,7 +89,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 
 	// Recall memories
-	memories, err := a.mem.Recall(ctx, msg.Content, a.serverID, 10)
+	memories, err := a.resources.Memory.Recall(ctx, msg.Content, a.serverID, 10)
 	if err != nil {
 		slog.Warn("memory recall error", "error", err, "channel_id", a.channelID)
 	}
@@ -108,15 +105,15 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 	// Set up callbacks
 	sendFn := func(content string) error {
-		_, err := a.session.ChannelMessageSend(msg.ChannelID, content)
+		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
 		return err
 	}
 	reactFn := func(emoji string) error {
-		return a.session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
+		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
 
 	// Build tool registry
-	reg := tools.NewDefaultRegistry(a.mem, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
 
 	// Add user message to history
 	userMsg := llm.Message{Role: "user", Content: fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)}
@@ -185,9 +182,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if len(msgs) > cfg.Agent.HistoryLimit {
 		msgs = msgs[len(msgs)-cfg.Agent.HistoryLimit:]
 	}
-	historyCopy := make([]llm.Message, len(msgs))
-	copy(historyCopy, msgs)
-	a.history = historyCopy
+	a.history = msgs
 }
 
 // buildMessages constructs the message slice for the LLM with system prompt prepended.

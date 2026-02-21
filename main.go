@@ -47,36 +47,82 @@ func main() {
 
 	llmClient := llm.New(cfgStore)
 
-	mem, err := memory.New(&cfg.Memory, llmClient)
+	// Build per-agent resources
+	agentsByServerID := make(map[string]*agent.AgentResources, len(cfg.Agents))
+	var customBots []*bot.Bot // bots with their own tokens (need separate stop)
+
+	for i := range cfg.Agents {
+		agentCfg := &cfg.Agents[i]
+		dbPath := agentCfg.ResolveDBPath(cfg.Memory.DBPath)
+		mem, err := memory.New(&config.MemoryConfig{DBPath: dbPath}, llmClient)
+		if err != nil {
+			slog.Error("failed to open memory store for agent", "agent", agentCfg.ID, "error", err)
+			os.Exit(1)
+		}
+
+		agentsByServerID[agentCfg.ServerID] = &agent.AgentResources{
+			Config:  agentCfg,
+			Memory:  mem,
+			Session: nil, // filled in below
+		}
+
+		if agentCfg.Token != "" {
+			b, err := bot.New(agentCfg.Token)
+			if err != nil {
+				slog.Error("failed to create bot for agent", "agent", agentCfg.ID, "error", err)
+				os.Exit(1)
+			}
+			customBots = append(customBots, b)
+			agentsByServerID[agentCfg.ServerID].Session = b.Session()
+		}
+	}
+
+	slog.Info("agents initialized", "count", len(agentsByServerID))
+
+	// Start default bot (handles DMs + agents without custom tokens)
+	defaultBot, err := bot.New(cfg.Bot.Token)
 	if err != nil {
-		slog.Error("failed to open memory store", "error", err)
+		slog.Error("failed to create default bot", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("memory store opened")
 
-	b, err := bot.New(cfg.Bot.Token)
-	if err != nil {
-		slog.Error("failed to create bot", "error", err)
-		os.Exit(1)
+	// Fill nil sessions with the default bot's session
+	for serverID, res := range agentsByServerID {
+		if res.Session == nil {
+			agentsByServerID[serverID].Session = defaultBot.Session()
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	router := agent.NewRouter(ctx, cfgStore, llmClient, mem, b.Session())
-	b.SetRouter(router)
+	router := agent.NewRouter(ctx, cfgStore, llmClient, defaultBot.Session(), agentsByServerID)
 
-	if err := b.Start(); err != nil {
-		slog.Error("failed to start bot", "error", err)
+	// Wire router to all bots
+	defaultBot.SetRouter(router)
+	for _, b := range customBots {
+		b.SetRouter(router)
+	}
+
+	// Start all bots
+	if err := defaultBot.Start(); err != nil {
+		slog.Error("failed to start default bot", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("bot started")
+	slog.Info("default bot started")
+
+	for _, b := range customBots {
+		if err := b.Start(); err != nil {
+			slog.Error("failed to start custom bot", "error", err)
+			os.Exit(1)
+		}
+	}
+	if len(customBots) > 0 {
+		slog.Info("custom bots started", "count", len(customBots))
+	}
 
 	webAddr := cfgStore.Get().Web.Addr
-	if webAddr == "" {
-		webAddr = ":8080"
-	}
-	webServer := web.New(webAddr, cfgStore, cfgPath, mem, router)
+	webServer := web.New(webAddr, cfgStore, cfgPath, router)
 	webServer.StartStatusPoller(ctx)
 	go func() {
 		if err := webServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -93,7 +139,14 @@ func main() {
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	_ = webServer.Shutdown(shutCtx)
-	b.Stop()
+	if err := defaultBot.Stop(); err != nil {
+		slog.Warn("failed to stop default bot", "error", err)
+	}
+	for _, b := range customBots {
+		if err := b.Stop(); err != nil {
+			slog.Warn("failed to stop custom bot", "error", err)
+		}
+	}
 	cancel()
 	router.WaitForDrain()
 	slog.Info("shutdown complete")
