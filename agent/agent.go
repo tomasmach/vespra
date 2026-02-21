@@ -79,7 +79,11 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	case "mention":
 		isDM := msg.GuildID == ""
 		isMentioned := strings.Contains(msg.Content, "<@"+a.resources.Session.State.User.ID+">")
-		if !isDM && !isMentioned {
+		isReplyToBot := msg.MessageReference != nil &&
+			msg.ReferencedMessage != nil &&
+			msg.ReferencedMessage.Author != nil &&
+			msg.ReferencedMessage.Author.ID == a.resources.Session.State.User.ID
+		if !isDM && !isMentioned && !isReplyToBot {
 			return
 		}
 	case "all":
