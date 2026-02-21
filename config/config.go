@@ -34,10 +34,13 @@ type BotConfig struct {
 
 type LLMConfig struct {
 	OpenRouterKey         string `toml:"openrouter_key" json:"-"`
+	APIKey                string `toml:"api_key" json:"-"`
 	Model                 string `toml:"model"`
 	EmbeddingModel        string `toml:"embedding_model"`
 	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
-	BaseURL               string `toml:"-" json:"-"` // override for tests; not read from TOML
+	BaseURL               string `toml:"base_url" json:"-"`
+	EmbeddingBaseURL      string `toml:"embedding_base_url" json:"-"`
+	EmbeddingKey          string `toml:"embedding_key" json:"-"`
 }
 
 type MemoryConfig struct {
@@ -145,8 +148,8 @@ func Load(path string) (*Config, error) {
 	if cfg.Bot.Token == "" {
 		return nil, fmt.Errorf("bot.token is required")
 	}
-	if cfg.LLM.OpenRouterKey == "" {
-		return nil, fmt.Errorf("llm.openrouter_key is required")
+	if cfg.LLM.OpenRouterKey == "" && cfg.LLM.APIKey == "" {
+		return nil, fmt.Errorf("llm.openrouter_key or llm.api_key is required")
 	}
 
 	// Validate response mode values

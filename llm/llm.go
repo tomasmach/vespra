@@ -132,6 +132,29 @@ func (c *Client) apiBase() string {
 	return "https://openrouter.ai/api/v1"
 }
 
+func (c *Client) chatKey() string {
+	cfg := c.cfgStore.Get().LLM
+	if cfg.APIKey != "" {
+		return cfg.APIKey
+	}
+	return cfg.OpenRouterKey
+}
+
+func (c *Client) embeddingBase() string {
+	if u := c.cfgStore.Get().LLM.EmbeddingBaseURL; u != "" {
+		return u
+	}
+	return c.apiBase()
+}
+
+func (c *Client) embeddingKey() string {
+	cfg := c.cfgStore.Get().LLM
+	if cfg.EmbeddingKey != "" {
+		return cfg.EmbeddingKey
+	}
+	return c.chatKey()
+}
+
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (Choice, error) {
 	cfg := c.cfgStore.Get().LLM
 	body := map[string]any{
@@ -142,7 +165,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		body["tools"] = tools
 	}
 
-	respBody, err := c.post(ctx, c.apiBase()+"/chat/completions", body)
+	respBody, err := c.post(ctx, c.apiBase()+"/chat/completions", c.chatKey(), body)
 	if err != nil {
 		return Choice{}, err
 	}
@@ -165,7 +188,7 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		"input": text,
 	}
 
-	respBody, err := c.post(ctx, c.apiBase()+"/embeddings", body)
+	respBody, err := c.post(ctx, c.embeddingBase()+"/embeddings", c.embeddingKey(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +212,7 @@ var retryDelays = []time.Duration{500 * time.Millisecond, 1000 * time.Millisecon
 
 // post sends a JSON POST request to the given URL with retry on transient errors.
 // Returns the response body on success; the caller must close it.
-func (c *Client) post(ctx context.Context, url string, body any) (io.ReadCloser, error) {
+func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCloser, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -209,7 +232,7 @@ func (c *Client) post(ctx context.Context, url string, body any) (io.ReadCloser,
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}
-		req.Header.Set("Authorization", "Bearer "+c.cfgStore.Get().LLM.OpenRouterKey)
+		req.Header.Set("Authorization", "Bearer "+key)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("HTTP-Referer", "https://github.com/tomasmach/mnemon-bot")
 
