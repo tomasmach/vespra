@@ -32,7 +32,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_server ON logs(server_id);
 // LogRow is a single log entry returned by List.
 type LogRow struct {
 	ID        int64     `json:"id"`
-	Ts        time.Time `json:"ts"`
+	CreatedAt time.Time `json:"ts"`
 	Level     string    `json:"level"`
 	Msg       string    `json:"msg"`
 	ServerID  string    `json:"server_id,omitempty"`
@@ -81,11 +81,29 @@ func (s *Store) write(ctx context.Context, ts time.Time, level, msg, serverID, c
 	}
 }
 
-// prune keeps at most 10 000 rows by deleting the oldest excess rows.
+// prune keeps at most 10 000 rows per server_id by deleting the oldest excess rows.
 func (s *Store) prune(ctx context.Context) {
-	_, _ = s.db.ExecContext(ctx,
-		`DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 10000)`,
-	)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT server_id FROM logs`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	var serverIDs []string
+	for rows.Next() {
+		var sid string
+		if rows.Scan(&sid) == nil {
+			serverIDs = append(serverIDs, sid)
+		}
+	}
+	rows.Close()
+
+	for _, sid := range serverIDs {
+		_, _ = s.db.ExecContext(ctx,
+			`DELETE FROM logs WHERE server_id = ? AND id NOT IN (SELECT id FROM logs WHERE server_id = ? ORDER BY id DESC LIMIT 10000)`,
+			sid, sid,
+		)
+	}
 }
 
 // List returns log rows for a server, optionally filtered by minimum level.
@@ -126,7 +144,7 @@ func (s *Store) List(ctx context.Context, serverID, level string, limit, offset 
 	var out []LogRow
 	for rows.Next() {
 		var r LogRow
-		if err := rows.Scan(&r.ID, &r.Ts, &r.Level, &r.Msg, &r.ServerID, &r.ChannelID, &r.Attrs); err != nil {
+		if err := rows.Scan(&r.ID, &r.CreatedAt, &r.Level, &r.Msg, &r.ServerID, &r.ChannelID, &r.Attrs); err != nil {
 			return nil, 0, fmt.Errorf("scan log row: %w", err)
 		}
 		out = append(out, r)

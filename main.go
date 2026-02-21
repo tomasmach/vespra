@@ -41,7 +41,7 @@ func main() {
 
 	cfg := cfgStore.Get()
 
-	logsDBPath := filepath.Join(filepath.Dir(config.ExpandPath(cfg.Memory.DBPath)), "logs.db")
+	logsDBPath := filepath.Join(config.ResolveDataDir(cfg.Memory.DBPath), "logs.db")
 	ls, err := logstore.Open(logsDBPath)
 	if err != nil {
 		slog.Error("failed to open log store", "error", err)

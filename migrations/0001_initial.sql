@@ -17,3 +17,13 @@ CREATE TABLE IF NOT EXISTS embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_memories_server ON memories(server_id);
 CREATE INDEX IF NOT EXISTS idx_memories_user   ON memories(server_id, user_id);
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id TEXT NOT NULL,
+    user_msg   TEXT NOT NULL,
+    tool_calls TEXT,  -- JSON array [{name, result}]
+    response   TEXT NOT NULL,
+    ts         DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conv_channel ON conversations(channel_id);

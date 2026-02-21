@@ -71,18 +71,28 @@ type AgentConfig struct {
 
 // ResolveDBPath returns the DB path for this agent.
 // If db_path is set, it expands and returns it.
-// Otherwise derives: dir(defaultDBPath)/agents/<server_id>/memory.db
+// Otherwise derives: ResolveDataDir(defaultDBPath)/agents/<server_id>/memory.db
 func (a *AgentConfig) ResolveDBPath(defaultDBPath string) string {
 	if a.DBPath != "" {
 		return ExpandPath(a.DBPath)
 	}
-	dir := filepath.Dir(ExpandPath(defaultDBPath))
-	return filepath.Join(dir, "agents", a.ServerID, "memory.db")
+	return filepath.Join(ResolveDataDir(defaultDBPath), "agents", a.ServerID, "memory.db")
 }
 
 type ChannelConfig struct {
 	ID           string `toml:"id" json:"id"`
 	ResponseMode string `toml:"response_mode" json:"response_mode,omitempty"`
+}
+
+// ResolveDataDir returns the directory that should contain all DB files.
+// If dbPath is set, it returns the directory of that file.
+// Otherwise it returns ~/.local/share/mnemon-bot.
+func ResolveDataDir(dbPath string) string {
+	if dbPath != "" {
+		return filepath.Dir(ExpandPath(dbPath))
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share", "mnemon-bot")
 }
 
 // ExpandPath expands environment variables and ~ in a file path.

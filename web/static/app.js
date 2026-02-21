@@ -125,6 +125,8 @@ function showPanel(name) {
 // --- Agent detail ---
 
 function populateAgentPanel(agent) {
+  logsOffset = 0;
+  convsOffset = 0;
   document.getElementById('agent-detail-name').textContent = agent.id;
   document.getElementById('cfg-server-id').value = agent.server_id || '';
   document.getElementById('cfg-token').value = '';

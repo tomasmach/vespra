@@ -22,14 +22,17 @@ import (
 type ChannelAgent struct {
 	channelID string
 	serverID  string
+
 	cfgStore  *config.Store
 	llm       *llm.Client
 	resources *AgentResources
 	logger    *slog.Logger
+
 	soulText   string
-	history    []llm.Message                // capped to cfg.Agent.HistoryLimit
-	lastActive atomic.Int64                 // UnixNano; written by agent goroutine, read by Status()
-	msgCh      chan *discordgo.MessageCreate // buffered 100
+	history    []llm.Message  // capped to cfg.Agent.HistoryLimit
+	lastActive atomic.Int64   // UnixNano; written by agent goroutine, read by Status()
+
+	msgCh chan *discordgo.MessageCreate // buffered 100
 }
 
 // buildUserMessage converts a Discord message into an llm.Message, attaching
@@ -218,7 +221,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 		// dispatch each tool call
 		for _, tc := range choice.Message.ToolCalls {
-			a.logger.Info("tool call", "tool", tc.Function.Name)
+			a.logger.Debug("tool call", "tool", tc.Function.Name)
 			result, err := reg.Dispatch(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
 			if err != nil {
 				a.logger.Warn("tool dispatch error", "tool", tc.Function.Name, "error", err)
@@ -241,17 +244,21 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 	}
 
-	// Log conversation on success
-	if assistantContent != "" {
+	// Log conversation on success — either plain-text reply or reply-tool response.
+	if assistantContent != "" || reg.Replied {
 		var toolCallsJSON string
 		if len(toolCalls) > 0 {
 			if b, err := json.Marshal(toolCalls); err == nil {
 				toolCallsJSON = string(b)
 			}
 		}
+		responseText := assistantContent
+		if responseText == "" && reg.Replied {
+			responseText = reg.ReplyText
+		}
 		// Use the formatted user message (as seen by the LLM), not the raw Discord content.
 		userMsgText := fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)
-		if err := a.resources.Memory.LogConversation(ctx, a.channelID, userMsgText, toolCallsJSON, assistantContent); err != nil {
+		if err := a.resources.Memory.LogConversation(ctx, a.channelID, userMsgText, toolCallsJSON, responseText); err != nil {
 			a.logger.Warn("log conversation error", "error", err)
 		}
 	}

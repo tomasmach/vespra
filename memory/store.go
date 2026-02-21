@@ -3,11 +3,12 @@ package memory
 
 import (
 	"context"
-	"crypto/rand"
+	crand "crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,7 +86,7 @@ func New(cfg *config.MemoryConfig, llmClient *llm.Client) (*Store, error) {
 
 func newID() (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := crand.Read(b); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
@@ -192,6 +193,7 @@ func (s *Store) UpdateContent(ctx context.Context, id, serverID, content string)
 	return err
 }
 
+// ConversationRow holds a single persisted conversation turn returned by ListConversations.
 type ConversationRow struct {
 	ID        int64     `json:"id"`
 	ChannelID string    `json:"channel_id"`
@@ -201,6 +203,9 @@ type ConversationRow struct {
 	CreatedAt time.Time `json:"ts"`
 }
 
+// LogConversation inserts a single conversation turn into the conversations table.
+// toolCallsJSON may be empty if the LLM produced no tool calls.
+// Prunes the table 1 in 500 writes to keep it at most 10 000 rows.
 func (s *Store) LogConversation(ctx context.Context, channelID, userMsg, toolCallsJSON, response string) error {
 	var tc any
 	if toolCallsJSON != "" {
@@ -213,9 +218,19 @@ func (s *Store) LogConversation(ctx context.Context, channelID, userMsg, toolCal
 	if err != nil {
 		return fmt.Errorf("insert conversation: %w", err)
 	}
+	if rand.IntN(500) == 0 {
+		// Use context.Background(): prune is a maintenance operation that should
+		// not be cancelled by the short-lived request context that triggered the write.
+		_, _ = s.db.ExecContext(context.Background(),
+			`DELETE FROM conversations WHERE id NOT IN (SELECT id FROM conversations ORDER BY id DESC LIMIT 10000)`,
+		)
+	}
 	return nil
 }
 
+// ListConversations returns conversation rows, optionally filtered by channelID.
+// Pass an empty channelID to list across all channels. Returns the total row count
+// (before pagination) alongside the page of results.
 func (s *Store) ListConversations(ctx context.Context, channelID string, limit, offset int) ([]ConversationRow, int, error) {
 	if limit == 0 {
 		limit = 50
