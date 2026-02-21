@@ -133,6 +133,7 @@ function populateAgentPanel(agent) {
   document.getElementById('cfg-soul-file').value = agent.soul_file || '';
   document.getElementById('cfg-db-path').value = agent.db_path || '';
   document.getElementById('cfg-response-mode').value = agent.response_mode || '';
+  document.getElementById('cfg-language').value = agent.language || '';
   document.getElementById('cfg-status').textContent = '';
 }
 
@@ -168,6 +169,7 @@ function saveAgentConfig() {
     soul_file: document.getElementById('cfg-soul-file').value.trim(),
     db_path: document.getElementById('cfg-db-path').value.trim(),
     response_mode: document.getElementById('cfg-response-mode').value,
+    language: document.getElementById('cfg-language').value.trim(),
   };
 
   fetch('/api/agents/' + encodeURIComponent(selectedAgentId), {
@@ -324,6 +326,7 @@ function clearNewAgentForm() {
   document.getElementById('na-soul-file').value = '';
   document.getElementById('na-db-path').value = '';
   document.getElementById('na-response-mode').value = '';
+  document.getElementById('na-language').value = '';
   document.getElementById('new-agent-status').textContent = '';
 }
 
@@ -344,6 +347,7 @@ function createAgent() {
     soul_file: document.getElementById('na-soul-file').value.trim(),
     db_path: document.getElementById('na-db-path').value.trim(),
     response_mode: document.getElementById('na-response-mode').value,
+    language: document.getElementById('na-language').value.trim(),
   };
 
   fetch('/api/agents', {

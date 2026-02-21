@@ -309,12 +309,13 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfgStore.Get()
 	type agentView struct {
-		ID           string                `json:"id"`
-		ServerID     string                `json:"server_id"`
-		HasToken     bool                  `json:"has_token"`
-		SoulFile     string                `json:"soul_file,omitempty"`
-		DBPath       string                `json:"db_path,omitempty"`
-		ResponseMode string                `json:"response_mode,omitempty"`
+		ID           string                 `json:"id"`
+		ServerID     string                 `json:"server_id"`
+		HasToken     bool                   `json:"has_token"`
+		SoulFile     string                 `json:"soul_file,omitempty"`
+		DBPath       string                 `json:"db_path,omitempty"`
+		ResponseMode string                 `json:"response_mode,omitempty"`
+		Language     string                 `json:"language,omitempty"`
 		Channels     []config.ChannelConfig `json:"channels,omitempty"`
 	}
 	views := make([]agentView, len(cfg.Agents))
@@ -326,6 +327,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			SoulFile:     a.SoulFile,
 			DBPath:       a.DBPath,
 			ResponseMode: a.ResponseMode,
+			Language:     a.Language,
 			Channels:     a.Channels,
 		}
 	}
