@@ -21,6 +21,20 @@ import (
 	"github.com/tomasmach/mnemon-bot/tools"
 )
 
+const extractionPrompt = `You are a memory extraction assistant. Your only job is to analyze the conversation and save important information to long-term memory.
+
+Save a memory for each of the following you find:
+- User preferences or opinions (favourites, dislikes, how they like to be addressed)
+- Personal facts (location, job, age, relationships, pronouns, pets, hobbies, skills)
+- Decisions made or actions agreed upon
+- Goals, plans, or ongoing projects
+- Tasks or follow-ups the user wants to remember
+- Anything the user explicitly asked to be remembered
+
+Before saving each memory, call memory_recall to check if it already exists. Skip duplicates.
+Do not save trivial small talk or anything unlikely to be useful later.
+When you have finished saving all notable memories, stop.`
+
 // ChannelAgent is a per-channel conversation goroutine.
 type ChannelAgent struct {
 	channelID string
@@ -34,6 +48,7 @@ type ChannelAgent struct {
 
 	soulText   string
 	history    []llm.Message // capped to cfg.Agent.HistoryLimit
+	turnCount  int           // incremented each completed turn; triggers background extraction
 	lastActive atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
 
 	msgCh chan *discordgo.MessageCreate // buffered 100
@@ -366,6 +381,55 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		msgs = msgs[len(msgs)-cfg.Agent.HistoryLimit:]
 	}
 	a.history = msgs
+	a.turnCount++
+	cfg2 := a.cfgStore.Get()
+	if interval := cfg2.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
+		a.runMemoryExtraction(a.history)
+	}
+}
+
+// runMemoryExtraction launches a background goroutine that reviews recent history
+// and saves any important information the main turn may have missed.
+func (a *ChannelAgent) runMemoryExtraction(history []llm.Message) {
+	snapshot := make([]llm.Message, len(history))
+	copy(snapshot, history)
+
+	reg := tools.NewMemoryOnlyRegistry(a.resources.Memory, a.serverID)
+	logger := a.logger
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		msgs := buildMessages(extractionPrompt, snapshot)
+		cfg := a.cfgStore.Get()
+
+		for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
+			choice, err := a.llm.Chat(ctx, msgs, reg.Definitions())
+			if err != nil {
+				logger.Warn("memory extraction llm error", "error", err)
+				return
+			}
+			if len(choice.Message.ToolCalls) == 0 {
+				return
+			}
+			msgs = append(msgs, choice.Message)
+			for _, tc := range choice.Message.ToolCalls {
+				result, err := reg.Dispatch(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
+				if err != nil {
+					logger.Warn("memory extraction dispatch error", "tool", tc.Function.Name, "error", err)
+					result = fmt.Sprintf("Error: %s", err)
+				}
+				msgs = append(msgs, llm.Message{
+					Role:       "tool",
+					Content:    result,
+					ToolCallID: tc.ID,
+					Name:       tc.Function.Name,
+				})
+			}
+		}
+		logger.Warn("memory extraction hit max iterations")
+	}()
 }
 
 // startTyping sends a typing indicator immediately and refreshes every 8 seconds
