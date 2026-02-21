@@ -122,7 +122,7 @@ func main() {
 	}
 
 	webAddr := cfgStore.Get().Web.Addr
-	webServer := web.New(webAddr, cfgStore, cfgPath, router)
+	webServer := web.New(webAddr, cfgStore, cfgPath, router, nil)
 	webServer.StartStatusPoller(ctx)
 	go func() {
 		if err := webServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {

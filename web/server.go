@@ -19,6 +19,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/tomasmach/mnemon-bot/agent"
 	"github.com/tomasmach/mnemon-bot/config"
+	"github.com/tomasmach/mnemon-bot/logstore"
 	"github.com/tomasmach/mnemon-bot/memory"
 )
 
@@ -29,17 +30,19 @@ type Server struct {
 	cfgStore   *config.Store
 	cfgPath    string
 	router     *agent.Router
+	logStore   *logstore.Store
 	sseSubs    []chan string
 	ssesMu     sync.Mutex
 	writeMu    sync.Mutex  // guards config file writes
 	httpServer *http.Server
 }
 
-func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Router) *Server {
+func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Router, logStore *logstore.Store) *Server {
 	s := &Server{
 		cfgStore: cfgStore,
 		cfgPath:  cfgPath,
 		router:   router,
+		logStore: logStore,
 	}
 
 	mux := http.NewServeMux()
@@ -56,6 +59,8 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 	mux.HandleFunc("GET /api/agents/{id}/soul", s.handleGetAgentSoul)
 	mux.HandleFunc("PUT /api/agents/{id}/soul", s.handlePutAgentSoul)
+	mux.HandleFunc("GET /api/agents/{id}/logs", s.handleGetAgentLogs)
+	mux.HandleFunc("GET /api/agents/{id}/conversations", s.handleGetAgentConversations)
 	mux.HandleFunc("GET /api/soul", s.handleGetGlobalSoul)
 	mux.HandleFunc("PUT /api/soul", s.handlePutGlobalSoul)
 	sub, _ := fs.Sub(staticFiles, "static")
@@ -452,6 +457,101 @@ func findAgentIndex(agents []config.AgentConfig, id string) int {
 		}
 	}
 	return -1
+}
+
+// agentServerID resolves an agent ID to its server_id from config.
+func (s *Server) agentServerID(id string) (string, bool) {
+	cfg := s.cfgStore.Get()
+	idx := findAgentIndex(cfg.Agents, id)
+	if idx == -1 {
+		return "", false
+	}
+	return cfg.Agents[idx].ServerID, true
+}
+
+func (s *Server) handleGetAgentLogs(w http.ResponseWriter, r *http.Request) {
+	if s.logStore == nil {
+		http.Error(w, "log store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	id := r.PathValue("id")
+	serverID, ok := s.agentServerID(id)
+	if !ok {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	q := r.URL.Query()
+	level := q.Get("level")
+	limit := 100
+	offset := 0
+	if v := q.Get("limit"); v != "" {
+		limit, _ = strconv.Atoi(v)
+	}
+	if v := q.Get("offset"); v != "" {
+		offset, _ = strconv.Atoi(v)
+	}
+
+	rows, total, err := s.logStore.List(r.Context(), serverID, level, limit, offset)
+	if err != nil {
+		slog.Error("list agent logs", "error", err, "server_id", serverID)
+		http.Error(w, "failed to list logs", http.StatusInternalServerError)
+		return
+	}
+
+	if rows == nil {
+		rows = []logstore.LogRow{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"logs":  rows,
+		"total": total,
+	})
+}
+
+func (s *Server) handleGetAgentConversations(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	serverID, ok := s.agentServerID(id)
+	if !ok {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	mem := s.router.MemoryForServer(serverID)
+	if mem == nil {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	q := r.URL.Query()
+	channelID := q.Get("channel_id")
+	limit := 50
+	offset := 0
+	if v := q.Get("limit"); v != "" {
+		limit, _ = strconv.Atoi(v)
+	}
+	if v := q.Get("offset"); v != "" {
+		offset, _ = strconv.Atoi(v)
+	}
+
+	rows, total, err := mem.ListConversations(r.Context(), channelID, limit, offset)
+	if err != nil {
+		slog.Error("list agent conversations", "error", err, "server_id", serverID)
+		http.Error(w, "failed to list conversations", http.StatusInternalServerError)
+		return
+	}
+
+	if rows == nil {
+		rows = []memory.ConversationRow{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"conversations": rows,
+		"total":         total,
+	})
 }
 
 func (s *Server) handleGetAgentSoul(w http.ResponseWriter, r *http.Request) {
