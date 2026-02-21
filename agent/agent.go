@@ -160,7 +160,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	case "all":
 		// always respond
 	case "smart":
-		// always respond; model decides whether to use reply tool
+		// model responds only via reply/react tools; plain-text output without a tool call is suppressed
 	}
 
 	stopTyping := a.startTyping(ctx)
@@ -189,6 +189,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 	if lang := cfg.ResolveLanguage(a.serverID, msg.ChannelID); lang != "" {
 		systemPrompt += "\n\nAlways respond in " + lang + "."
+	}
+	if mode == "smart" {
+		systemPrompt += "\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent."
 	}
 
 	// Set up callbacks
@@ -262,11 +265,16 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if assistantContent != "" && looksLikeToolCall(assistantContent, reg.Definitions()) {
 		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
 		assistantContent = ""
-		if !reg.Replied {
+		if !reg.Replied && mode != "smart" {
 			if err := sendFn("I'm not sure how to respond. Please try again."); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
 		}
+	}
+
+	if mode == "smart" && assistantContent != "" && !reg.Replied {
+		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
+		assistantContent = ""
 	}
 
 	// Log conversation on success — either plain-text reply or reply-tool response.
