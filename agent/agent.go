@@ -20,16 +20,16 @@ import (
 
 // ChannelAgent is a per-channel conversation goroutine.
 type ChannelAgent struct {
-	channelID  string
-	serverID   string
-	cfgStore   *config.Store
-	llm        *llm.Client
-	resources  *AgentResources
+	channelID string
+	serverID  string
+	cfgStore  *config.Store
+	llm       *llm.Client
+	resources *AgentResources
+	logger    *slog.Logger
 	soulText   string
-	history    []llm.Message                // capped to cfg.Agent.HistoryLimit
+	history    []llm.Message // capped to cfg.Agent.HistoryLimit
+	lastActive atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
 	msgCh      chan *discordgo.MessageCreate // buffered 100
-	lastActive atomic.Int64                 // UnixNano; written by agent goroutine, read by Status()
-	logger     *slog.Logger
 }
 
 // buildUserMessage converts a Discord message into an llm.Message, attaching
