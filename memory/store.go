@@ -198,7 +198,7 @@ type ConversationRow struct {
 	UserMsg   string    `json:"user_msg"`
 	ToolCalls string    `json:"tool_calls,omitempty"`
 	Response  string    `json:"response"`
-	Ts        time.Time `json:"ts"`
+	CreatedAt time.Time `json:"ts"`
 }
 
 func (s *Store) LogConversation(ctx context.Context, channelID, userMsg, toolCallsJSON, response string) error {
@@ -247,7 +247,7 @@ func (s *Store) ListConversations(ctx context.Context, channelID string, limit, 
 	var out []ConversationRow
 	for rows.Next() {
 		var row ConversationRow
-		if err := rows.Scan(&row.ID, &row.ChannelID, &row.UserMsg, &row.ToolCalls, &row.Response, &row.Ts); err != nil {
+		if err := rows.Scan(&row.ID, &row.ChannelID, &row.UserMsg, &row.ToolCalls, &row.Response, &row.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan conversation: %w", err)
 		}
 		out = append(out, row)
