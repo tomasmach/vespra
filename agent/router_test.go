@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/tomasmach/mnemon-bot/config"
@@ -84,4 +85,83 @@ func TestUnloadAgentNonExistent(t *testing.T) {
 	r := newTestRouter(t)
 	// Should not panic when unloading a server that was never loaded
 	r.UnloadAgent("nonexistent-server")
+}
+
+func registerFakeAgent(t *testing.T, r *Router, serverID string, ignoreUsers []string) {
+	t.Helper()
+	r.mu.Lock()
+	r.agentsByServerID[serverID] = &AgentResources{
+		Config:  &config.AgentConfig{IgnoreUsers: ignoreUsers},
+		Memory:  nil,
+		Session: nil,
+	}
+	r.mu.Unlock()
+}
+
+func TestSpamBlockAfterThreshold(t *testing.T) {
+	r := newTestRouter(t)
+
+	// Call checkSpam spamThreshold-1 times — should not be blocked yet.
+	r.mu.Lock()
+	for i := 0; i < spamThreshold-1; i++ {
+		blocked, _ := r.checkSpam("srv1", "user1")
+		if blocked {
+			r.mu.Unlock()
+			t.Fatalf("user blocked early at call %d", i+1)
+		}
+	}
+
+	// The threshold-th call triggers the block.
+	blocked, justBlocked := r.checkSpam("srv1", "user1")
+	r.mu.Unlock()
+
+	if !blocked {
+		t.Error("user should be blocked after reaching threshold")
+	}
+	if !justBlocked {
+		t.Error("justBlocked should be true on the triggering call")
+	}
+
+	// Subsequent call should return blocked but not justBlocked.
+	r.mu.Lock()
+	blocked2, justBlocked2 := r.checkSpam("srv1", "user1")
+	r.mu.Unlock()
+
+	if !blocked2 {
+		t.Error("user should remain blocked")
+	}
+	if justBlocked2 {
+		t.Error("justBlocked should be false for subsequent blocked calls")
+	}
+}
+
+func TestSpamBlockExpires(t *testing.T) {
+	r := newTestRouter(t)
+
+	// Manually set an expired block.
+	r.mu.Lock()
+	r.spamMap["srv1:user1"] = &spamRecord{
+		blockedUntil: time.Now().Add(-1 * time.Second),
+	}
+	blocked, _ := r.checkSpam("srv1", "user1")
+	r.mu.Unlock()
+
+	if blocked {
+		t.Error("expired block should not still block the user")
+	}
+}
+
+func TestIgnoreUserDropsMessage(t *testing.T) {
+	r := newTestRouter(t)
+	registerFakeAgent(t, r, "srv1", []string{"ignored-user"})
+
+	r.Route(fakeMsg("srv1", "chan1", "ignored-user"))
+
+	// No agent should have been spawned for the ignored user.
+	r.mu.Lock()
+	_, exists := r.agents["chan1"]
+	r.mu.Unlock()
+	if exists {
+		t.Error("ignored user message should not spawn an agent")
+	}
 }

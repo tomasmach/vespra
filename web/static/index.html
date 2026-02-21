@@ -161,6 +161,12 @@
             </select>
             <label>Language (optional)</label>
             <input id="cfg-language" type="text" placeholder="e.g. Czech, Spanish">
+            <label class="col-span-2">Ignored Users</label>
+            <div class="col-span-2" id="ignored-users-list"></div>
+            <div class="col-span-2 flex gap-2">
+              <input id="new-ignore-user" type="text" placeholder="Discord User ID">
+              <button class="btn-secondary" onclick="addIgnoredUser()">Add</button>
+            </div>
           </div>
           <div class="flex gap-2">
             <button class="btn-primary" onclick="saveAgentConfig()">Save Config</button>

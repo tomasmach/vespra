@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,17 @@ import (
 	"github.com/tomasmach/mnemon-bot/llm"
 	"github.com/tomasmach/mnemon-bot/memory"
 )
+
+const (
+	spamWindow    = 30 * time.Second
+	spamThreshold = 10
+	spamCooldown  = 60 * time.Minute
+)
+
+type spamRecord struct {
+	timestamps   []time.Time
+	blockedUntil time.Time
+}
 
 // ChannelStatus describes the current state of an active channel agent.
 type ChannelStatus struct {
@@ -39,6 +51,7 @@ type Router struct {
 	agentsByServerID map[string]*AgentResources
 	dmMemory         *memory.Store
 	wg               sync.WaitGroup
+	spamMap          map[string]*spamRecord // key: "serverID:userID", protected by mu
 }
 
 // NewRouter creates a new Router.
@@ -56,6 +69,7 @@ func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Clien
 		defaultSession:   defaultSession,
 		agentsByServerID: agentsByServerID,
 		dmMemory:         dmMem,
+		spamMap:          make(map[string]*spamRecord),
 	}
 }
 
@@ -76,6 +90,23 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 		if resources == nil {
 			return // unconfigured server, silently ignore
 		}
+	}
+
+	// Check manual ignore list.
+	if resources.Config != nil && slices.Contains(resources.Config.IgnoreUsers, msg.Author.ID) {
+		return
+	}
+
+	// Check spam rate limit.
+	blocked, justBlocked := r.checkSpam(serverID, msg.Author.ID)
+	if blocked {
+		if justBlocked {
+			session := resources.Session
+			cid := channelID
+			uid := msg.Author.ID
+			go session.ChannelMessageSend(cid, "<@"+uid+"> You've been sending too many messages. I'll be back in 60 minutes.")
+		}
+		return
 	}
 
 	if agent, ok := r.agents[channelID]; ok {
@@ -183,6 +214,42 @@ func (r *Router) Status() []ChannelStatus {
 		})
 	}
 	return statuses
+}
+
+// checkSpam checks whether a user on a server is sending too many messages.
+// Must be called with r.mu held.
+// Returns (blocked, justBlocked): blocked=true means the message should be dropped;
+// justBlocked=true means this call is what triggered the block (send a notification).
+func (r *Router) checkSpam(serverID, userID string) (blocked bool, justBlocked bool) {
+	key := serverID + ":" + userID
+	now := time.Now()
+
+	rec, ok := r.spamMap[key]
+	if !ok {
+		rec = &spamRecord{}
+		r.spamMap[key] = rec
+	}
+
+	if now.Before(rec.blockedUntil) {
+		return true, false
+	}
+
+	// Trim timestamps outside the window.
+	cutoff := now.Add(-spamWindow)
+	i := 0
+	for i < len(rec.timestamps) && rec.timestamps[i].Before(cutoff) {
+		i++
+	}
+	rec.timestamps = append(rec.timestamps[i:], now)
+
+	if len(rec.timestamps) >= spamThreshold {
+		rec.blockedUntil = now.Add(spamCooldown)
+		rec.timestamps = rec.timestamps[:0]
+		slog.Warn("spam block applied", "server_id", serverID, "user_id", userID)
+		return true, true
+	}
+
+	return false, false
 }
 
 // WaitForDrain waits for all active agents to finish, up to 30 seconds.

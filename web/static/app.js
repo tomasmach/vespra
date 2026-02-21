@@ -9,6 +9,8 @@ let logsOffset = 0;
 let convsOffset = 0;
 const LOGS_LIMIT = 100;
 const CONVS_LIMIT = 20;
+let currentIgnoreUsers = [];
+let currentChannels = [];
 
 // --- Init ---
 
@@ -135,6 +137,9 @@ function populateAgentPanel(agent) {
   document.getElementById('cfg-response-mode').value = agent.response_mode || '';
   document.getElementById('cfg-language').value = agent.language || '';
   document.getElementById('cfg-status').textContent = '';
+  currentIgnoreUsers = agent.ignore_users ? agent.ignore_users.slice() : [];
+  currentChannels = agent.channels ? agent.channels.slice() : [];
+  renderIgnoredUsers();
 }
 
 function renderDetailTab(tab) {
@@ -170,6 +175,8 @@ function saveAgentConfig() {
     db_path: document.getElementById('cfg-db-path').value.trim(),
     response_mode: document.getElementById('cfg-response-mode').value,
     language: document.getElementById('cfg-language').value.trim(),
+    ignore_users: currentIgnoreUsers,
+    channels: currentChannels,
   };
 
   fetch('/api/agents/' + encodeURIComponent(selectedAgentId), {
@@ -190,6 +197,37 @@ function saveAgentConfig() {
 
 function setCfgStatus(msg, isError) {
   setStatus('cfg-status', msg, isError);
+}
+
+// --- Ignored users ---
+
+function renderIgnoredUsers() {
+  const el = document.getElementById('ignored-users-list');
+  if (!currentIgnoreUsers.length) {
+    el.innerHTML = '<span class="text-gray-400 text-sm">No ignored users</span>';
+    return;
+  }
+  el.innerHTML = currentIgnoreUsers.map((uid, i) =>
+    '<div class="flex gap-2 items-center">' +
+      '<span class="font-mono text-sm">' + esc(uid) + '</span>' +
+      '<button class="btn-danger-sm" onclick="removeIgnoredUser(' + i + ')">Remove</button>' +
+    '</div>'
+  ).join('');
+}
+
+function addIgnoredUser() {
+  const input = document.getElementById('new-ignore-user');
+  const uid = input.value.trim();
+  if (!uid) return;
+  if (currentIgnoreUsers.includes(uid)) { input.value = ''; return; }
+  currentIgnoreUsers.push(uid);
+  input.value = '';
+  renderIgnoredUsers();
+}
+
+function removeIgnoredUser(i) {
+  currentIgnoreUsers.splice(i, 1);
+  renderIgnoredUsers();
 }
 
 // --- Soul tab ---

@@ -71,6 +71,7 @@ type AgentConfig struct {
 	DBPath       string          `toml:"db_path" json:"db_path,omitempty"`
 	ResponseMode string          `toml:"response_mode" json:"response_mode,omitempty"`
 	Language     string          `toml:"language" json:"language,omitempty"`
+	IgnoreUsers  []string        `toml:"ignore_users,omitempty" json:"ignore_users,omitempty"`
 	Channels     []ChannelConfig `toml:"channels" json:"channels,omitempty"`
 }
 
