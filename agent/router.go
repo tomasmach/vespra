@@ -237,12 +237,6 @@ func (r *Router) checkSpam(serverID, userID string) (blocked bool, justBlocked b
 		return true, false
 	}
 
-	// Cooldown expired; evict if no recent timestamps to prevent unbounded map growth.
-	if ok && len(rec.timestamps) == 0 {
-		delete(r.spamMap, key)
-		return false, false
-	}
-
 	// Trim timestamps outside the window.
 	cutoff := now.Add(-spamWindow)
 	i := 0

@@ -95,6 +95,9 @@ func downloadImageAsDataURL(ctx context.Context, client *http.Client, a *discord
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
@@ -113,7 +116,7 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 		serverID:   serverID,
 		cfgStore:   cfgStore,
 		llm:        llmClient,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 		resources:  resources,
 		soulText:   soul.Load(cfgStore.Get(), serverID),
 		history:    make([]llm.Message, 0),
