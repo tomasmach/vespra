@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,9 +101,10 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 
-	// Env var overrides (take priority over config file)
+	// Env var overrides applied after TOML decode; priority: env var > config file.
 	if v := os.Getenv("MNEMON_DB_PATH"); v != "" {
 		cfg.Memory.DBPath = v
+		slog.Info("db path overridden by env var", "MNEMON_DB_PATH", v)
 	}
 
 	// Apply defaults

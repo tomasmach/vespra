@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/tomasmach/mnemon-bot/config"
@@ -40,6 +42,36 @@ func TestResolveResponseMode(t *testing.T) {
 					tt.serverID, tt.channelID, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadMNEMON_DB_PATHEnvOverride(t *testing.T) {
+	const minimalTOML = `
+[bot]
+token = "test-token"
+
+[llm]
+openrouter_key = "test-key"
+
+[memory]
+db_path = "/original/path/memory.db"
+`
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgFile, []byte(minimalTOML), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	wantDBPath := "/override/path/memory.db"
+	t.Setenv("MNEMON_DB_PATH", wantDBPath)
+
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Memory.DBPath != wantDBPath {
+		t.Errorf("Memory.DBPath = %q, want %q (MNEMON_DB_PATH override not applied)", cfg.Memory.DBPath, wantDBPath)
 	}
 }
 
