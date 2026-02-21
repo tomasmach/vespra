@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -49,12 +48,9 @@ func (s *Store) Recall(ctx context.Context, query, serverID string, topN int) ([
 		}
 	}
 
-	escaped := strings.ReplaceAll(query, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `%`, `\%`)
-	escaped = strings.ReplaceAll(escaped, `_`, `\_`)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id FROM memories WHERE server_id = ? AND forgotten = 0 AND content LIKE ? ESCAPE '\'`,
-		serverID, "%"+escaped+"%",
+		serverID, "%"+escapeLIKE(query)+"%",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("keyword search: %w", err)

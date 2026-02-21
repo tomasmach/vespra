@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
+
 	"github.com/tomasmach/mnemon-bot/agent"
 )
 

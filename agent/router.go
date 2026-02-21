@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
 	"github.com/tomasmach/mnemon-bot/config"
 	"github.com/tomasmach/mnemon-bot/llm"
 	"github.com/tomasmach/mnemon-bot/memory"

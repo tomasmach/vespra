@@ -4,8 +4,6 @@ package soul
 import (
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/tomasmach/mnemon-bot/config"
 )
@@ -45,21 +43,10 @@ func Load(cfg *config.Config, serverID string) string {
 	return defaultSoul
 }
 
-func expandPath(path string) string {
-	path = os.ExpandEnv(path)
-	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			path = filepath.Join(home, path[2:])
-		}
-	}
-	return path
-}
-
 // readFile expands env vars and ~, then reads the file.
 // Returns empty string on any error.
 func readFile(path string) string {
-	data, err := os.ReadFile(expandPath(path))
+	data, err := os.ReadFile(config.ExpandPath(path))
 	if err != nil {
 		return ""
 	}
