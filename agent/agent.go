@@ -190,6 +190,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if lang := cfg.ResolveLanguage(a.serverID, msg.ChannelID); lang != "" {
 		systemPrompt += "\n\nAlways respond in " + lang + "."
 	}
+	if mode == "smart" {
+		systemPrompt += "\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent."
+	}
 
 	// Set up callbacks
 	sendFn := func(content string) error {
@@ -267,6 +270,11 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 				a.logger.Error("send message", "error", err)
 			}
 		}
+	}
+
+	if mode == "smart" && assistantContent != "" && !reg.Replied {
+		a.logger.Warn("suppressed smart-mode plain-text non-reply", "content", assistantContent)
+		assistantContent = ""
 	}
 
 	// Log conversation on success — either plain-text reply or reply-tool response.
