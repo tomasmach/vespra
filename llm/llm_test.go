@@ -297,6 +297,57 @@ func TestNoVisionModelStripsImages(t *testing.T) {
 	}
 }
 
+// TestNoVisionModelStripsHistoricalImages verifies that when no vision_model is configured,
+// image content parts in historical (non-last) messages are also stripped.
+func TestNoVisionModelStripsHistoricalImages(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	client := clientWithBaseURL(t, srv.URL) // no VisionModel set
+
+	messages := []llm.Message{
+		// historical image message
+		{
+			Role: "user",
+			ContentParts: []llm.ContentPart{
+				{Type: "text", Text: "look at this"},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://cdn.discordapp.com/old.png"}},
+			},
+		},
+		{Role: "assistant", Content: "nice image"},
+		// current plain-text follow-up — no ContentParts
+		{Role: "user", Content: "what do you think?"},
+	}
+
+	_, err := client.Chat(context.Background(), messages, nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	msgs, ok := capturedBody["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		t.Fatalf("expected messages array, got %v", capturedBody["messages"])
+	}
+
+	firstMsg := msgs[0].(map[string]any)
+	content, ok := firstMsg["content"].(string)
+	if !ok {
+		t.Fatalf("expected historical message content to be a string (images stripped), got %T: %v", firstMsg["content"], firstMsg["content"])
+	}
+	if !strings.Contains(content, "image(s) attached") {
+		t.Errorf("expected note about image in historical message content, got %q", content)
+	}
+}
+
 func TestMessageMarshalContentParts(t *testing.T) {
 	msg := llm.Message{
 		Role: "user",

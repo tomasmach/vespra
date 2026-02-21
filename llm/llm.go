@@ -160,12 +160,15 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	cfg := c.cfgStore.Get().LLM
 	model := cfg.Model
 	if len(messages) > 0 {
-		last := &messages[len(messages)-1]
-		if len(last.ContentParts) > 0 {
-			if cfg.VisionModel != "" {
-				model = cfg.VisionModel
-			} else {
-				messages = stripImages(messages)
+		last := messages[len(messages)-1]
+		if len(last.ContentParts) > 0 && cfg.VisionModel != "" {
+			model = cfg.VisionModel
+		} else if cfg.VisionModel == "" {
+			for i := range messages {
+				if len(messages[i].ContentParts) > 0 {
+					messages = stripImages(messages)
+					break
+				}
 			}
 		}
 	}
@@ -270,33 +273,34 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 	return nil, lastErr
 }
 
-// stripImages returns a copy of messages with image content parts removed.
+// stripImages returns a copy of messages with image content parts removed from all messages.
 // Image parts are replaced with a short text note so the model is aware an
 // image was shared even though it cannot see it.
 func stripImages(messages []Message) []Message {
 	out := make([]Message, len(messages))
 	copy(out, messages)
-	last := &out[len(out)-1]
-	if len(last.ContentParts) == 0 {
-		return out
-	}
-	var text string
-	imageCount := 0
-	for _, p := range last.ContentParts {
-		if p.Type == "text" {
-			text = p.Text
-		} else if p.Type == "image_url" {
-			imageCount++
+	for i := range out {
+		if len(out[i].ContentParts) == 0 {
+			continue
 		}
+		var text string
+		imageCount := 0
+		for _, p := range out[i].ContentParts {
+			if p.Type == "text" {
+				text = p.Text
+			} else if p.Type == "image_url" {
+				imageCount++
+			}
+		}
+		note := fmt.Sprintf("[%d image(s) attached — vision not supported by current model]", imageCount)
+		if text != "" {
+			text = text + "\n" + note
+		} else {
+			text = note
+		}
+		out[i].ContentParts = nil
+		out[i].Content = text
 	}
-	note := fmt.Sprintf("[%d image(s) attached — vision not supported by current model]", imageCount)
-	if text != "" {
-		text = text + "\n" + note
-	} else {
-		text = note
-	}
-	last.ContentParts = nil
-	last.Content = text
 	return out
 }
 
