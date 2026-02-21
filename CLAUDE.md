@@ -51,6 +51,13 @@ Mnemon-bot is a Discord AI companion with persistent memory and a web management
 
 **`migrations/`** — Single SQL migration defining the `memories` and `embeddings` tables.
 
+## Branch Naming
+
+Use prefixes matching commit types: `feat/`, `fix/`, `refactor/`, `docs/`, `test/`, `chore/`. Examples:
+- `feat/add-web-search`
+- `fix/memory-leak`
+- `refactor/simplify-router`
+
 ## Code Style
 
 See [GO_CODE_STYLE.md](./GO_CODE_STYLE.md) for naming, error handling, logging, goroutine, and other Go conventions used in this project.
