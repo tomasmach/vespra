@@ -236,6 +236,18 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	return result.Data[0].Embedding, nil
 }
 
+// cancelOnClose wraps an io.ReadCloser to call a cancel function on Close.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
+}
+
 var retryDelays = []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond}
 
 // post sends a JSON POST request to the given URL with retry on transient errors.
@@ -270,24 +282,28 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 		req.Header.Set("HTTP-Referer", "https://github.com/tomasmach/vespra")
 
 		resp, err := http.DefaultClient.Do(req)
-		attemptCancel()
 		if err != nil {
+			attemptCancel()
 			lastErr = err
 			continue // all network errors are transient
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			resp.Body.Close()
+			attemptCancel()
 			lastErr = fmt.Errorf("transient HTTP %d", resp.StatusCode)
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			resp.Body.Close()
+			attemptCancel()
 			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		}
 
-		return resp.Body, nil
+		// Cancel the per-attempt context when the caller closes the body,
+		// not before — the context must remain live while the body is being read.
+		return &cancelOnClose{ReadCloser: resp.Body, cancel: attemptCancel}, nil
 	}
 	return nil, lastErr
 }

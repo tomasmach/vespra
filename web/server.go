@@ -283,6 +283,10 @@ func (s *Server) handlePatchMemory(w http.ResponseWriter, r *http.Request) {
 
 	id := r.PathValue("id")
 	if err := mem.UpdateContent(r.Context(), id, serverID, body.Content); err != nil {
+		if errors.Is(err, memory.ErrMemoryNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
 		slog.Error("update memory content", "error", err, "id", id)
 		http.Error(w, "failed to update memory", http.StatusInternalServerError)
 		return
@@ -368,7 +372,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id is required", http.StatusBadRequest)
 		return
 	}
-	if !validAgentID.MatchString(input.ID) {
+	if !safeNameRe.MatchString(input.ID) {
 		http.Error(w, "invalid agent id: use letters, digits, - and _ only (max 64 chars)", http.StatusBadRequest)
 		return
 	}
@@ -609,9 +613,8 @@ func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
 	needsConfigUpdate := false
 
 	if agent.SoulFile == "" {
-		soulDir := s.agentSoulDir(id)
-		if soulDir == "" {
-			http.Error(w, "invalid agent id", http.StatusBadRequest)
+		soulDir, ok := s.requireAgentSoulDir(w, id)
+		if !ok {
 			return
 		}
 		soulPath = filepath.Join(soulDir, "default.md")
@@ -728,22 +731,31 @@ func (s *Server) handlePutGlobalSoul(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"path": soulPath})
 }
 
+var safeNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+// validSoulName reports whether name is a safe soul file stem.
+func validSoulName(name string) bool {
+	return safeNameRe.MatchString(name)
+}
+
 // agentSoulDir returns the directory where an agent's named souls are stored.
 // Returns an empty string if agentID fails validation; callers must check for this.
 func (s *Server) agentSoulDir(agentID string) string {
-	if !validAgentID.MatchString(agentID) {
+	if !safeNameRe.MatchString(agentID) {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(s.cfgPath), "souls", agentID)
 }
 
-var validAgentID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
-
-var soulNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
-
-// validSoulName reports whether name is a safe soul file stem.
-func validSoulName(name string) bool {
-	return soulNameRe.MatchString(name)
+// requireAgentSoulDir returns the soul directory for the agent and true,
+// or writes an HTTP 400 error and returns "", false.
+func (s *Server) requireAgentSoulDir(w http.ResponseWriter, agentID string) (string, bool) {
+	dir := s.agentSoulDir(agentID)
+	if dir == "" {
+		http.Error(w, "invalid agent id", http.StatusBadRequest)
+		return "", false
+	}
+	return dir, true
 }
 
 func (s *Server) handleListAgentSouls(w http.ResponseWriter, r *http.Request) {
@@ -756,9 +768,8 @@ func (s *Server) handleListAgentSouls(w http.ResponseWriter, r *http.Request) {
 	}
 	agent := cfg.Agents[idx]
 	activePath := config.ExpandPath(agent.SoulFile)
-	soulDir := s.agentSoulDir(id)
-	if soulDir == "" {
-		http.Error(w, "invalid agent id", http.StatusBadRequest)
+	soulDir, ok := s.requireAgentSoulDir(w, id)
+	if !ok {
 		return
 	}
 
@@ -816,9 +827,8 @@ func (s *Server) handleCreateAgentSoul(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	soulDir := s.agentSoulDir(id)
-	if soulDir == "" {
-		http.Error(w, "invalid agent id", http.StatusBadRequest)
+	soulDir, ok := s.requireAgentSoulDir(w, id)
+	if !ok {
 		return
 	}
 	if err := os.MkdirAll(soulDir, 0o755); err != nil {
@@ -870,9 +880,8 @@ func (s *Server) handleGetAgentSoulByName(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	soulDir := s.agentSoulDir(id)
-	if soulDir == "" {
-		http.Error(w, "invalid agent id", http.StatusBadRequest)
+	soulDir, ok := s.requireAgentSoulDir(w, id)
+	if !ok {
 		return
 	}
 	soulPath := filepath.Join(soulDir, name+".md")
@@ -917,9 +926,8 @@ func (s *Server) handlePutAgentSoulByName(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	soulDir := s.agentSoulDir(id)
-	if soulDir == "" {
-		http.Error(w, "invalid agent id", http.StatusBadRequest)
+	soulDir, ok := s.requireAgentSoulDir(w, id)
+	if !ok {
 		return
 	}
 	soulPath := filepath.Join(soulDir, name+".md")
@@ -960,9 +968,8 @@ func (s *Server) handleDeleteAgentSoulByName(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	soulDir := s.agentSoulDir(id)
-	if soulDir == "" {
-		http.Error(w, "invalid agent id", http.StatusBadRequest)
+	soulDir, ok := s.requireAgentSoulDir(w, id)
+	if !ok {
 		return
 	}
 	soulPath := filepath.Join(soulDir, name+".md")
@@ -1007,9 +1014,8 @@ func (s *Server) handleActivateAgentSoul(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	soulDir := s.agentSoulDir(id)
-	if soulDir == "" {
-		http.Error(w, "invalid agent id", http.StatusBadRequest)
+	soulDir, ok := s.requireAgentSoulDir(w, id)
+	if !ok {
 		return
 	}
 	soulPath := filepath.Join(soulDir, name+".md")
