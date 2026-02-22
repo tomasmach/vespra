@@ -17,9 +17,16 @@ import (
 
 	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/memory"
 	"github.com/tomasmach/vespra/soul"
 	"github.com/tomasmach/vespra/tools"
 )
+
+// toolCallRecord is used to log tool calls made during a conversation turn.
+type toolCallRecord struct {
+	Name   string `json:"name"`
+	Result string `json:"result"`
+}
 
 const extractionPrompt = `You are a memory extraction assistant. Your only job is to analyze the conversation and save important information to long-term memory.
 
@@ -141,21 +148,94 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 
 func (a *ChannelAgent) run(ctx context.Context) {
 	idleTimeout := time.Duration(a.cfgStore.Get().Agent.IdleTimeoutMinutes) * time.Minute
+	idleTimer := time.NewTimer(idleTimeout)
+	defer idleTimer.Stop()
+
+	var (
+		coalesceBuffer []*discordgo.MessageCreate
+		debounceTimer  *time.Timer
+		deadlineTimer  *time.Timer
+	)
+
+	stopTimer := func(t *time.Timer) {
+		if t == nil {
+			return
+		}
+		if !t.Stop() {
+			select {
+			case <-t.C:
+			default:
+			}
+		}
+	}
+
+	resetIdleTimer := func() {
+		stopTimer(idleTimer)
+		idleTimer.Reset(idleTimeout)
+	}
+
+	flush := func(fctx context.Context) {
+		if len(coalesceBuffer) == 0 {
+			return
+		}
+		msgs := coalesceBuffer
+		coalesceBuffer = nil
+		stopTimer(debounceTimer)
+		debounceTimer = nil
+		stopTimer(deadlineTimer)
+		deadlineTimer = nil
+		a.handleMessages(fctx, msgs)
+	}
+
+	// timerC returns the timer channel or nil. A nil channel blocks forever
+	// in a select, which is the desired "disabled" behavior.
+	timerC := func(t *time.Timer) <-chan time.Time {
+		if t == nil {
+			return nil
+		}
+		return t.C
+	}
+
 	for {
 		select {
 		case msg := <-a.msgCh:
-			a.handleMessage(ctx, msg)
-		case <-time.After(idleTimeout):
+			resetIdleTimer()
+
+			cfg := a.cfgStore.Get()
+			if cfg.Agent.CoalesceDisabled {
+				a.handleMessage(ctx, msg)
+			} else {
+				coalesceBuffer = append(coalesceBuffer, msg)
+				stopTimer(debounceTimer)
+				debounceTimer = time.NewTimer(time.Duration(cfg.Agent.CoalesceDebounceMs) * time.Millisecond)
+				if deadlineTimer == nil {
+					deadlineTimer = time.NewTimer(time.Duration(cfg.Agent.CoalesceMaxWaitMs) * time.Millisecond)
+				}
+			}
+
+		case <-timerC(debounceTimer):
+			flush(ctx)
+			resetIdleTimer()
+
+		case <-timerC(deadlineTimer):
+			flush(ctx)
+			resetIdleTimer()
+
+		case <-idleTimer.C:
+			drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			flush(drainCtx)
 			a.logger.Info("channel agent idle timeout")
 			return
+
 		case <-ctx.Done():
-			// drain only messages already buffered; no new ones can arrive after b.Stop()
+			drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			flush(drainCtx)
 			n := len(a.msgCh)
 			for i := 0; i < n; i++ {
 				msg := <-a.msgCh
-				drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				a.handleMessage(drainCtx, msg)
-				cancel()
 			}
 			return
 		}
@@ -192,36 +272,51 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 	return history
 }
 
+// isAddressedToBot reports whether a Discord message is directly addressed to
+// the bot via DM, @mention, or reply.
+func isAddressedToBot(m *discordgo.MessageCreate, botID string) bool {
+	if m.GuildID == "" {
+		return true // DMs are always addressed
+	}
+	if strings.Contains(m.Content, "<@"+botID+">") {
+		return true
+	}
+	return m.MessageReference != nil &&
+		m.ReferencedMessage != nil &&
+		m.ReferencedMessage.Author != nil &&
+		m.ReferencedMessage.Author.ID == botID
+}
+
+// turnParams holds the inputs needed by processTurn, allowing handleMessage and
+// handleMessages to share the tool-call loop and post-processing logic.
+type turnParams struct {
+	mode         string
+	systemPrompt string
+	sendFn       func(string) error
+	reg          *tools.Registry
+	llmMsgs      []llm.Message
+	userMsgText  string // human-readable user input for conversation logging
+}
+
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
 	a.lastActive.Store(time.Now().UnixNano())
 
 	cfg := a.cfgStore.Get()
-
-	// Check response mode
 	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
 	botID := a.resources.Session.State.User.ID
-	isDM := msg.GuildID == ""
-	isMentioned := strings.Contains(msg.Content, "<@"+botID+">")
-	isReplyToBot := msg.MessageReference != nil &&
-		msg.ReferencedMessage != nil &&
-		msg.ReferencedMessage.Author != nil &&
-		msg.ReferencedMessage.Author.ID == botID
-	isDirectlyAddressed := isDM || isMentioned || isReplyToBot
+	addressed := isAddressedToBot(msg, botID)
+
 	switch mode {
 	case "none":
 		return
 	case "mention":
-		if !isDirectlyAddressed {
+		if !addressed {
 			return
 		}
-	case "all":
-		// always respond
-	case "smart":
-		// model responds only via reply/react tools; plain-text output without a tool call is suppressed
 	}
 
 	stopTyping := func() {}
-	if mode != "smart" || isDirectlyAddressed {
+	if mode != "smart" || addressed {
 		stopTyping = a.startTyping(ctx)
 	}
 	defer stopTyping()
@@ -233,28 +328,13 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 	}
 
-	// Recall memories
 	memories, err := a.resources.Memory.Recall(ctx, msg.Content, a.serverID, 10)
 	if err != nil {
 		a.logger.Warn("memory recall error", "error", err)
 	}
 
-	// Build system prompt
-	systemPrompt := a.soulText
-	if len(memories) > 0 {
-		systemPrompt += "\n\n## Relevant Memories\n"
-		for _, m := range memories {
-			systemPrompt += fmt.Sprintf("- [%s] %s\n", m.ID, m.Content)
-		}
-	}
-	if lang := cfg.ResolveLanguage(a.serverID, msg.ChannelID); lang != "" {
-		systemPrompt += "\n\nAlways respond in " + lang + "."
-	}
-	if mode == "smart" {
-		systemPrompt += "\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent."
-	}
+	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories)
 
-	// Set up callbacks
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
 		return err
@@ -262,28 +342,189 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-
-	// Build tool registry
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
 
-	// Add user message to history
 	userMsg := buildUserMessage(ctx, a.httpClient, msg)
-	msgs := make([]llm.Message, len(a.history), len(a.history)+1)
-	copy(msgs, a.history)
-	msgs = append(msgs, userMsg)
+	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
+	copy(llmMsgs, a.history)
+	llmMsgs = append(llmMsgs, userMsg)
 
-	// Tool-call loop
-	type toolCallRecord struct {
-		Name   string `json:"name"`
-		Result string `json:"result"`
+	a.processTurn(ctx, cfg, turnParams{
+		mode:         mode,
+		systemPrompt: systemPrompt,
+		sendFn:       sendFn,
+		reg:          reg,
+		llmMsgs:      llmMsgs,
+		userMsgText:  fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content),
+	})
+}
+
+// buildCombinedContent builds the combined user content string for a batch of coalesced messages.
+func buildCombinedContent(msgs []*discordgo.MessageCreate) string {
+	firstTime := msgs[0].Timestamp
+	lines := make([]string, 0, len(msgs)+2)
+	lines = append(lines, fmt.Sprintf("[%d messages arrived rapidly in quick succession]", len(msgs)))
+	lines = append(lines, "")
+	for _, m := range msgs {
+		line := fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
+		gap := m.Timestamp.Sub(firstTime)
+		if gap >= time.Second {
+			secs := int(gap.Seconds())
+			line += fmt.Sprintf(" (+%ds)", secs)
+		}
+		lines = append(lines, line)
 	}
+	return strings.Join(lines, "\n")
+}
+
+func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.MessageCreate) {
+	if len(msgs) == 1 {
+		a.handleMessage(ctx, msgs[0])
+		return
+	}
+
+	a.lastActive.Store(time.Now().UnixNano())
+
+	cfg := a.cfgStore.Get()
+	botID := a.resources.Session.State.User.ID
+	lastMsg := msgs[len(msgs)-1]
+	mode := cfg.ResolveResponseMode(a.serverID, lastMsg.ChannelID)
+
+	var anyAddressed bool
+	for _, m := range msgs {
+		if isAddressedToBot(m, botID) {
+			anyAddressed = true
+			break
+		}
+	}
+
+	switch mode {
+	case "none":
+		return
+	case "mention":
+		if !anyAddressed {
+			return
+		}
+	}
+
+	stopTyping := func() {}
+	if mode != "smart" || anyAddressed {
+		stopTyping = a.startTyping(ctx)
+	}
+	defer stopTyping()
+
+	if len(a.history) == 0 {
+		a.history = a.backfillHistory(ctx, msgs[0].ID)
+		if len(a.history) > cfg.Agent.HistoryLimit {
+			a.history = a.history[len(a.history)-cfg.Agent.HistoryLimit:]
+		}
+	}
+
+	recallParts := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		recallParts = append(recallParts, m.Content)
+	}
+	recallQuery := strings.Join(recallParts, " ")
+
+	memories, err := a.resources.Memory.Recall(ctx, recallQuery, a.serverID, 10)
+	if err != nil {
+		a.logger.Warn("memory recall error", "error", err)
+	}
+
+	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories)
+
+	sendFn := func(content string) error {
+		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
+		return err
+	}
+	reactFn := func(emoji string) error {
+		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
+	}
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
+
+	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs)
+
+	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
+	copy(llmMsgs, a.history)
+	llmMsgs = append(llmMsgs, combinedUserMsg)
+
+	userLogLines := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		userLogLines = append(userLogLines, fmt.Sprintf("%s: %s", m.Author.Username, m.Content))
+	}
+
+	a.processTurn(ctx, cfg, turnParams{
+		mode:         mode,
+		systemPrompt: systemPrompt,
+		sendFn:       sendFn,
+		reg:          reg,
+		llmMsgs:      llmMsgs,
+		userMsgText:  strings.Join(userLogLines, "\n"),
+	})
+}
+
+// buildSystemPrompt assembles the system prompt from the soul text, memories,
+// language override, and response mode.
+func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow) string {
+	systemPrompt := a.soulText
+	if len(memories) > 0 {
+		systemPrompt += "\n\n## Relevant Memories\n"
+		for _, m := range memories {
+			systemPrompt += fmt.Sprintf("- [%s] %s\n", m.ID, m.Content)
+		}
+	}
+	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
+		systemPrompt += "\n\nAlways respond in " + lang + "."
+	}
+	if mode == "smart" {
+		systemPrompt += "\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent."
+	}
+	return systemPrompt
+}
+
+// buildCombinedUserMessage builds an LLM user message from a batch of coalesced
+// Discord messages, collecting text and image attachments.
+func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*discordgo.MessageCreate) llm.Message {
+	combinedContent := buildCombinedContent(msgs)
+
+	var imageParts []llm.ContentPart
+	for _, m := range msgs {
+		for _, att := range m.Attachments {
+			if !strings.HasPrefix(att.ContentType, "image/") {
+				continue
+			}
+			dataURL, err := downloadImageAsDataURL(ctx, a.httpClient, att)
+			if err != nil {
+				a.logger.Warn("failed to download image attachment, skipping", "error", err, "url", att.URL)
+				continue
+			}
+			imageParts = append(imageParts, llm.ContentPart{
+				Type:     "image_url",
+				ImageURL: &llm.ImageURL{URL: dataURL},
+			})
+		}
+	}
+
+	if len(imageParts) == 0 {
+		return llm.Message{Role: "user", Content: combinedContent}
+	}
+	parts := make([]llm.ContentPart, 0, 1+len(imageParts))
+	parts = append(parts, llm.ContentPart{Type: "text", Text: combinedContent})
+	parts = append(parts, imageParts...)
+	return llm.Message{Role: "user", ContentParts: parts}
+}
+
+// processTurn runs the tool-call loop, applies content suppression, logs the
+// conversation, sends the reply, and updates history. Both handleMessage and
+// handleMessages delegate here after preparing their inputs.
+func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp turnParams) {
 	var toolCalls []toolCallRecord
 	var assistantContent string
 	for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
-		choice, err := a.llm.Chat(ctx, buildMessages(systemPrompt, msgs), reg.Definitions())
+		choice, err := a.llm.Chat(ctx, buildMessages(tp.systemPrompt, tp.llmMsgs), tp.reg.Definitions())
 		if err != nil {
 			a.logger.Error("llm chat error", "error", err)
-			if err := sendFn("I encountered an error. Please try again."); err != nil {
+			if err := tp.sendFn("I encountered an error. Please try again."); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
 			return
@@ -294,19 +535,16 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 			break
 		}
 
-		// append assistant message with tool calls
-		msgs = append(msgs, choice.Message)
-
-		// dispatch each tool call
+		tp.llmMsgs = append(tp.llmMsgs, choice.Message)
 		for _, tc := range choice.Message.ToolCalls {
 			a.logger.Debug("tool call", "tool", tc.Function.Name)
-			result, err := reg.Dispatch(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
+			result, err := tp.reg.Dispatch(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
 			if err != nil {
 				a.logger.Warn("tool dispatch error", "tool", tc.Function.Name, "error", err)
 				result = fmt.Sprintf("Error: %s", err)
 			}
 			toolCalls = append(toolCalls, toolCallRecord{Name: tc.Function.Name, Result: result})
-			msgs = append(msgs, llm.Message{
+			tp.llmMsgs = append(tp.llmMsgs, llm.Message{
 				Role:       "tool",
 				Content:    result,
 				ToolCallID: tc.ID,
@@ -315,18 +553,18 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 
 		if iter == cfg.Agent.MaxToolIterations-1 {
-			if err := sendFn("I got stuck in a loop. Please try again."); err != nil {
+			if err := tp.sendFn("I got stuck in a loop. Please try again."); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
 			return
 		}
 	}
 
-	if assistantContent != "" && looksLikeToolCall(assistantContent, reg.Definitions()) {
+	if assistantContent != "" && looksLikeToolCall(assistantContent, tp.reg.Definitions()) {
 		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
 		assistantContent = ""
-		if !reg.Replied && mode != "smart" {
-			if err := sendFn("I'm not sure how to respond. Please try again."); err != nil {
+		if !tp.reg.Replied && tp.mode != "smart" {
+			if err := tp.sendFn("I'm not sure how to respond. Please try again."); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
 		}
@@ -334,19 +572,19 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 	// In smart mode the model should only communicate via reply/react tools.
 	// Suppress any leftover plain-text content that was not sent through a tool.
-	if mode == "smart" && assistantContent != "" && !reg.Replied {
+	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
 		assistantContent = ""
 	}
 
 	// Suppress stage-direction non-replies like "(staying silent)" in all modes.
-	if assistantContent != "" && !reg.Replied && isStageDirection(assistantContent) {
+	if assistantContent != "" && !tp.reg.Replied && isStageDirection(assistantContent) {
 		a.logger.Debug("suppressed stage-direction non-reply", "content", assistantContent)
 		assistantContent = ""
 	}
 
-	// Log conversation on success — either plain-text reply or reply-tool response.
-	if assistantContent != "" || reg.Replied {
+	// Log conversation on success -- either plain-text reply or reply-tool response.
+	if assistantContent != "" || tp.reg.Replied {
 		var toolCallsJSON string
 		if len(toolCalls) > 0 {
 			if b, err := json.Marshal(toolCalls); err == nil {
@@ -354,35 +592,31 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 			}
 		}
 		responseText := assistantContent
-		if responseText == "" && reg.Replied {
-			responseText = reg.ReplyText
+		if responseText == "" && tp.reg.Replied {
+			responseText = tp.reg.ReplyText
 		}
-		// Use the formatted user message (as seen by the LLM), not the raw Discord content.
-		userMsgText := fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)
-		if err := a.resources.Memory.LogConversation(ctx, a.channelID, userMsgText, toolCallsJSON, responseText); err != nil {
+		if err := a.resources.Memory.LogConversation(ctx, a.channelID, tp.userMsgText, toolCallsJSON, responseText); err != nil {
 			a.logger.Warn("log conversation error", "error", err)
 		}
 	}
 
-	// If assistant replied with text content (not via reply tool), send it
-	if assistantContent != "" && !reg.Replied {
+	if assistantContent != "" && !tp.reg.Replied {
 		parts := tools.SplitMessage(assistantContent, 2000)
 		for _, p := range parts {
-			if err := sendFn(p); err != nil {
+			if err := tp.sendFn(p); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
 		}
 	}
 
-	// Update history
 	if assistantContent != "" {
-		msgs = append(msgs, llm.Message{Role: "assistant", Content: assistantContent})
+		tp.llmMsgs = append(tp.llmMsgs, llm.Message{Role: "assistant", Content: assistantContent})
 	}
-	if len(msgs) > cfg.Agent.HistoryLimit {
-		msgs = msgs[len(msgs)-cfg.Agent.HistoryLimit:]
+	if len(tp.llmMsgs) > cfg.Agent.HistoryLimit {
+		tp.llmMsgs = tp.llmMsgs[len(tp.llmMsgs)-cfg.Agent.HistoryLimit:]
 	}
-	a.history = msgs
-	if assistantContent != "" || reg.Replied {
+	a.history = tp.llmMsgs
+	if assistantContent != "" || tp.reg.Replied {
 		a.turnCount++
 		if interval := cfg.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
 			a.runMemoryExtraction(ctx, a.history)
