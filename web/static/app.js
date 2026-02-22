@@ -127,6 +127,8 @@ function populateAgentPanel(agent) {
   document.getElementById('cfg-db-path').value = agent.db_path || '';
   document.getElementById('cfg-response-mode').value = agent.response_mode || '';
   document.getElementById('cfg-language').value = agent.language || '';
+  document.getElementById('cfg-provider').value = agent.provider || '';
+  document.getElementById('cfg-model').value = agent.model || '';
   document.getElementById('cfg-status').textContent = '';
   currentIgnoreUsers = agent.ignore_users ? agent.ignore_users.slice() : [];
   currentChannels = agent.channels ? agent.channels.slice() : [];
@@ -166,6 +168,8 @@ function saveAgentConfig() {
     db_path: document.getElementById('cfg-db-path').value.trim(),
     response_mode: document.getElementById('cfg-response-mode').value,
     language: document.getElementById('cfg-language').value.trim(),
+    provider: document.getElementById('cfg-provider').value,
+    model: document.getElementById('cfg-model').value.trim(),
     ignore_users: currentIgnoreUsers,
     channels: currentChannels,
   };
@@ -496,6 +500,8 @@ function clearNewAgentForm() {
   document.getElementById('na-db-path').value = '';
   document.getElementById('na-response-mode').value = '';
   document.getElementById('na-language').value = '';
+  document.getElementById('na-provider').value = '';
+  document.getElementById('na-model').value = '';
   document.getElementById('new-agent-status').textContent = '';
 }
 
@@ -517,6 +523,8 @@ function createAgent() {
     db_path: document.getElementById('na-db-path').value.trim(),
     response_mode: document.getElementById('na-response-mode').value,
     language: document.getElementById('na-language').value.trim(),
+    provider: document.getElementById('na-provider').value,
+    model: document.getElementById('na-model').value.trim(),
   };
 
   fetch('/api/agents', {

@@ -82,7 +82,7 @@ func TestChatRetriesOn5xx(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := clientWithBaseURL(t, srv.URL)
-	choice, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil)
+	choice, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, nil)
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestChatFailsFastOn4xx(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := clientWithBaseURL(t, srv.URL)
-	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil)
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, nil)
 	if err == nil {
 		t.Fatal("expected error on 4xx, got nil")
 	}
@@ -133,7 +133,7 @@ func TestChatRetries429(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := clientWithBaseURL(t, srv.URL)
-	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil)
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, nil)
 	if err != nil {
 		t.Fatalf("expected success after 429 retry, got: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestVisionModelUsedForCurrentImageMessage(t *testing.T) {
 		},
 	}
 
-	_, err := client.Chat(context.Background(), messages, nil)
+	_, err := client.Chat(context.Background(), messages, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestVisionModelNotUsedForHistoricalImageMessage(t *testing.T) {
 		{Role: "user", Content: "what do you think about it?"},
 	}
 
-	_, err := client.Chat(context.Background(), messages, nil)
+	_, err := client.Chat(context.Background(), messages, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestNoVisionModelStripsImages(t *testing.T) {
 		},
 	}
 
-	_, err := client.Chat(context.Background(), messages, nil)
+	_, err := client.Chat(context.Background(), messages, nil, nil)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestNoVisionModelStripsHistoricalImages(t *testing.T) {
 		{Role: "user", Content: "what do you think?"},
 	}
 
-	_, err := client.Chat(context.Background(), messages, nil)
+	_, err := client.Chat(context.Background(), messages, nil, nil)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}

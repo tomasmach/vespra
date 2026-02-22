@@ -114,6 +114,13 @@ type Choice struct {
 	FinishReason string  `json:"finish_reason"`
 }
 
+// ChatOptions allows per-request provider and model overrides.
+// A nil pointer or zero value means "use global defaults".
+type ChatOptions struct {
+	Provider string // "openrouter" | "glm" | "" (use global)
+	Model    string // override model name; "" = use global
+}
+
 type Client struct {
 	cfgStore   *config.Store
 	httpClient *http.Client
@@ -156,11 +163,20 @@ func (c *Client) embeddingKey() string {
 	return c.chatKey()
 }
 
-func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (Choice, error) {
+func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, opts *ChatOptions) (Choice, error) {
 	cfg := c.cfgStore.Get().LLM
 	model := cfg.Model
 	apiBase := c.apiBase()
 	apiKey := c.chatKey()
+
+	// Apply per-request provider override before vision logic.
+	if opts != nil && opts.Provider == "glm" {
+		apiBase = cfg.GLMBaseURL
+		apiKey = cfg.GLMKey
+	}
+	if opts != nil && opts.Model != "" {
+		model = opts.Model
+	}
 
 	last := len(messages) - 1
 	switch {

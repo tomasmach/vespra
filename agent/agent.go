@@ -518,10 +518,15 @@ func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*dis
 // conversation, sends the reply, and updates history. Both handleMessage and
 // handleMessages delegate here after preparing their inputs.
 func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp turnParams) {
+	var chatOpts *llm.ChatOptions
+	if a.resources.Config != nil && (a.resources.Config.Provider != "" || a.resources.Config.Model != "") {
+		chatOpts = &llm.ChatOptions{Provider: a.resources.Config.Provider, Model: a.resources.Config.Model}
+	}
+
 	var toolCalls []toolCallRecord
 	var assistantContent string
 	for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
-		choice, err := a.llm.Chat(ctx, buildMessages(tp.systemPrompt, tp.llmMsgs), tp.reg.Definitions())
+		choice, err := a.llm.Chat(ctx, buildMessages(tp.systemPrompt, tp.llmMsgs), tp.reg.Definitions(), chatOpts)
 		if err != nil {
 			a.logger.Error("llm chat error", "error", err)
 			if err := tp.sendFn("I encountered an error. Please try again."); err != nil {
@@ -643,8 +648,13 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 		msgs := buildMessages(extractionPrompt, snapshot)
 		cfg := a.cfgStore.Get()
 
+		var extractOpts *llm.ChatOptions
+		if a.resources.Config != nil && (a.resources.Config.Provider != "" || a.resources.Config.Model != "") {
+			extractOpts = &llm.ChatOptions{Provider: a.resources.Config.Provider, Model: a.resources.Config.Model}
+		}
+
 		for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
-			choice, err := a.llm.Chat(ctx, msgs, reg.Definitions())
+			choice, err := a.llm.Chat(ctx, msgs, reg.Definitions(), extractOpts)
 			if err != nil {
 				a.logger.Warn("memory extraction llm error", "error", err)
 				return
