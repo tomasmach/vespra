@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"strconv"
 	"sync"
 	"time"
@@ -65,6 +66,11 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("GET /api/agents/{id}/conversations", s.handleGetAgentConversations)
 	mux.HandleFunc("GET /api/soul", s.handleGetGlobalSoul)
 	mux.HandleFunc("PUT /api/soul", s.handlePutGlobalSoul)
+	mux.HandleFunc("GET /api/soul-library", s.handleListSoulLibrary)
+	mux.HandleFunc("POST /api/soul-library", s.handleCreateSoulLibrary)
+	mux.HandleFunc("GET /api/soul-library/{name}", s.handleGetSoulLibrary)
+	mux.HandleFunc("PUT /api/soul-library/{name}", s.handleUpdateSoulLibrary)
+	mux.HandleFunc("DELETE /api/soul-library/{name}", s.handleDeleteSoulLibrary)
 	sub, _ := fs.Sub(staticFiles, "static")
 	mux.HandleFunc("/", http.FileServer(http.FS(sub)).ServeHTTP)
 
@@ -77,6 +83,11 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 
 func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
+}
+
+// Handler returns the underlying HTTP handler (for testing).
+func (s *Server) Handler() http.Handler {
+	return s.httpServer.Handler
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -695,6 +706,143 @@ func (s *Server) handlePutGlobalSoul(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"path": soulPath})
+}
+
+// soulLibraryDir returns the path to the soul library directory.
+func (s *Server) soulLibraryDir() string {
+	return filepath.Join(filepath.Dir(s.cfgPath), "soul-library")
+}
+
+// validSoulName returns true if name is a safe, non-empty alphanumeric identifier.
+func validSoulName(name string) bool {
+	if len(name) == 0 || len(name) > 64 {
+		return false
+	}
+	for _, r := range name {
+		if !('a' <= r && r <= 'z') && !('A' <= r && r <= 'Z') &&
+			!('0' <= r && r <= '9') && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+type soulLibraryEntry struct {
+	Name     string    `json:"name"`
+	Modified time.Time `json:"modified"`
+}
+
+func (s *Server) handleListSoulLibrary(w http.ResponseWriter, r *http.Request) {
+	dir := s.soulLibraryDir()
+	entries, _ := os.ReadDir(dir)
+	result := make([]soulLibraryEntry, 0)
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+			continue
+		}
+		info, _ := e.Info()
+		result = append(result, soulLibraryEntry{
+			Name:     strings.TrimSuffix(e.Name(), ".md"),
+			Modified: info.ModTime(),
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+func (s *Server) handleCreateSoulLibrary(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name    string `json:"name"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if !validSoulName(body.Name) {
+		http.Error(w, "invalid soul name", http.StatusBadRequest)
+		return
+	}
+	dir := s.soulLibraryDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		http.Error(w, "failed to create directory", http.StatusInternalServerError)
+		return
+	}
+	path := filepath.Join(dir, body.Name+".md")
+	if _, err := os.Stat(path); err == nil {
+		http.Error(w, "soul already exists", http.StatusConflict)
+		return
+	}
+	if err := os.WriteFile(path, []byte(body.Content), 0o644); err != nil {
+		http.Error(w, "failed to write soul file", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{"name": body.Name, "path": path})
+}
+
+func (s *Server) handleGetSoulLibrary(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !validSoulName(name) {
+		http.Error(w, "invalid soul name", http.StatusBadRequest)
+		return
+	}
+	path := filepath.Join(s.soulLibraryDir(), name+".md")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		http.Error(w, "soul not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to read soul file", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"name": name, "content": string(data), "path": path})
+}
+
+func (s *Server) handleUpdateSoulLibrary(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !validSoulName(name) {
+		http.Error(w, "invalid soul name", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	path := filepath.Join(s.soulLibraryDir(), name+".md")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		http.Error(w, "soul not found", http.StatusNotFound)
+		return
+	}
+	if err := os.WriteFile(path, []byte(body.Content), 0o644); err != nil {
+		http.Error(w, "failed to write soul file", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"name": name, "path": path})
+}
+
+func (s *Server) handleDeleteSoulLibrary(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !validSoulName(name) {
+		http.Error(w, "invalid soul name", http.StatusBadRequest)
+		return
+	}
+	path := filepath.Join(s.soulLibraryDir(), name+".md")
+	if err := os.Remove(path); os.IsNotExist(err) {
+		http.Error(w, "soul not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "failed to delete soul file", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // writeAgents replaces the [[agents]] section in the config file and reloads.
