@@ -179,11 +179,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 			} else {
 				apiBase = "https://openrouter.ai/api/v1"
 			}
-			if cfg.APIKey != "" {
-				apiKey = cfg.APIKey
-			} else {
-				apiKey = cfg.OpenRouterKey
-			}
+			apiKey = c.chatKey()
 		case "glm":
 			apiBase = cfg.GLMBaseURL
 			apiKey = cfg.GLMKey
@@ -193,10 +189,10 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		}
 	}
 
+	hasPerAgentProvider := opts != nil && opts.Provider != ""
 	last := len(messages) - 1
-	noPerAgentProvider := opts == nil || opts.Provider == ""
 	switch {
-	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "" && noPerAgentProvider:
+	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "" && !hasPerAgentProvider:
 		model = cfg.VisionModel
 		if cfg.VisionBaseURL != "" {
 			apiBase = cfg.VisionBaseURL

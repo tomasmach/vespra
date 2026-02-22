@@ -514,14 +514,21 @@ func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*dis
 	return llm.Message{Role: "user", ContentParts: parts}
 }
 
+// chatOptions returns per-agent ChatOptions when the agent has a provider or
+// model override configured, or nil to use global defaults.
+func (a *ChannelAgent) chatOptions() *llm.ChatOptions {
+	cfg := a.resources.Config
+	if cfg == nil || (cfg.Provider == "" && cfg.Model == "") {
+		return nil
+	}
+	return &llm.ChatOptions{Provider: cfg.Provider, Model: cfg.Model}
+}
+
 // processTurn runs the tool-call loop, applies content suppression, logs the
 // conversation, sends the reply, and updates history. Both handleMessage and
 // handleMessages delegate here after preparing their inputs.
 func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp turnParams) {
-	var chatOpts *llm.ChatOptions
-	if a.resources.Config != nil && (a.resources.Config.Provider != "" || a.resources.Config.Model != "") {
-		chatOpts = &llm.ChatOptions{Provider: a.resources.Config.Provider, Model: a.resources.Config.Model}
-	}
+	chatOpts := a.chatOptions()
 
 	var toolCalls []toolCallRecord
 	var assistantContent string
@@ -648,13 +655,8 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 		msgs := buildMessages(extractionPrompt, snapshot)
 		cfg := a.cfgStore.Get()
 
-		var extractOpts *llm.ChatOptions
-		if a.resources.Config != nil && (a.resources.Config.Provider != "" || a.resources.Config.Model != "") {
-			extractOpts = &llm.ChatOptions{Provider: a.resources.Config.Provider, Model: a.resources.Config.Model}
-		}
-
 		for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
-			choice, err := a.llm.Chat(ctx, msgs, reg.Definitions(), extractOpts)
+			choice, err := a.llm.Chat(ctx, msgs, reg.Definitions(), a.chatOptions())
 			if err != nil {
 				a.logger.Warn("memory extraction llm error", "error", err)
 				return
