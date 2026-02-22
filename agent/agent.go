@@ -397,27 +397,8 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 		return // extraction already in progress
 	}
 
-	snapshot := make([]llm.Message, len(history))
-	copy(snapshot, history)
-	for i := range snapshot {
-		if len(snapshot[i].ContentParts) > 0 {
-			// strip image parts; keep only the text for extraction
-			var text string
-			for _, p := range snapshot[i].ContentParts {
-				if p.Type == "text" {
-					text = p.Text
-					break
-				}
-			}
-			snapshot[i].ContentParts = nil
-			if text != "" {
-				snapshot[i].Content = text
-			}
-		}
-	}
-
+	snapshot := stripImageParts(history)
 	reg := tools.NewMemoryOnlyRegistry(a.resources.Memory, a.serverID)
-	logger := a.logger
 
 	go func() {
 		defer a.extractionRunning.Store(false)
@@ -431,7 +412,7 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 		for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
 			choice, err := a.llm.Chat(ctx, msgs, reg.Definitions())
 			if err != nil {
-				logger.Warn("memory extraction llm error", "error", err)
+				a.logger.Warn("memory extraction llm error", "error", err)
 				return
 			}
 			if len(choice.Message.ToolCalls) == 0 {
@@ -441,7 +422,7 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 			for _, tc := range choice.Message.ToolCalls {
 				result, err := reg.Dispatch(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
 				if err != nil {
-					logger.Warn("memory extraction dispatch error", "tool", tc.Function.Name, "error", err)
+					a.logger.Warn("memory extraction dispatch error", "tool", tc.Function.Name, "error", err)
 					result = fmt.Sprintf("Error: %s", err)
 				}
 				msgs = append(msgs, llm.Message{
@@ -452,8 +433,29 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 				})
 			}
 		}
-		logger.Warn("memory extraction hit max iterations")
+		a.logger.Warn("memory extraction hit max iterations")
 	}()
+}
+
+// stripImageParts returns a copy of history with ContentParts replaced by their
+// text-only Content equivalent, suitable for the extraction LLM which has no use
+// for image data.
+func stripImageParts(history []llm.Message) []llm.Message {
+	snapshot := make([]llm.Message, len(history))
+	copy(snapshot, history)
+	for i := range snapshot {
+		if len(snapshot[i].ContentParts) == 0 {
+			continue
+		}
+		for _, p := range snapshot[i].ContentParts {
+			if p.Type == "text" {
+				snapshot[i].Content = p.Text
+				break
+			}
+		}
+		snapshot[i].ContentParts = nil
+	}
+	return snapshot
 }
 
 // startTyping sends a typing indicator immediately and refreshes every 8 seconds
