@@ -46,10 +46,11 @@ type ChannelAgent struct {
 	resources  *AgentResources
 	logger     *slog.Logger
 
-	soulText   string
-	history    []llm.Message // capped to cfg.Agent.HistoryLimit
-	turnCount  int           // incremented each completed turn; triggers background extraction
-	lastActive atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
+	soulText          string
+	history           []llm.Message // capped to cfg.Agent.HistoryLimit
+	turnCount         int           // incremented each completed turn; triggers background extraction
+	lastActive        atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
+	extractionRunning atomic.Bool   // prevents concurrent extraction goroutines from piling up
 
 	msgCh chan *discordgo.MessageCreate // buffered 100
 }
@@ -381,23 +382,47 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		msgs = msgs[len(msgs)-cfg.Agent.HistoryLimit:]
 	}
 	a.history = msgs
-	a.turnCount++
-	if interval := cfg.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
-		a.runMemoryExtraction(a.history)
+	if assistantContent != "" || reg.Replied {
+		a.turnCount++
+		if interval := cfg.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
+			a.runMemoryExtraction(ctx, a.history)
+		}
 	}
 }
 
 // runMemoryExtraction launches a background goroutine that reviews recent history
 // and saves any important information the main turn may have missed.
-func (a *ChannelAgent) runMemoryExtraction(history []llm.Message) {
+func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Message) {
+	if !a.extractionRunning.CompareAndSwap(false, true) {
+		return // extraction already in progress
+	}
+
 	snapshot := make([]llm.Message, len(history))
 	copy(snapshot, history)
+	for i := range snapshot {
+		if len(snapshot[i].ContentParts) > 0 {
+			// strip image parts; keep only the text for extraction
+			var text string
+			for _, p := range snapshot[i].ContentParts {
+				if p.Type == "text" {
+					text = p.Text
+					break
+				}
+			}
+			snapshot[i].ContentParts = nil
+			if text != "" {
+				snapshot[i].Content = text
+			}
+		}
+	}
 
 	reg := tools.NewMemoryOnlyRegistry(a.resources.Memory, a.serverID)
 	logger := a.logger
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer a.extractionRunning.Store(false)
+
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 
 		msgs := buildMessages(extractionPrompt, snapshot)
