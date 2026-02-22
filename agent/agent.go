@@ -152,9 +152,21 @@ func (a *ChannelAgent) run(ctx context.Context) {
 
 	var (
 		coalesceBuffer []*discordgo.MessageCreate
-		debounceTimer  <-chan time.Time
-		deadlineTimer  <-chan time.Time
+		debounceTimer  *time.Timer
+		deadlineTimer  *time.Timer
 	)
+
+	stopTimer := func(t *time.Timer) {
+		if t == nil {
+			return
+		}
+		if !t.Stop() {
+			select {
+			case <-t.C:
+			default:
+			}
+		}
+	}
 
 	flush := func(fctx context.Context) {
 		if len(coalesceBuffer) == 0 {
@@ -162,9 +174,26 @@ func (a *ChannelAgent) run(ctx context.Context) {
 		}
 		msgs := coalesceBuffer
 		coalesceBuffer = nil
+		stopTimer(debounceTimer)
 		debounceTimer = nil
+		stopTimer(deadlineTimer)
 		deadlineTimer = nil
 		a.handleMessages(fctx, msgs)
+	}
+
+	// debounceC and deadlineC return the timer channel or nil. A nil channel
+	// blocks forever in a select, which is the desired "disabled" behavior.
+	debounceC := func() <-chan time.Time {
+		if debounceTimer == nil {
+			return nil
+		}
+		return debounceTimer.C
+	}
+	deadlineC := func() <-chan time.Time {
+		if deadlineTimer == nil {
+			return nil
+		}
+		return deadlineTimer.C
 	}
 
 	for {
@@ -183,13 +212,14 @@ func (a *ChannelAgent) run(ctx context.Context) {
 				a.handleMessage(ctx, msg)
 			} else {
 				coalesceBuffer = append(coalesceBuffer, msg)
-				debounceTimer = time.After(time.Duration(cfg.Agent.CoalesceDebounceMs) * time.Millisecond)
+				stopTimer(debounceTimer)
+				debounceTimer = time.NewTimer(time.Duration(cfg.Agent.CoalesceDebounceMs) * time.Millisecond)
 				if deadlineTimer == nil {
-					deadlineTimer = time.After(time.Duration(cfg.Agent.CoalesceMaxWaitMs) * time.Millisecond)
+					deadlineTimer = time.NewTimer(time.Duration(cfg.Agent.CoalesceMaxWaitMs) * time.Millisecond)
 				}
 			}
 
-		case <-debounceTimer:
+		case <-debounceC():
 			flush(ctx)
 			if !idleTimer.Stop() {
 				select {
@@ -199,7 +229,7 @@ func (a *ChannelAgent) run(ctx context.Context) {
 			}
 			idleTimer.Reset(idleTimeout)
 
-		case <-deadlineTimer:
+		case <-deadlineC():
 			flush(ctx)
 			if !idleTimer.Stop() {
 				select {
@@ -210,22 +240,20 @@ func (a *ChannelAgent) run(ctx context.Context) {
 			idleTimer.Reset(idleTimeout)
 
 		case <-idleTimer.C:
-			flush(ctx)
+			drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			flush(drainCtx)
 			a.logger.Info("channel agent idle timeout")
 			return
 
 		case <-ctx.Done():
-			if len(coalesceBuffer) > 0 {
-				drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				flush(drainCtx)
-				cancel()
-			}
+			drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			flush(drainCtx)
 			n := len(a.msgCh)
 			for i := 0; i < n; i++ {
 				msg := <-a.msgCh
-				drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				a.handleMessage(drainCtx, msg)
-				cancel()
 			}
 			return
 		}
@@ -558,13 +586,6 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
 
-	// histMsgs: individual messages appended to history, used for history storage after turn.
-	histMsgs := make([]llm.Message, len(a.history), len(a.history)+len(msgs)+1)
-	copy(histMsgs, a.history)
-	for _, m := range msgs {
-		histMsgs = append(histMsgs, llm.Message{Role: "user", Content: fmt.Sprintf("%s: %s", m.Author.Username, m.Content)})
-	}
-
 	// Build combined user content with relative timestamps.
 	combinedContent := buildCombinedContent(msgs)
 
@@ -693,13 +714,15 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		}
 	}
 
+	// Store history using llmMsgs so that a.history reflects what the LLM
+	// actually received (the combined message) rather than individual messages.
 	if assistantContent != "" {
-		histMsgs = append(histMsgs, llm.Message{Role: "assistant", Content: assistantContent})
+		llmMsgs = append(llmMsgs, llm.Message{Role: "assistant", Content: assistantContent})
 	}
-	if len(histMsgs) > cfg.Agent.HistoryLimit {
-		histMsgs = histMsgs[len(histMsgs)-cfg.Agent.HistoryLimit:]
+	if len(llmMsgs) > cfg.Agent.HistoryLimit {
+		llmMsgs = llmMsgs[len(llmMsgs)-cfg.Agent.HistoryLimit:]
 	}
-	a.history = histMsgs
+	a.history = llmMsgs
 	if assistantContent != "" || reg.Replied {
 		a.turnCount++
 		if interval := cfg.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
