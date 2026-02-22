@@ -95,13 +95,13 @@ type ChannelConfig struct {
 
 // ResolveDataDir returns the directory that should contain all DB files.
 // If dbPath is set, it returns the directory of that file.
-// Otherwise it returns ~/.local/share/mnemon-bot.
+// Otherwise it returns ~/.local/share/vespra.
 func ResolveDataDir(dbPath string) string {
 	if dbPath != "" {
 		return filepath.Dir(ExpandPath(dbPath))
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "mnemon-bot")
+	return filepath.Join(home, ".local", "share", "vespra")
 }
 
 // ExpandPath expands environment variables and ~ in a file path.
@@ -121,9 +121,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Env var overrides applied after TOML decode; priority: env var > config file.
-	if v := os.Getenv("MNEMON_DB_PATH"); v != "" {
+	if v := os.Getenv("VESPRA_DB_PATH"); v != "" {
 		cfg.Memory.DBPath = v
-		slog.Info("db path overridden by env var", "MNEMON_DB_PATH", v)
+		slog.Info("db path overridden by env var", "VESPRA_DB_PATH", v)
 	}
 
 	// Apply defaults
@@ -182,14 +182,14 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Resolve returns the config file path from MNEMON_CONFIG env var,
-// falling back to ~/.config/mnemon-bot/config.toml.
+// Resolve returns the config file path from VESPRA_CONFIG env var,
+// falling back to ~/.config/vespra/config.toml.
 // The --config CLI flag is handled separately in main.go.
 func Resolve() string {
-	path := os.Getenv("MNEMON_CONFIG")
+	path := os.Getenv("VESPRA_CONFIG")
 	if path == "" {
 		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, ".config", "mnemon-bot", "config.toml")
+		path = filepath.Join(home, ".config", "vespra", "config.toml")
 	}
 	path = os.ExpandEnv(path)
 	abs, err := filepath.Abs(path)

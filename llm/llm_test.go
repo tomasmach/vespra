@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomasmach/mnemon-bot/config"
-	"github.com/tomasmach/mnemon-bot/llm"
+	"github.com/tomasmach/vespra/config"
+	"github.com/tomasmach/vespra/llm"
 )
 
 func TestVectorRoundtrip(t *testing.T) {

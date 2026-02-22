@@ -15,10 +15,10 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
-	"github.com/tomasmach/mnemon-bot/config"
-	"github.com/tomasmach/mnemon-bot/llm"
-	"github.com/tomasmach/mnemon-bot/soul"
-	"github.com/tomasmach/mnemon-bot/tools"
+	"github.com/tomasmach/vespra/config"
+	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/soul"
+	"github.com/tomasmach/vespra/tools"
 )
 
 const extractionPrompt = `You are a memory extraction assistant. Your only job is to analyze the conversation and save important information to long-term memory.

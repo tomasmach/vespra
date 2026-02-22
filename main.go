@@ -12,13 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tomasmach/mnemon-bot/agent"
-	"github.com/tomasmach/mnemon-bot/bot"
-	"github.com/tomasmach/mnemon-bot/config"
-	"github.com/tomasmach/mnemon-bot/llm"
-	"github.com/tomasmach/mnemon-bot/logstore"
-	"github.com/tomasmach/mnemon-bot/memory"
-	"github.com/tomasmach/mnemon-bot/web"
+	"github.com/tomasmach/vespra/agent"
+	"github.com/tomasmach/vespra/bot"
+	"github.com/tomasmach/vespra/config"
+	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/logstore"
+	"github.com/tomasmach/vespra/memory"
+	"github.com/tomasmach/vespra/web"
 )
 
 func main() {

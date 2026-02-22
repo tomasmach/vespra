@@ -16,8 +16,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/tomasmach/mnemon-bot/config"
-	"github.com/tomasmach/mnemon-bot/llm"
+	"github.com/tomasmach/vespra/config"
+	"github.com/tomasmach/vespra/llm"
 )
 
 const migrationSQL = `

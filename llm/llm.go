@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tomasmach/mnemon-bot/config"
+	"github.com/tomasmach/vespra/config"
 )
 
 type Message struct {
@@ -252,7 +252,7 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 		}
 		req.Header.Set("Authorization", "Bearer "+key)
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("HTTP-Referer", "https://github.com/tomasmach/mnemon-bot")
+		req.Header.Set("HTTP-Referer", "https://github.com/tomasmach/vespra")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {

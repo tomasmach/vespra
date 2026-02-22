@@ -1,4 +1,4 @@
-# Mnemon-bot
+# Vespra
 
 A Discord bot written in Go that converses using AI and maintains persistent memory about users and topics — per server, with configurable personality and response behavior.
 
@@ -37,7 +37,7 @@ Keep the codebase as small as possible. No extra boilerplate, no speculative abs
 ## Project Structure
 
 ```
-mnemon-bot/
+vespra/
 ├── main.go
 ├── config/        # TOML config loading and validation
 ├── bot/           # Discord gateway, event handling, message routing
@@ -53,14 +53,14 @@ mnemon-bot/
 
 ## Configuration
 
-Single `config.toml` file, default path `~/.config/mnemon-bot/config.toml`.
+Single `config.toml` file, default path `~/.config/vespra/config.toml`.
 
 Required fields (`bot.token`, `llm.openrouter_key`) are validated at startup. Missing or invalid required fields log a clear error and exit with a non-zero status code. Missing optional fields (e.g. `tools.web_search_key`) log a warning and disable the relevant feature.
 
 ```toml
 [bot]
 token = "..."
-soul_file = "~/.config/mnemon-bot/soul.md"   # global fallback
+soul_file = "~/.config/vespra/soul.md"   # global fallback
 
 [llm]
 openrouter_key = "..."
@@ -69,7 +69,7 @@ embedding_model = "openai/text-embedding-3-small"
 request_timeout_seconds = 60   # HTTP timeout for all OpenRouter calls; timeouts are retried
 
 [memory]
-db_path = "~/.local/share/mnemon-bot/mnemon.db"
+db_path = "~/.local/share/vespra/vespra.db"
 
 [agent]
 history_limit = 20          # messages kept in-memory per channel
@@ -83,7 +83,7 @@ default_mode = "smart"
 # Per-server configuration (overrides global defaults)
 [[servers]]
 id = "123456789"
-soul_file = "~/.config/mnemon-bot/souls/my-server.soul.md"
+soul_file = "~/.config/vespra/souls/my-server.soul.md"
 response_mode = "mention"
 
 [[servers]]
@@ -122,7 +122,7 @@ A markdown file written freely by the user. It becomes the system prompt prefix 
 
 Example:
 ```markdown
-You are Mnemon, a thoughtful and curious AI companion on this Discord server.
+You are Vespra, a thoughtful and curious AI companion on this Discord server.
 You remember everything people tell you and bring it up naturally in conversation.
 You are warm but not sycophantic. You never pretend to know things you don't.
 ```
@@ -251,10 +251,10 @@ Single binary, no external services required beyond Discord and OpenRouter.
 
 ```
 # Build
-go build -o mnemon-bot .
+go build -o vespra .
 
 # Run
-MNEMON_CONFIG=./config.toml ./mnemon-bot
+VESPRA_CONFIG=./config.toml ./vespra
 ```
 
 ### Config Changes
@@ -266,9 +266,9 @@ Config is loaded once at startup. Changes to `config.toml` or `soul.md` files re
 Structured logging via Go's stdlib `log/slog`. Text handler by default, JSON via `--log-format=json`. Log level via `--log-level` flag (default `info`; options: `debug`, `info`, `warn`, `error`).
 
 ### Config path resolution order:
-1. `MNEMON_CONFIG` environment variable
+1. `VESPRA_CONFIG` environment variable
 2. `--config` CLI flag
-3. `~/.config/mnemon-bot/config.toml`
+3. `~/.config/vespra/config.toml`
 
 ---
 

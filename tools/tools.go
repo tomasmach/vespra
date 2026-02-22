@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/tomasmach/mnemon-bot/llm"
-	"github.com/tomasmach/mnemon-bot/memory"
+	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/memory"
 )
 
 // Tool is the interface every tool must implement.

@@ -19,10 +19,10 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/tomasmach/mnemon-bot/agent"
-	"github.com/tomasmach/mnemon-bot/config"
-	"github.com/tomasmach/mnemon-bot/logstore"
-	"github.com/tomasmach/mnemon-bot/memory"
+	"github.com/tomasmach/vespra/agent"
+	"github.com/tomasmach/vespra/config"
+	"github.com/tomasmach/vespra/logstore"
+	"github.com/tomasmach/vespra/memory"
 )
 
 //go:embed static

@@ -1,6 +1,6 @@
 # Go Code Style Guide
 
-Conventions for Mnemon-bot. Follow these exactly. When in doubt, consistency with existing code wins over personal preference.
+Conventions for Vespra. Follow these exactly. When in doubt, consistency with existing code wins over personal preference.
 
 ## Project Structure
 
@@ -48,8 +48,8 @@ import (
     _ "github.com/mattn/go-sqlite3"
 
     // 3. Internal packages (alphabetical)
-    "github.com/tomasmach/mnemon-bot/config"
-    "github.com/tomasmach/mnemon-bot/llm"
+    "github.com/tomasmach/vespra/config"
+    "github.com/tomasmach/vespra/llm"
 )
 ```
 

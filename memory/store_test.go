@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/tomasmach/mnemon-bot/config"
-	"github.com/tomasmach/mnemon-bot/llm"
+	"github.com/tomasmach/vespra/config"
+	"github.com/tomasmach/vespra/llm"
 )
 
 // fakeEmbeddingServer returns a test server that responds to embedding requests

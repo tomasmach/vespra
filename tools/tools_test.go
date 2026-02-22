@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tomasmach/mnemon-bot/tools"
+	"github.com/tomasmach/vespra/tools"
 )
 
 func TestDispatchUnknownToolReturnsError(t *testing.T) {

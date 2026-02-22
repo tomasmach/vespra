@@ -1,5 +1,5 @@
 services:
-  mnemon-bot:
+  vespra:
     build: .
     ports:
       - "8080:8080"
@@ -7,5 +7,5 @@ services:
       - ./data:/data
       - ./config:/config
     environment:
-      - MNEMON_DB_PATH=/data/mnemon.db
+      - VESPRA_DB_PATH=/data/vespra.db
     restart: unless-stopped
