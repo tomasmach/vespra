@@ -572,10 +572,41 @@ func (s *Server) handleGetAgentSoul(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
-		Content string `json:"content"`
+		Content         string `json:"content"`
+		SoulLibraryName string `json:"soul_library_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if body.SoulLibraryName != "" {
+		if !validSoulName(body.SoulLibraryName) {
+			http.Error(w, "invalid soul name", http.StatusBadRequest)
+			return
+		}
+		libraryPath := filepath.Join(s.soulLibraryDir(), body.SoulLibraryName+".md")
+		if _, err := os.Stat(libraryPath); os.IsNotExist(err) {
+			http.Error(w, "soul not found in library", http.StatusNotFound)
+			return
+		}
+		s.writeMu.Lock()
+		defer s.writeMu.Unlock()
+		cfg := s.cfgStore.Get()
+		agentIdx := findAgentIndex(cfg.Agents, id)
+		if agentIdx == -1 {
+			http.Error(w, "agent not found", http.StatusNotFound)
+			return
+		}
+		newAgents := slices.Clone(cfg.Agents)
+		newAgents[agentIdx].SoulFile = libraryPath
+		if err := s.writeAgents(newAgents); err != nil {
+			slog.Error("write agents config for library soul", "error", err)
+			http.Error(w, "failed to update config", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"path": libraryPath})
 		return
 	}
 
@@ -657,10 +688,39 @@ func respondSoulFile(w http.ResponseWriter, soulFile string) {
 
 func (s *Server) handlePutGlobalSoul(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Content string `json:"content"`
+		Content         string `json:"content"`
+		SoulLibraryName string `json:"soul_library_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if body.SoulLibraryName != "" {
+		if !validSoulName(body.SoulLibraryName) {
+			http.Error(w, "invalid soul name", http.StatusBadRequest)
+			return
+		}
+		libraryPath := filepath.Join(s.soulLibraryDir(), body.SoulLibraryName+".md")
+		if _, err := os.Stat(libraryPath); os.IsNotExist(err) {
+			http.Error(w, "soul not found in library", http.StatusNotFound)
+			return
+		}
+		s.writeMu.Lock()
+		defer s.writeMu.Unlock()
+		if err := s.patchConfig(func(raw map[string]any) {
+			bot, _ := raw["bot"].(map[string]any)
+			if bot == nil {
+				bot = make(map[string]any)
+			}
+			bot["soul_file"] = libraryPath
+			raw["bot"] = bot
+		}); err != nil {
+			http.Error(w, "failed to update config", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"path": libraryPath})
 		return
 	}
 
