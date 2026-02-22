@@ -48,7 +48,7 @@
         <button id="btn-settings" class="w-full text-left text-xs text-zinc-400 hover:text-zinc-100 border border-zinc-700/60 hover:border-zinc-600 bg-transparent hover:bg-zinc-800 rounded-md py-2 px-3 transition-colors flex items-center gap-1.5">
           <span class="text-zinc-500">⚙</span> Settings
         </button>
-        <button id="btn-new-agent" class="w-full text-left text-xs text-zinc-500 hover:text-zinc-100 border border-dashed border-zinc-700/60 hover:border-violet-500/60 bg-transparent hover:bg-zinc-800/50 rounded-md py-2 px-3 transition-colors">
+<button id="btn-new-agent" class="w-full text-left text-xs text-zinc-500 hover:text-zinc-100 border border-dashed border-zinc-700/60 hover:border-violet-500/60 bg-transparent hover:bg-zinc-800/50 rounded-md py-2 px-3 transition-colors">
           + New Agent
         </button>
       </div>
@@ -68,10 +68,6 @@
         <div class="flex-shrink-0 px-6 pt-5 pb-0">
           <h2 class="text-sm font-semibold text-zinc-200 tracking-wide">Global Config</h2>
         </div>
-        <div class="flex px-6 mt-4 border-b border-zinc-800 flex-shrink-0 gap-1">
-          <button id="ctab-config" class="detail-tab active" onclick="navigateConfigTab('config')">Config</button>
-          <button id="ctab-soul" class="detail-tab" onclick="navigateConfigTab('soul')">Soul</button>
-        </div>
         <div id="global-config" class="flex flex-col flex-1 overflow-hidden px-6 py-5">
           <div id="config-path-info" class="path-info mb-3 flex-shrink-0"></div>
           <textarea id="config-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
@@ -79,14 +75,6 @@
             <button class="btn-primary" onclick="saveConfig()">Save Config</button>
           </div>
           <span id="config-status" class="status-msg"></span>
-        </div>
-        <div id="global-soul" class="flex flex-col flex-1 overflow-hidden px-6 py-5" hidden>
-          <div id="global-soul-path-info" class="path-info mb-3 flex-shrink-0"></div>
-          <textarea id="global-soul-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
-          <div class="flex gap-2 mt-3 flex-shrink-0">
-            <button class="btn-primary" onclick="saveGlobalSoul()">Save Soul</button>
-          </div>
-          <span id="global-soul-status" class="status-msg"></span>
         </div>
       </div>
 
@@ -175,13 +163,33 @@
         </div>
 
         <!-- Agent soul tab -->
-        <div id="detail-soul" class="flex flex-col flex-1 overflow-hidden px-6 py-5" hidden>
-          <div id="soul-path-info" class="path-info mb-3 flex-shrink-0"></div>
-          <textarea id="soul-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
-          <div class="flex gap-2 mt-3 flex-shrink-0">
-            <button class="btn-primary" onclick="saveSoul()">Save Soul</button>
+        <div id="detail-soul" class="flex flex-col flex-1 overflow-hidden" hidden>
+          <!-- Library section -->
+          <div class="flex-shrink-0 px-6 pt-5 pb-4 border-b border-zinc-800">
+            <div class="flex items-center gap-2 mb-3">
+              <select id="soul-select" class="flex-1" onchange="onSoulSelectChange()">
+                <option value="">— select a soul —</option>
+              </select>
+              <button class="btn-secondary text-xs flex-shrink-0" onclick="showNewSoulForm()">+ New</button>
+              <button id="btn-activate-soul" class="btn-secondary text-xs flex-shrink-0" onclick="activateEditingSoul()" hidden>Activate</button>
+              <button id="btn-delete-soul" class="btn-danger-sm flex-shrink-0" onclick="deleteSelectedSoul()" hidden>Delete</button>
+            </div>
+            <div id="soul-new-form" hidden class="flex gap-2 items-center mb-2">
+              <input id="new-soul-name" type="text" class="flex-1" placeholder="soul-name (letters, digits, -, _)">
+              <button class="btn-primary text-xs" onclick="createAgentSoul()">Create</button>
+              <button class="btn-secondary text-xs" onclick="hideNewSoulForm()">Cancel</button>
+            </div>
+            <span id="soul-lib-status" class="status-msg"></span>
           </div>
-          <span id="soul-status" class="status-msg"></span>
+          <!-- Editor section -->
+          <div class="flex flex-col flex-1 overflow-hidden px-6 py-4">
+            <div id="soul-path-info" class="path-info mb-3 flex-shrink-0"></div>
+            <textarea id="soul-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
+            <div class="flex gap-2 mt-3 flex-shrink-0">
+              <button class="btn-primary" onclick="saveSoul()">Save</button>
+            </div>
+            <span id="soul-status" class="status-msg"></span>
+          </div>
         </div>
 
         <!-- Agent memories tab -->
