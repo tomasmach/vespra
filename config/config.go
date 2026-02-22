@@ -51,11 +51,14 @@ type MemoryConfig struct {
 }
 
 type TurnConfig struct {
-	HistoryLimit             int `toml:"history_limit"`
-	IdleTimeoutMinutes       int `toml:"idle_timeout_minutes"`
-	MaxToolIterations        int `toml:"max_tool_iterations"`
-	HistoryBackfillLimit     int `toml:"history_backfill_limit"`
-	MemoryExtractionInterval int `toml:"memory_extraction_interval"` // -1 to disable
+	HistoryLimit             int  `toml:"history_limit"`
+	IdleTimeoutMinutes       int  `toml:"idle_timeout_minutes"`
+	MaxToolIterations        int  `toml:"max_tool_iterations"`
+	HistoryBackfillLimit     int  `toml:"history_backfill_limit"`
+	MemoryExtractionInterval int  `toml:"memory_extraction_interval"` // -1 to disable
+	CoalesceDisabled         bool `toml:"coalesce_disabled"`
+	CoalesceDebounceMs       int  `toml:"coalesce_debounce_ms"`
+	CoalesceMaxWaitMs        int  `toml:"coalesce_max_wait_ms"`
 }
 
 type ResponseConfig struct {
@@ -147,6 +150,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Agent.MemoryExtractionInterval == 0 {
 		cfg.Agent.MemoryExtractionInterval = 5
+	}
+	if cfg.Agent.CoalesceDebounceMs == 0 {
+		cfg.Agent.CoalesceDebounceMs = 1500
+	}
+	if cfg.Agent.CoalesceMaxWaitMs == 0 {
+		cfg.Agent.CoalesceMaxWaitMs = 5000
 	}
 	if cfg.Response.DefaultMode == "" {
 		cfg.Response.DefaultMode = "smart"
