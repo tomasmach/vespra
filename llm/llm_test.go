@@ -371,13 +371,12 @@ func newTestClientWithConfig(t *testing.T, cfg *config.Config) *llm.Client {
 
 // TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint verifies that when
 // opts.Provider is "openrouter" the request is sent to the OpenRouter base URL
-// rather than the default BaseURL, and that OpenRouterKey is used over APIKey.
+// rather than the default BaseURL, using openrouter_key.
 func TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint(t *testing.T) {
 	srv, capturedURL, capturedAuth, _ := captureRequestServer(t)
 
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			APIKey:                "default-api-key",
 			OpenRouterKey:         "openrouter-key",
 			Model:                 "global-model",
 			EmbeddingModel:        "embed-model",
@@ -397,36 +396,8 @@ func TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint(t *testing.T) {
 	if *capturedURL != "/chat/completions" {
 		t.Errorf("expected request path /chat/completions, got %q", *capturedURL)
 	}
-	// OpenRouterKey must be used when openrouter provider is chosen.
 	if *capturedAuth != "Bearer openrouter-key" {
 		t.Errorf("expected Authorization header %q, got %q", "Bearer openrouter-key", *capturedAuth)
-	}
-}
-
-// TestChatOptsProviderOpenRouterFallsBackToOpenRouterKey verifies that when
-// opts.Provider is "openrouter" and APIKey is empty, OpenRouterKey is used.
-func TestChatOptsProviderOpenRouterFallsBackToOpenRouterKey(t *testing.T) {
-	srv, _, capturedAuth, _ := captureRequestServer(t)
-
-	cfg := &config.Config{
-		LLM: config.LLMConfig{
-			OpenRouterKey:         "or-key-only",
-			Model:                 "global-model",
-			EmbeddingModel:        "embed-model",
-			RequestTimeoutSeconds: 5,
-		},
-	}
-	client := newTestClientWithConfig(t, cfg)
-	t.Cleanup(llm.SetOpenRouterBaseURL(client, srv.URL))
-
-	opts := &llm.ChatOptions{Provider: "openrouter"}
-	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if *capturedAuth != "Bearer or-key-only" {
-		t.Errorf("expected Authorization header %q, got %q", "Bearer or-key-only", *capturedAuth)
 	}
 }
 
@@ -517,7 +488,6 @@ func TestChatOptsProviderWinsOverVisionRouting(t *testing.T) {
 			Model:                 "global-model",
 			VisionModel:           "vision-model",
 			VisionBaseURL:         visionSrv.URL,
-			VisionKey:             "vision-secret",
 			EmbeddingModel:        "embed-model",
 			RequestTimeoutSeconds: 5,
 		},

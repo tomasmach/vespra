@@ -142,11 +142,7 @@ func (c *Client) apiBase() string {
 }
 
 func (c *Client) chatKey() string {
-	cfg := c.cfgStore.Get().LLM
-	if cfg.APIKey != "" {
-		return cfg.APIKey
-	}
-	return cfg.OpenRouterKey
+	return c.cfgStore.Get().LLM.OpenRouterKey
 }
 
 func (c *Client) embeddingBase() string {
@@ -154,14 +150,6 @@ func (c *Client) embeddingBase() string {
 		return u
 	}
 	return c.apiBase()
-}
-
-func (c *Client) embeddingKey() string {
-	cfg := c.cfgStore.Get().LLM
-	if cfg.EmbeddingKey != "" {
-		return cfg.EmbeddingKey
-	}
-	return c.chatKey()
 }
 
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, opts *ChatOptions) (Choice, error) {
@@ -179,9 +167,6 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 			} else {
 				apiBase = "https://openrouter.ai/api/v1"
 			}
-			if cfg.OpenRouterKey != "" {
-				apiKey = cfg.OpenRouterKey
-			}
 		case "glm":
 			apiBase = cfg.GLMBaseURL
 			apiKey = cfg.GLMKey
@@ -198,9 +183,6 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		model = cfg.VisionModel
 		if cfg.VisionBaseURL != "" {
 			apiBase = cfg.VisionBaseURL
-		}
-		if cfg.VisionKey != "" {
-			apiKey = cfg.VisionKey
 		}
 	case cfg.VisionModel == "" && messagesHaveImages(messages):
 		messages = stripImages(messages)
@@ -236,7 +218,7 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		"input": text,
 	}
 
-	respBody, err := c.post(ctx, c.embeddingBase()+"/embeddings", c.embeddingKey(), body)
+	respBody, err := c.post(ctx, c.embeddingBase()+"/embeddings", c.chatKey(), body)
 	if err != nil {
 		return nil, err
 	}
