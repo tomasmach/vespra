@@ -371,14 +371,14 @@ func newTestClientWithConfig(t *testing.T, cfg *config.Config) *llm.Client {
 
 // TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint verifies that when
 // opts.Provider is "openrouter" the request is sent to the OpenRouter base URL
-// rather than the default BaseURL, and that APIKey is preferred over OpenRouterKey.
+// rather than the default BaseURL, and that OpenRouterKey is used over APIKey.
 func TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint(t *testing.T) {
 	srv, capturedURL, capturedAuth, _ := captureRequestServer(t)
 
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			APIKey:                "preferred-api-key",
-			OpenRouterKey:         "fallback-or-key",
+			APIKey:                "default-api-key",
+			OpenRouterKey:         "openrouter-key",
 			Model:                 "global-model",
 			EmbeddingModel:        "embed-model",
 			RequestTimeoutSeconds: 5,
@@ -397,9 +397,9 @@ func TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint(t *testing.T) {
 	if *capturedURL != "/chat/completions" {
 		t.Errorf("expected request path /chat/completions, got %q", *capturedURL)
 	}
-	// APIKey must be preferred over OpenRouterKey when openrouter provider is chosen.
-	if *capturedAuth != "Bearer preferred-api-key" {
-		t.Errorf("expected Authorization header %q, got %q", "Bearer preferred-api-key", *capturedAuth)
+	// OpenRouterKey must be used when openrouter provider is chosen.
+	if *capturedAuth != "Bearer openrouter-key" {
+		t.Errorf("expected Authorization header %q, got %q", "Bearer openrouter-key", *capturedAuth)
 	}
 }
 
