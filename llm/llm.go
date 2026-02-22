@@ -76,10 +76,16 @@ type ContentPart struct {
 	Type     string    `json:"type"`
 	Text     string    `json:"text,omitempty"`
 	ImageURL *ImageURL `json:"image_url,omitempty"`
+	VideoURL *VideoURL `json:"video_url,omitempty"`
 }
 
 // ImageURL holds the URL for an image content part.
 type ImageURL struct {
+	URL string `json:"url"`
+}
+
+// VideoURL holds the URL for a video content part.
+type VideoURL struct {
 	URL string `json:"url"`
 }
 
@@ -298,8 +304,8 @@ func messagesHaveImages(messages []Message) bool {
 	return false
 }
 
-// stripImages returns a copy of messages with image content parts removed.
-// Each stripped message gets a short text note so the model knows an image was
+// stripImages returns a copy of messages with image and video content parts removed.
+// Each stripped message gets a short text note so the model knows media was
 // shared even though it cannot see it.
 func stripImages(messages []Message) []Message {
 	out := make([]Message, len(messages))
@@ -309,19 +315,29 @@ func stripImages(messages []Message) []Message {
 			continue
 		}
 		var text string
-		var imageCount int
+		var imageCount, videoCount int
 		for _, p := range out[i].ContentParts {
 			switch p.Type {
 			case "text":
 				text = p.Text
 			case "image_url":
 				imageCount++
+			case "video_url":
+				videoCount++
 			}
 		}
-		if imageCount == 0 {
+		if imageCount == 0 && videoCount == 0 {
 			continue
 		}
-		note := fmt.Sprintf("[%d image(s) attached — vision not supported by current model]", imageCount)
+		var note string
+		switch {
+		case imageCount > 0 && videoCount > 0:
+			note = fmt.Sprintf("[%d image(s) and %d video(s) attached — vision not supported by current model]", imageCount, videoCount)
+		case imageCount > 0:
+			note = fmt.Sprintf("[%d image(s) attached — vision not supported by current model]", imageCount)
+		case videoCount > 0:
+			note = fmt.Sprintf("[%d video(s) attached — vision not supported by current model]", videoCount)
+		}
 		if text != "" {
 			text += "\n" + note
 		} else {

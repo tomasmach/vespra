@@ -62,32 +62,103 @@ type ChannelAgent struct {
 	msgCh chan *discordgo.MessageCreate // buffered 100
 }
 
-// historyUserContent formats the text content for a user message in backfilled
-// history, annotating reply-to context when the message is a Discord reply.
-func historyUserContent(m *discordgo.Message) string {
-	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil {
-		return fmt.Sprintf("%s (replying to %s): %s", m.Author.Username, m.ReferencedMessage.Author.Username, m.Content)
+// hasImageAttachments reports whether the message has at least one image attachment.
+func hasImageAttachments(m *discordgo.Message) bool {
+	for _, a := range m.Attachments {
+		if strings.HasPrefix(a.ContentType, "image/") {
+			return true
+		}
 	}
-	return fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
+	return false
 }
 
-// buildUserMessage converts a Discord message into an llm.Message, downloading
-// any image attachments as base64 data URLs for vision content parts.
-// Discord CDN URLs require authentication, so images must be fetched server-side.
-func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate) llm.Message {
-	text := fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)
+// hasVideoAttachments reports whether the message has at least one video attachment.
+func hasVideoAttachments(m *discordgo.Message) bool {
+	for _, a := range m.Attachments {
+		if strings.HasPrefix(a.ContentType, "video/") {
+			return true
+		}
+	}
+	return false
+}
 
-	var images []*discordgo.MessageAttachment
+// formatMessageContent replaces raw Discord mention syntax (<@ID> and <@!ID>)
+// for the bot with a human-readable "@botName" so the LLM sees natural text.
+func formatMessageContent(content, botID, botName string) string {
+	content = strings.ReplaceAll(content, "<@"+botID+">", "@"+botName)
+	content = strings.ReplaceAll(content, "<@!"+botID+">", "@"+botName)
+	return content
+}
+
+// historyUserContent formats the text content for a user message in history,
+// annotating reply-to context when the message is a Discord reply and
+// sanitizing bot mentions into readable form.
+func historyUserContent(m *discordgo.Message, botID, botName string) string {
+	content := formatMessageContent(m.Content, botID, botName)
+	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil {
+		refContent := formatMessageContent(m.ReferencedMessage.Content, botID, botName)
+		if len(refContent) > 200 {
+			refContent = refContent[:200] + "..."
+		}
+		if refContent == "" {
+			var labels []string
+			if hasImageAttachments(m.ReferencedMessage) {
+				labels = append(labels, "[image]")
+			}
+			if hasVideoAttachments(m.ReferencedMessage) {
+				labels = append(labels, "[video]")
+			}
+			if len(labels) > 0 {
+				refContent = strings.Join(labels, ", ")
+			}
+		}
+		return fmt.Sprintf("%s (replying to %s: %q): %s",
+			m.Author.Username,
+			m.ReferencedMessage.Author.Username,
+			refContent,
+			content)
+	}
+	return fmt.Sprintf("%s: %s", m.Author.Username, content)
+}
+
+const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
+
+// buildUserMessage converts a Discord message into an llm.Message, downloading
+// any image or video attachments as base64 data URLs for vision content parts.
+// Discord CDN URLs require authentication, so media must be fetched server-side.
+func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
+	text := historyUserContent(msg.Message, botID, botName)
+
+	var images, videos []*discordgo.MessageAttachment
 	for _, a := range msg.Attachments {
 		if strings.HasPrefix(a.ContentType, "image/") {
 			images = append(images, a)
+		} else if strings.HasPrefix(a.ContentType, "video/") {
+			if a.Size > maxVideoBytes {
+				slog.Warn("skipping oversized video attachment", "size", a.Size, "url", a.URL)
+				continue
+			}
+			videos = append(videos, a)
 		}
 	}
-	if len(images) == 0 {
+	if msg.ReferencedMessage != nil {
+		for _, a := range msg.ReferencedMessage.Attachments {
+			if strings.HasPrefix(a.ContentType, "image/") {
+				images = append(images, a)
+			} else if strings.HasPrefix(a.ContentType, "video/") {
+				if a.Size > maxVideoBytes {
+					slog.Warn("skipping oversized referenced video attachment", "size", a.Size, "url", a.URL)
+					continue
+				}
+				videos = append(videos, a)
+			}
+		}
+	}
+	if len(images) == 0 && len(videos) == 0 {
 		return llm.Message{Role: "user", Content: text}
 	}
 
-	parts := make([]llm.ContentPart, 0, 1+len(images))
+	parts := make([]llm.ContentPart, 0, 1+len(images)+len(videos))
 	parts = append(parts, llm.ContentPart{Type: "text", Text: text})
 	for _, a := range images {
 		dataURL, err := downloadImageAsDataURL(ctx, httpClient, a)
@@ -100,8 +171,19 @@ func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discord
 			ImageURL: &llm.ImageURL{URL: dataURL},
 		})
 	}
+	for _, a := range videos {
+		dataURL, err := downloadImageAsDataURL(ctx, httpClient, a)
+		if err != nil {
+			slog.Warn("failed to download video attachment, skipping", "error", err, "url", a.URL)
+			continue
+		}
+		parts = append(parts, llm.ContentPart{
+			Type:     "video_url",
+			VideoURL: &llm.VideoURL{URL: dataURL},
+		})
+	}
 	if len(parts) == 1 {
-		// all image downloads failed; fall back to plain text
+		// all media downloads failed; fall back to plain text
 		return llm.Message{Role: "user", Content: text}
 	}
 	return llm.Message{Role: "user", ContentParts: parts}
@@ -256,6 +338,7 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 		return nil
 	}
 	botID := a.resources.Session.State.User.ID
+	botName := a.resources.Session.State.User.Username
 	// msgs is newest-first; reverse to chronological order
 	history := make([]llm.Message, 0, len(msgs))
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -266,7 +349,7 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 		if m.Author.ID == botID {
 			history = append(history, llm.Message{Role: "assistant", Content: m.Content})
 		} else if !m.Author.Bot {
-			history = append(history, llm.Message{Role: "user", Content: historyUserContent(m)})
+			history = append(history, llm.Message{Role: "user", Content: historyUserContent(m, botID, botName)})
 		}
 	}
 	return history
@@ -278,7 +361,7 @@ func isAddressedToBot(m *discordgo.MessageCreate, botID string) bool {
 	if m.GuildID == "" {
 		return true // DMs are always addressed
 	}
-	if strings.Contains(m.Content, "<@"+botID+">") {
+	if strings.Contains(m.Content, "<@"+botID+">") || strings.Contains(m.Content, "<@!"+botID+">") {
 		return true
 	}
 	return m.MessageReference != nil &&
@@ -333,7 +416,8 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		a.logger.Warn("memory recall error", "error", err)
 	}
 
-	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories)
+	botName := a.resources.Session.State.User.Username
+	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
@@ -344,7 +428,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
 
-	userMsg := buildUserMessage(ctx, a.httpClient, msg)
+	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
 	llmMsgs = append(llmMsgs, userMsg)
@@ -355,18 +439,18 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		sendFn:       sendFn,
 		reg:          reg,
 		llmMsgs:      llmMsgs,
-		userMsgText:  fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content),
+		userMsgText:  historyUserContent(msg.Message, botID, botName),
 	})
 }
 
 // buildCombinedContent builds the combined user content string for a batch of coalesced messages.
-func buildCombinedContent(msgs []*discordgo.MessageCreate) string {
+func buildCombinedContent(msgs []*discordgo.MessageCreate, botID, botName string) string {
 	firstTime := msgs[0].Timestamp
 	lines := make([]string, 0, len(msgs)+2)
 	lines = append(lines, fmt.Sprintf("[%d messages arrived rapidly in quick succession]", len(msgs)))
 	lines = append(lines, "")
 	for _, m := range msgs {
-		line := fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
+		line := historyUserContent(m.Message, botID, botName)
 		gap := m.Timestamp.Sub(firstTime)
 		if gap >= time.Second {
 			secs := int(gap.Seconds())
@@ -431,7 +515,8 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		a.logger.Warn("memory recall error", "error", err)
 	}
 
-	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories)
+	botName := a.resources.Session.State.User.Username
+	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
@@ -442,7 +527,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
 
-	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs)
+	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
@@ -450,7 +535,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	userLogLines := make([]string, 0, len(msgs))
 	for _, m := range msgs {
-		userLogLines = append(userLogLines, fmt.Sprintf("%s: %s", m.Author.Username, m.Content))
+		userLogLines = append(userLogLines, historyUserContent(m.Message, botID, botName))
 	}
 
 	a.processTurn(ctx, cfg, turnParams{
@@ -465,52 +550,69 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 // buildSystemPrompt assembles the system prompt from the soul text, memories,
 // language override, and response mode.
-func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow) string {
-	systemPrompt := a.soulText
+func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string) string {
+	var sb strings.Builder
+	if botName != "" {
+		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
+	}
+	sb.WriteString(a.soulText)
 	if len(memories) > 0 {
-		systemPrompt += "\n\n## Relevant Memories\n"
+		sb.WriteString("\n\n## Relevant Memories\n")
 		for _, m := range memories {
-			systemPrompt += fmt.Sprintf("- [%s] %s\n", m.ID, m.Content)
+			fmt.Fprintf(&sb, "- [%s] %s\n", m.ID, m.Content)
 		}
 	}
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
-		systemPrompt += "\n\nAlways respond in " + lang + "."
+		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 	if mode == "smart" {
-		systemPrompt += "\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent."
+		sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
 	}
-	return systemPrompt
+	return sb.String()
 }
 
 // buildCombinedUserMessage builds an LLM user message from a batch of coalesced
-// Discord messages, collecting text and image attachments.
-func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*discordgo.MessageCreate) llm.Message {
-	combinedContent := buildCombinedContent(msgs)
+// Discord messages, collecting text, image, and video attachments.
+func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*discordgo.MessageCreate, botID, botName string) llm.Message {
+	combinedContent := buildCombinedContent(msgs, botID, botName)
 
-	var imageParts []llm.ContentPart
+	var mediaParts []llm.ContentPart
 	for _, m := range msgs {
 		for _, att := range m.Attachments {
-			if !strings.HasPrefix(att.ContentType, "image/") {
-				continue
+			if strings.HasPrefix(att.ContentType, "image/") {
+				dataURL, err := downloadImageAsDataURL(ctx, a.httpClient, att)
+				if err != nil {
+					a.logger.Warn("failed to download image attachment, skipping", "error", err, "url", att.URL)
+					continue
+				}
+				mediaParts = append(mediaParts, llm.ContentPart{
+					Type:     "image_url",
+					ImageURL: &llm.ImageURL{URL: dataURL},
+				})
+			} else if strings.HasPrefix(att.ContentType, "video/") {
+				if att.Size > maxVideoBytes {
+					a.logger.Warn("skipping oversized video attachment", "size", att.Size, "url", att.URL)
+					continue
+				}
+				dataURL, err := downloadImageAsDataURL(ctx, a.httpClient, att)
+				if err != nil {
+					a.logger.Warn("failed to download video attachment, skipping", "error", err, "url", att.URL)
+					continue
+				}
+				mediaParts = append(mediaParts, llm.ContentPart{
+					Type:     "video_url",
+					VideoURL: &llm.VideoURL{URL: dataURL},
+				})
 			}
-			dataURL, err := downloadImageAsDataURL(ctx, a.httpClient, att)
-			if err != nil {
-				a.logger.Warn("failed to download image attachment, skipping", "error", err, "url", att.URL)
-				continue
-			}
-			imageParts = append(imageParts, llm.ContentPart{
-				Type:     "image_url",
-				ImageURL: &llm.ImageURL{URL: dataURL},
-			})
 		}
 	}
 
-	if len(imageParts) == 0 {
+	if len(mediaParts) == 0 {
 		return llm.Message{Role: "user", Content: combinedContent}
 	}
-	parts := make([]llm.ContentPart, 0, 1+len(imageParts))
+	parts := make([]llm.ContentPart, 0, 1+len(mediaParts))
 	parts = append(parts, llm.ContentPart{Type: "text", Text: combinedContent})
-	parts = append(parts, imageParts...)
+	parts = append(parts, mediaParts...)
 	return llm.Message{Role: "user", ContentParts: parts}
 }
 
@@ -685,7 +787,7 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 
 // stripImageParts returns a copy of history with ContentParts replaced by their
 // text-only Content equivalent, suitable for the extraction LLM which has no use
-// for image data.
+// for image or video data.
 func stripImageParts(history []llm.Message) []llm.Message {
 	snapshot := make([]llm.Message, len(history))
 	copy(snapshot, history)

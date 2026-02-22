@@ -27,6 +27,10 @@ func attachment(contentType, url string) *discordgo.MessageAttachment {
 	return &discordgo.MessageAttachment{ContentType: contentType, URL: url}
 }
 
+func attachmentWithSize(contentType, url string, size int) *discordgo.MessageAttachment {
+	return &discordgo.MessageAttachment{ContentType: contentType, URL: url, Size: size}
+}
+
 // imageServer starts a test HTTP server that serves fakeData for any request.
 // Returns the server and a cleanup func.
 func imageServer(t *testing.T, fakeData []byte) (*httptest.Server, func()) {
@@ -39,7 +43,7 @@ func imageServer(t *testing.T, fakeData []byte) (*httptest.Server, func()) {
 }
 
 func TestBuildUserMessageTextOnly(t *testing.T) {
-	m := buildUserMessage(context.Background(), nil, msg("hello"))
+	m := buildUserMessage(context.Background(), nil, msg("hello"), "", "")
 	if m.Role != "user" {
 		t.Errorf("expected role=user, got %q", m.Role)
 	}
@@ -57,7 +61,7 @@ func TestBuildUserMessageWithImage(t *testing.T) {
 	defer cleanup()
 
 	a := attachment("image/png", srv.URL+"/img.png")
-	m := buildUserMessage(context.Background(), srv.Client(), msg("look", a))
+	m := buildUserMessage(context.Background(), srv.Client(), msg("look", a), "", "")
 	if len(m.ContentParts) != 2 {
 		t.Fatalf("expected 2 content parts, got %d", len(m.ContentParts))
 	}
@@ -74,7 +78,7 @@ func TestBuildUserMessageWithImage(t *testing.T) {
 }
 
 func TestBuildUserMessageNonImageAttachmentIgnored(t *testing.T) {
-	m := buildUserMessage(context.Background(), nil, msg("file", attachment("application/pdf", "https://cdn.example.com/doc.pdf")))
+	m := buildUserMessage(context.Background(), nil, msg("file", attachment("application/pdf", "https://cdn.example.com/doc.pdf")), "", "")
 	if len(m.ContentParts) != 0 {
 		t.Errorf("expected no content parts for non-image, got %d", len(m.ContentParts))
 	}
@@ -92,7 +96,7 @@ func TestBuildUserMessageMixedAttachments(t *testing.T) {
 		attachment("image/jpeg", srv.URL+"/photo.jpg"),
 		attachment("application/pdf", "https://cdn.example.com/doc.pdf"),
 		attachment("image/webp", srv.URL+"/pic.webp"),
-	))
+	), "", "")
 	if len(m.ContentParts) != 3 { // text + 2 images
 		t.Fatalf("expected 3 content parts (text + 2 images), got %d", len(m.ContentParts))
 	}
@@ -101,7 +105,7 @@ func TestBuildUserMessageMixedAttachments(t *testing.T) {
 func TestBuildUserMessageImageDownloadFails(t *testing.T) {
 	// Use an unreachable URL to simulate download failure
 	a := attachment("image/png", "http://127.0.0.1:1") // nothing listening
-	m := buildUserMessage(context.Background(), &http.Client{}, msg("look", a))
+	m := buildUserMessage(context.Background(), &http.Client{}, msg("look", a), "", "")
 	// All images failed → falls back to plain text
 	if len(m.ContentParts) != 0 {
 		t.Errorf("expected no content parts when download fails, got %d", len(m.ContentParts))
@@ -116,7 +120,7 @@ func TestBuildUserMessageEmptyText(t *testing.T) {
 	srv, cleanup := imageServer(t, fakeData)
 	defer cleanup()
 
-	m := buildUserMessage(context.Background(), srv.Client(), msg("", attachment("image/gif", srv.URL+"/anim.gif")))
+	m := buildUserMessage(context.Background(), srv.Client(), msg("", attachment("image/gif", srv.URL+"/anim.gif")), "", "")
 	if len(m.ContentParts) != 2 {
 		t.Fatalf("expected 2 parts, got %d", len(m.ContentParts))
 	}
@@ -134,7 +138,7 @@ func TestHistoryUserContentNoReply(t *testing.T) {
 		Author:  &discordgo.User{Username: "alice"},
 		Content: "hello",
 	}
-	got := historyUserContent(m)
+	got := historyUserContent(m, "", "")
 	want := "alice: hello"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -146,11 +150,31 @@ func TestHistoryUserContentWithReply(t *testing.T) {
 		Author:  &discordgo.User{Username: "alice"},
 		Content: "I agree",
 		ReferencedMessage: &discordgo.Message{
-			Author: &discordgo.User{Username: "bob"},
+			Author:  &discordgo.User{Username: "bob"},
+			Content: "What do you think?",
 		},
 	}
-	got := historyUserContent(m)
-	want := "alice (replying to bob): I agree"
+	got := historyUserContent(m, "", "")
+	want := `alice (replying to bob: "What do you think?"): I agree`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestHistoryUserContentReplyWithImageOnly(t *testing.T) {
+	m := &discordgo.Message{
+		Author:  &discordgo.User{Username: "alice"},
+		Content: "nice",
+		ReferencedMessage: &discordgo.Message{
+			Author:  &discordgo.User{Username: "bob"},
+			Content: "",
+			Attachments: []*discordgo.MessageAttachment{
+				{ContentType: "image/png", URL: "https://cdn.example.com/img.png"},
+			},
+		},
+	}
+	got := historyUserContent(m, "", "")
+	want := `alice (replying to bob: "[image]"): nice`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -163,10 +187,45 @@ func TestHistoryUserContentReplyNoAuthor(t *testing.T) {
 		Content:           "hello",
 		ReferencedMessage: &discordgo.Message{},
 	}
-	got := historyUserContent(m)
+	got := historyUserContent(m, "", "")
 	want := "alice: hello"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildUserMessageReferencedImage(t *testing.T) {
+	fakeData := []byte("fake ref image bytes")
+	srv, cleanup := imageServer(t, fakeData)
+	defer cleanup()
+
+	refMsg := &discordgo.Message{
+		Author:  &discordgo.User{Username: "bob"},
+		Content: "",
+		Attachments: []*discordgo.MessageAttachment{
+			{ContentType: "image/jpeg", URL: srv.URL + "/ref.jpg"},
+		},
+	}
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content:           "look at this",
+			Author:            &discordgo.User{Username: "alice"},
+			ReferencedMessage: refMsg,
+		},
+	}
+	result := buildUserMessage(context.Background(), srv.Client(), m, "", "")
+	if len(result.ContentParts) != 2 {
+		t.Fatalf("expected 2 content parts (text + ref image), got %d", len(result.ContentParts))
+	}
+	if result.ContentParts[0].Type != "text" {
+		t.Errorf("expected first part type=text, got %q", result.ContentParts[0].Type)
+	}
+	if result.ContentParts[1].Type != "image_url" {
+		t.Errorf("expected second part type=image_url, got %q", result.ContentParts[1].Type)
+	}
+	wantURL := fmt.Sprintf("data:image/jpeg;base64,%s", base64.StdEncoding.EncodeToString(fakeData))
+	if result.ContentParts[1].ImageURL.URL != wantURL {
+		t.Errorf("unexpected image URL: %q", result.ContentParts[1].ImageURL.URL)
 	}
 }
 
@@ -188,7 +247,7 @@ func TestBuildCombinedContentHeader(t *testing.T) {
 		msgAt("bob", "world", now),
 		msgAt("alice", "again", now),
 	}
-	got := buildCombinedContent(msgs)
+	got := buildCombinedContent(msgs, "", "")
 	firstLine := strings.Split(got, "\n")[0]
 	want := "[3 messages arrived rapidly in quick succession]"
 	if firstLine != want {
@@ -203,7 +262,7 @@ func TestBuildCombinedContentMessageLines(t *testing.T) {
 		msgAt("bob", "world", now),
 		msgAt("alice", "again", now),
 	}
-	got := buildCombinedContent(msgs)
+	got := buildCombinedContent(msgs, "", "")
 	lines := strings.Split(got, "\n")
 	// lines[0] = header, lines[1] = blank, lines[2..4] = messages
 	if len(lines) != 5 {
@@ -230,7 +289,7 @@ func TestBuildCombinedContentTimestampOnlyWhenGapAtLeastOneSecond(t *testing.T) 
 		msgAt("bob", "quick", base.Add(500*time.Millisecond)),
 		msgAt("alice", "later", base.Add(2*time.Second)),
 	}
-	got := buildCombinedContent(msgs)
+	got := buildCombinedContent(msgs, "", "")
 	lines := strings.Split(got, "\n")
 	// lines[2] = first message (no timestamp, it is the reference)
 	// lines[3] = second message (gap < 1s, no timestamp)
@@ -253,7 +312,7 @@ func TestBuildCombinedContentSingleMessage(t *testing.T) {
 	msgs := []*discordgo.MessageCreate{
 		msgAt("alice", "solo", now),
 	}
-	got := buildCombinedContent(msgs)
+	got := buildCombinedContent(msgs, "", "")
 	if !strings.HasPrefix(got, "[1 messages arrived rapidly in quick succession]") {
 		t.Errorf("unexpected output for single message: %q", got)
 	}
@@ -263,5 +322,168 @@ func TestBuildCombinedContentSingleMessage(t *testing.T) {
 	// No timestamp suffix for the only (first) message
 	if strings.Contains(got, "(+") {
 		t.Errorf("single message should not have timestamp suffix, got %q", got)
+	}
+}
+
+func TestHistoryUserContentReplyWithVideoOnly(t *testing.T) {
+	m := &discordgo.Message{
+		Author:  &discordgo.User{Username: "alice"},
+		Content: "nice",
+		ReferencedMessage: &discordgo.Message{
+			Author:  &discordgo.User{Username: "bob"},
+			Content: "",
+			Attachments: []*discordgo.MessageAttachment{
+				{ContentType: "video/mp4", URL: "https://cdn.example.com/clip.mp4"},
+			},
+		},
+	}
+	got := historyUserContent(m, "", "")
+	want := `alice (replying to bob: "[video]"): nice`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestHistoryUserContentReplyWithImageAndVideo(t *testing.T) {
+	m := &discordgo.Message{
+		Author:  &discordgo.User{Username: "alice"},
+		Content: "cool",
+		ReferencedMessage: &discordgo.Message{
+			Author:  &discordgo.User{Username: "bob"},
+			Content: "",
+			Attachments: []*discordgo.MessageAttachment{
+				{ContentType: "image/png", URL: "https://cdn.example.com/img.png"},
+				{ContentType: "video/mp4", URL: "https://cdn.example.com/clip.mp4"},
+			},
+		},
+	}
+	got := historyUserContent(m, "", "")
+	want := `alice (replying to bob: "[image], [video]"): cool`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildUserMessageWithVideo(t *testing.T) {
+	fakeData := []byte("fake video bytes")
+	srv, cleanup := imageServer(t, fakeData)
+	defer cleanup()
+
+	a := attachment("video/mp4", srv.URL+"/clip.mp4")
+	m := buildUserMessage(context.Background(), srv.Client(), msg("watch this", a), "", "")
+	if len(m.ContentParts) != 2 {
+		t.Fatalf("expected 2 content parts, got %d", len(m.ContentParts))
+	}
+	if m.ContentParts[0].Type != "text" {
+		t.Errorf("expected first part type=text, got %q", m.ContentParts[0].Type)
+	}
+	if m.ContentParts[1].Type != "video_url" {
+		t.Errorf("expected second part type=video_url, got %q", m.ContentParts[1].Type)
+	}
+	wantURL := fmt.Sprintf("data:video/mp4;base64,%s", base64.StdEncoding.EncodeToString(fakeData))
+	if m.ContentParts[1].VideoURL.URL != wantURL {
+		t.Errorf("unexpected video URL: %q", m.ContentParts[1].VideoURL.URL)
+	}
+}
+
+func TestBuildUserMessageReferencedVideo(t *testing.T) {
+	fakeData := []byte("fake ref video bytes")
+	srv, cleanup := imageServer(t, fakeData)
+	defer cleanup()
+
+	refMsg := &discordgo.Message{
+		Author:  &discordgo.User{Username: "bob"},
+		Content: "",
+		Attachments: []*discordgo.MessageAttachment{
+			{ContentType: "video/mp4", URL: srv.URL + "/ref.mp4"},
+		},
+	}
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content:           "check this out",
+			Author:            &discordgo.User{Username: "alice"},
+			ReferencedMessage: refMsg,
+		},
+	}
+	result := buildUserMessage(context.Background(), srv.Client(), m, "", "")
+	if len(result.ContentParts) != 2 {
+		t.Fatalf("expected 2 content parts (text + ref video), got %d", len(result.ContentParts))
+	}
+	if result.ContentParts[0].Type != "text" {
+		t.Errorf("expected first part type=text, got %q", result.ContentParts[0].Type)
+	}
+	if result.ContentParts[1].Type != "video_url" {
+		t.Errorf("expected second part type=video_url, got %q", result.ContentParts[1].Type)
+	}
+	wantURL := fmt.Sprintf("data:video/mp4;base64,%s", base64.StdEncoding.EncodeToString(fakeData))
+	if result.ContentParts[1].VideoURL.URL != wantURL {
+		t.Errorf("unexpected video URL: %q", result.ContentParts[1].VideoURL.URL)
+	}
+}
+
+func TestBuildUserMessageVideoSkippedWhenTooLarge(t *testing.T) {
+	a := attachmentWithSize("video/mp4", "https://cdn.example.com/huge.mp4", maxVideoBytes+1)
+	m := buildUserMessage(context.Background(), &http.Client{}, msg("big video", a), "", "")
+	// oversized video skipped → falls back to plain text
+	if len(m.ContentParts) != 0 {
+		t.Errorf("expected no content parts for oversized video, got %d", len(m.ContentParts))
+	}
+	if m.Content != "alice: big video" {
+		t.Errorf("unexpected content: %q", m.Content)
+	}
+}
+
+func TestFormatMessageContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		botID   string
+		botName string
+		want    string
+	}{
+		{
+			name:    "basic mention replacement",
+			content: "hello <@123456> how are you",
+			botID:   "123456",
+			botName: "BotName",
+			want:    "hello @BotName how are you",
+		},
+		{
+			name:    "nickname mention replacement",
+			content: "hello <@!123456> how are you",
+			botID:   "123456",
+			botName: "BotName",
+			want:    "hello @BotName how are you",
+		},
+		{
+			name:    "multiple mentions in one message",
+			content: "<@123456> said hi and <@!123456> waved",
+			botID:   "123456",
+			botName: "BotName",
+			want:    "@BotName said hi and @BotName waved",
+		},
+		{
+			name:    "no mentions content unchanged",
+			content: "just a regular message with no mentions",
+			botID:   "123456",
+			botName: "BotName",
+			want:    "just a regular message with no mentions",
+		},
+		{
+			name:    "empty botID and botName content unchanged",
+			content: "hello there, no mentions at all",
+			botID:   "",
+			botName: "",
+			want:    "hello there, no mentions at all",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatMessageContent(tt.content, tt.botID, tt.botName)
+			if got != tt.want {
+				t.Errorf("formatMessageContent(%q, %q, %q) = %q, want %q",
+					tt.content, tt.botID, tt.botName, got, tt.want)
+			}
+		})
 	}
 }
