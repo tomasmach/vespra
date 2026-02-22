@@ -62,20 +62,28 @@ type ChannelAgent struct {
 	msgCh chan *discordgo.MessageCreate // buffered 100
 }
 
-// historyUserContent formats the text content for a user message in backfilled
-// history, annotating reply-to context when the message is a Discord reply.
-func historyUserContent(m *discordgo.Message) string {
+// formatMessageContent replaces raw Discord mention syntax for the bot with a
+// human-readable @botName, so the LLM sees "@BotName" instead of "<@123456>".
+func formatMessageContent(content, botID, botName string) string {
+	return strings.ReplaceAll(content, "<@"+botID+">", "@"+botName)
+}
+
+// historyUserContent formats the text content for a user message in history,
+// annotating reply-to context when the message is a Discord reply and
+// sanitizing bot mentions into readable form.
+func historyUserContent(m *discordgo.Message, botID, botName string) string {
+	content := formatMessageContent(m.Content, botID, botName)
 	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil {
-		return fmt.Sprintf("%s (replying to %s): %s", m.Author.Username, m.ReferencedMessage.Author.Username, m.Content)
+		return fmt.Sprintf("%s (replying to %s): %s", m.Author.Username, m.ReferencedMessage.Author.Username, content)
 	}
-	return fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
+	return fmt.Sprintf("%s: %s", m.Author.Username, content)
 }
 
 // buildUserMessage converts a Discord message into an llm.Message, downloading
 // any image attachments as base64 data URLs for vision content parts.
 // Discord CDN URLs require authentication, so images must be fetched server-side.
-func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate) llm.Message {
-	text := fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)
+func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
+	text := historyUserContent(msg.Message, botID, botName)
 
 	var images []*discordgo.MessageAttachment
 	for _, a := range msg.Attachments {
@@ -256,6 +264,7 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 		return nil
 	}
 	botID := a.resources.Session.State.User.ID
+	botName := a.resources.Session.State.User.Username
 	// msgs is newest-first; reverse to chronological order
 	history := make([]llm.Message, 0, len(msgs))
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -266,7 +275,7 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 		if m.Author.ID == botID {
 			history = append(history, llm.Message{Role: "assistant", Content: m.Content})
 		} else if !m.Author.Bot {
-			history = append(history, llm.Message{Role: "user", Content: historyUserContent(m)})
+			history = append(history, llm.Message{Role: "user", Content: historyUserContent(m, botID, botName)})
 		}
 	}
 	return history
@@ -333,7 +342,8 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		a.logger.Warn("memory recall error", "error", err)
 	}
 
-	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories)
+	botName := a.resources.Session.State.User.Username
+	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
@@ -344,7 +354,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
 
-	userMsg := buildUserMessage(ctx, a.httpClient, msg)
+	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
 	llmMsgs = append(llmMsgs, userMsg)
@@ -360,13 +370,13 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 }
 
 // buildCombinedContent builds the combined user content string for a batch of coalesced messages.
-func buildCombinedContent(msgs []*discordgo.MessageCreate) string {
+func buildCombinedContent(msgs []*discordgo.MessageCreate, botID, botName string) string {
 	firstTime := msgs[0].Timestamp
 	lines := make([]string, 0, len(msgs)+2)
 	lines = append(lines, fmt.Sprintf("[%d messages arrived rapidly in quick succession]", len(msgs)))
 	lines = append(lines, "")
 	for _, m := range msgs {
-		line := fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
+		line := historyUserContent(m.Message, botID, botName)
 		gap := m.Timestamp.Sub(firstTime)
 		if gap >= time.Second {
 			secs := int(gap.Seconds())
@@ -431,7 +441,8 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		a.logger.Warn("memory recall error", "error", err)
 	}
 
-	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories)
+	botName := a.resources.Session.State.User.Username
+	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
@@ -442,7 +453,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
 
-	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs)
+	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
@@ -465,8 +476,8 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 // buildSystemPrompt assembles the system prompt from the soul text, memories,
 // language override, and response mode.
-func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow) string {
-	systemPrompt := a.soulText
+func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string) string {
+	systemPrompt := fmt.Sprintf("Your Discord username is %s.\n\n", botName) + a.soulText
 	if len(memories) > 0 {
 		systemPrompt += "\n\n## Relevant Memories\n"
 		for _, m := range memories {
@@ -484,8 +495,8 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 
 // buildCombinedUserMessage builds an LLM user message from a batch of coalesced
 // Discord messages, collecting text and image attachments.
-func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*discordgo.MessageCreate) llm.Message {
-	combinedContent := buildCombinedContent(msgs)
+func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*discordgo.MessageCreate, botID, botName string) llm.Message {
+	combinedContent := buildCombinedContent(msgs, botID, botName)
 
 	var imageParts []llm.ContentPart
 	for _, m := range msgs {

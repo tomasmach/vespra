@@ -39,7 +39,7 @@ func imageServer(t *testing.T, fakeData []byte) (*httptest.Server, func()) {
 }
 
 func TestBuildUserMessageTextOnly(t *testing.T) {
-	m := buildUserMessage(context.Background(), nil, msg("hello"))
+	m := buildUserMessage(context.Background(), nil, msg("hello"), "", "")
 	if m.Role != "user" {
 		t.Errorf("expected role=user, got %q", m.Role)
 	}
@@ -57,7 +57,7 @@ func TestBuildUserMessageWithImage(t *testing.T) {
 	defer cleanup()
 
 	a := attachment("image/png", srv.URL+"/img.png")
-	m := buildUserMessage(context.Background(), srv.Client(), msg("look", a))
+	m := buildUserMessage(context.Background(), srv.Client(), msg("look", a), "", "")
 	if len(m.ContentParts) != 2 {
 		t.Fatalf("expected 2 content parts, got %d", len(m.ContentParts))
 	}
@@ -74,7 +74,7 @@ func TestBuildUserMessageWithImage(t *testing.T) {
 }
 
 func TestBuildUserMessageNonImageAttachmentIgnored(t *testing.T) {
-	m := buildUserMessage(context.Background(), nil, msg("file", attachment("application/pdf", "https://cdn.example.com/doc.pdf")))
+	m := buildUserMessage(context.Background(), nil, msg("file", attachment("application/pdf", "https://cdn.example.com/doc.pdf")), "", "")
 	if len(m.ContentParts) != 0 {
 		t.Errorf("expected no content parts for non-image, got %d", len(m.ContentParts))
 	}
@@ -92,7 +92,7 @@ func TestBuildUserMessageMixedAttachments(t *testing.T) {
 		attachment("image/jpeg", srv.URL+"/photo.jpg"),
 		attachment("application/pdf", "https://cdn.example.com/doc.pdf"),
 		attachment("image/webp", srv.URL+"/pic.webp"),
-	))
+	), "", "")
 	if len(m.ContentParts) != 3 { // text + 2 images
 		t.Fatalf("expected 3 content parts (text + 2 images), got %d", len(m.ContentParts))
 	}
@@ -101,7 +101,7 @@ func TestBuildUserMessageMixedAttachments(t *testing.T) {
 func TestBuildUserMessageImageDownloadFails(t *testing.T) {
 	// Use an unreachable URL to simulate download failure
 	a := attachment("image/png", "http://127.0.0.1:1") // nothing listening
-	m := buildUserMessage(context.Background(), &http.Client{}, msg("look", a))
+	m := buildUserMessage(context.Background(), &http.Client{}, msg("look", a), "", "")
 	// All images failed → falls back to plain text
 	if len(m.ContentParts) != 0 {
 		t.Errorf("expected no content parts when download fails, got %d", len(m.ContentParts))
@@ -116,7 +116,7 @@ func TestBuildUserMessageEmptyText(t *testing.T) {
 	srv, cleanup := imageServer(t, fakeData)
 	defer cleanup()
 
-	m := buildUserMessage(context.Background(), srv.Client(), msg("", attachment("image/gif", srv.URL+"/anim.gif")))
+	m := buildUserMessage(context.Background(), srv.Client(), msg("", attachment("image/gif", srv.URL+"/anim.gif")), "", "")
 	if len(m.ContentParts) != 2 {
 		t.Fatalf("expected 2 parts, got %d", len(m.ContentParts))
 	}
@@ -134,7 +134,7 @@ func TestHistoryUserContentNoReply(t *testing.T) {
 		Author:  &discordgo.User{Username: "alice"},
 		Content: "hello",
 	}
-	got := historyUserContent(m)
+	got := historyUserContent(m, "", "")
 	want := "alice: hello"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -149,7 +149,7 @@ func TestHistoryUserContentWithReply(t *testing.T) {
 			Author: &discordgo.User{Username: "bob"},
 		},
 	}
-	got := historyUserContent(m)
+	got := historyUserContent(m, "", "")
 	want := "alice (replying to bob): I agree"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -163,7 +163,7 @@ func TestHistoryUserContentReplyNoAuthor(t *testing.T) {
 		Content:           "hello",
 		ReferencedMessage: &discordgo.Message{},
 	}
-	got := historyUserContent(m)
+	got := historyUserContent(m, "", "")
 	want := "alice: hello"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
@@ -188,7 +188,7 @@ func TestBuildCombinedContentHeader(t *testing.T) {
 		msgAt("bob", "world", now),
 		msgAt("alice", "again", now),
 	}
-	got := buildCombinedContent(msgs)
+	got := buildCombinedContent(msgs, "", "")
 	firstLine := strings.Split(got, "\n")[0]
 	want := "[3 messages arrived rapidly in quick succession]"
 	if firstLine != want {
@@ -203,7 +203,7 @@ func TestBuildCombinedContentMessageLines(t *testing.T) {
 		msgAt("bob", "world", now),
 		msgAt("alice", "again", now),
 	}
-	got := buildCombinedContent(msgs)
+	got := buildCombinedContent(msgs, "", "")
 	lines := strings.Split(got, "\n")
 	// lines[0] = header, lines[1] = blank, lines[2..4] = messages
 	if len(lines) != 5 {
@@ -230,7 +230,7 @@ func TestBuildCombinedContentTimestampOnlyWhenGapAtLeastOneSecond(t *testing.T) 
 		msgAt("bob", "quick", base.Add(500*time.Millisecond)),
 		msgAt("alice", "later", base.Add(2*time.Second)),
 	}
-	got := buildCombinedContent(msgs)
+	got := buildCombinedContent(msgs, "", "")
 	lines := strings.Split(got, "\n")
 	// lines[2] = first message (no timestamp, it is the reference)
 	// lines[3] = second message (gap < 1s, no timestamp)
@@ -253,7 +253,7 @@ func TestBuildCombinedContentSingleMessage(t *testing.T) {
 	msgs := []*discordgo.MessageCreate{
 		msgAt("alice", "solo", now),
 	}
-	got := buildCombinedContent(msgs)
+	got := buildCombinedContent(msgs, "", "")
 	if !strings.HasPrefix(got, "[1 messages arrived rapidly in quick succession]") {
 		t.Errorf("unexpected output for single message: %q", got)
 	}
