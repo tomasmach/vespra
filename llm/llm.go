@@ -243,8 +243,6 @@ var retryDelays = []time.Duration{500 * time.Millisecond, 1000 * time.Millisecon
 func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCloser, error) {
 	cfg := c.cfgStore.Get()
 	timeout := time.Duration(cfg.LLM.RequestTimeoutSeconds) * time.Second
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -261,8 +259,10 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, timeout)
+		req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, url, bytes.NewReader(data))
 		if err != nil {
+			attemptCancel()
 			return nil, fmt.Errorf("build request: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+key)
@@ -270,6 +270,7 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 		req.Header.Set("HTTP-Referer", "https://github.com/tomasmach/vespra")
 
 		resp, err := http.DefaultClient.Do(req)
+		attemptCancel()
 		if err != nil {
 			lastErr = err
 			continue // all network errors are transient

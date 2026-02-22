@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -255,6 +256,10 @@ func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
 
 	id := r.PathValue("id")
 	if err := mem.Forget(r.Context(), serverID, id); err != nil {
+		if errors.Is(err, memory.ErrMemoryNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
 		slog.Error("forget memory", "error", err, "id", id)
 		http.Error(w, "failed to delete memory", http.StatusInternalServerError)
 		return

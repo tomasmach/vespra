@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -87,9 +88,9 @@ func newID() (string, error) {
 }
 
 func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID string, importance float64) (string, error) {
-	vec, err := s.llm.Embed(ctx, content)
-	if err != nil {
-		return "", fmt.Errorf("embed content: %w", err)
+	vec, embedErr := s.llm.Embed(ctx, content)
+	if embedErr != nil {
+		slog.Warn("embed failed, skipping embedding", "error", embedErr)
 	}
 
 	id, err := newID()
@@ -112,11 +113,13 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 		return "", fmt.Errorf("insert memory: %w", err)
 	}
 
-	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO embeddings (memory_id, vector) VALUES (?, ?)`,
-		id, llm.VectorToBlob(vec),
-	); err != nil {
-		return "", fmt.Errorf("insert embedding: %w", err)
+	if embedErr == nil {
+		if _, err = tx.ExecContext(ctx,
+			`INSERT INTO embeddings (memory_id, vector) VALUES (?, ?)`,
+			id, llm.VectorToBlob(vec),
+		); err != nil {
+			return "", fmt.Errorf("insert embedding: %w", err)
+		}
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -208,11 +211,19 @@ func (s *Store) UpdateContent(ctx context.Context, id, serverID, content string)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if _, err = tx.ExecContext(ctx,
+	result, err := tx.ExecContext(ctx,
 		`UPDATE memories SET content = ?, updated_at = ? WHERE id = ? AND server_id = ? AND forgotten = 0`,
 		content, time.Now().UTC(), id, serverID,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("update memory: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrMemoryNotFound
 	}
 
 	if _, err = tx.ExecContext(ctx,

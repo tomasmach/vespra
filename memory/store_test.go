@@ -115,8 +115,9 @@ func TestForgetHidesFromRecall(t *testing.T) {
 }
 
 func TestSaveWithEmbeddingFailure(t *testing.T) {
-	// Embedding server always returns 500; Save must now return an error
-	// to avoid writing an orphaned memory row with no embedding.
+	// Embedding server always returns 500; Save must still succeed and create
+	// a keyword-only memory (no embedding row) so the bot remains functional
+	// when the embedding service is degraded.
 	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -125,9 +126,12 @@ func TestSaveWithEmbeddingFailure(t *testing.T) {
 	store := newTestStore(t, failSrv)
 	ctx := context.Background()
 
-	_, err := store.Save(ctx, "keyword-only memory", "srv1", "user1", "chan1", 0.5)
-	if err == nil {
-		t.Fatal("Save() should fail when embedding fails, but it succeeded")
+	id, err := store.Save(ctx, "keyword-only memory", "srv1", "user1", "chan1", 0.5)
+	if err != nil {
+		t.Fatalf("Save() should succeed even when embedding fails, got error: %v", err)
+	}
+	if id == "" {
+		t.Fatal("Save() returned empty ID")
 	}
 }
 
