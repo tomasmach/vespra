@@ -27,6 +27,10 @@ func attachment(contentType, url string) *discordgo.MessageAttachment {
 	return &discordgo.MessageAttachment{ContentType: contentType, URL: url}
 }
 
+func attachmentWithSize(contentType, url string, size int) *discordgo.MessageAttachment {
+	return &discordgo.MessageAttachment{ContentType: contentType, URL: url, Size: size}
+}
+
 // imageServer starts a test HTTP server that serves fakeData for any request.
 // Returns the server and a cleanup func.
 func imageServer(t *testing.T, fakeData []byte) (*httptest.Server, func()) {
@@ -318,6 +322,114 @@ func TestBuildCombinedContentSingleMessage(t *testing.T) {
 	// No timestamp suffix for the only (first) message
 	if strings.Contains(got, "(+") {
 		t.Errorf("single message should not have timestamp suffix, got %q", got)
+	}
+}
+
+func TestHistoryUserContentReplyWithVideoOnly(t *testing.T) {
+	m := &discordgo.Message{
+		Author:  &discordgo.User{Username: "alice"},
+		Content: "nice",
+		ReferencedMessage: &discordgo.Message{
+			Author:  &discordgo.User{Username: "bob"},
+			Content: "",
+			Attachments: []*discordgo.MessageAttachment{
+				{ContentType: "video/mp4", URL: "https://cdn.example.com/clip.mp4"},
+			},
+		},
+	}
+	got := historyUserContent(m, "", "")
+	want := `alice (replying to bob: "[video]"): nice`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestHistoryUserContentReplyWithImageAndVideo(t *testing.T) {
+	m := &discordgo.Message{
+		Author:  &discordgo.User{Username: "alice"},
+		Content: "cool",
+		ReferencedMessage: &discordgo.Message{
+			Author:  &discordgo.User{Username: "bob"},
+			Content: "",
+			Attachments: []*discordgo.MessageAttachment{
+				{ContentType: "image/png", URL: "https://cdn.example.com/img.png"},
+				{ContentType: "video/mp4", URL: "https://cdn.example.com/clip.mp4"},
+			},
+		},
+	}
+	got := historyUserContent(m, "", "")
+	want := `alice (replying to bob: "[image], [video]"): cool`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildUserMessageWithVideo(t *testing.T) {
+	fakeData := []byte("fake video bytes")
+	srv, cleanup := imageServer(t, fakeData)
+	defer cleanup()
+
+	a := attachment("video/mp4", srv.URL+"/clip.mp4")
+	m := buildUserMessage(context.Background(), srv.Client(), msg("watch this", a), "", "")
+	if len(m.ContentParts) != 2 {
+		t.Fatalf("expected 2 content parts, got %d", len(m.ContentParts))
+	}
+	if m.ContentParts[0].Type != "text" {
+		t.Errorf("expected first part type=text, got %q", m.ContentParts[0].Type)
+	}
+	if m.ContentParts[1].Type != "video_url" {
+		t.Errorf("expected second part type=video_url, got %q", m.ContentParts[1].Type)
+	}
+	wantURL := fmt.Sprintf("data:video/mp4;base64,%s", base64.StdEncoding.EncodeToString(fakeData))
+	if m.ContentParts[1].VideoURL.URL != wantURL {
+		t.Errorf("unexpected video URL: %q", m.ContentParts[1].VideoURL.URL)
+	}
+}
+
+func TestBuildUserMessageReferencedVideo(t *testing.T) {
+	fakeData := []byte("fake ref video bytes")
+	srv, cleanup := imageServer(t, fakeData)
+	defer cleanup()
+
+	refMsg := &discordgo.Message{
+		Author:  &discordgo.User{Username: "bob"},
+		Content: "",
+		Attachments: []*discordgo.MessageAttachment{
+			{ContentType: "video/mp4", URL: srv.URL + "/ref.mp4"},
+		},
+	}
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content:           "check this out",
+			Author:            &discordgo.User{Username: "alice"},
+			ReferencedMessage: refMsg,
+		},
+	}
+	result := buildUserMessage(context.Background(), srv.Client(), m, "", "")
+	if len(result.ContentParts) != 2 {
+		t.Fatalf("expected 2 content parts (text + ref video), got %d", len(result.ContentParts))
+	}
+	if result.ContentParts[0].Type != "text" {
+		t.Errorf("expected first part type=text, got %q", result.ContentParts[0].Type)
+	}
+	if result.ContentParts[1].Type != "video_url" {
+		t.Errorf("expected second part type=video_url, got %q", result.ContentParts[1].Type)
+	}
+	wantURL := fmt.Sprintf("data:video/mp4;base64,%s", base64.StdEncoding.EncodeToString(fakeData))
+	if result.ContentParts[1].VideoURL.URL != wantURL {
+		t.Errorf("unexpected video URL: %q", result.ContentParts[1].VideoURL.URL)
+	}
+}
+
+func TestBuildUserMessageVideoSkippedWhenTooLarge(t *testing.T) {
+	a := attachmentWithSize("video/mp4", "https://cdn.example.com/huge.mp4", maxVideoBytes+1)
+	m := buildUserMessage(context.Background(), &http.Client{}, msg("big video", a), "", "")
+	// oversized video skipped → falls back to plain text
+	if len(m.ContentParts) != 0 {
+		t.Errorf("expected no content parts for oversized video, got %d", len(m.ContentParts))
+	}
+	if m.Content != "alice: big video" {
+		t.Errorf("unexpected content: %q", m.Content)
 	}
 }
 

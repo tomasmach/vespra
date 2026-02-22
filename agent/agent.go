@@ -72,6 +72,16 @@ func hasImageAttachments(m *discordgo.Message) bool {
 	return false
 }
 
+// hasVideoAttachments reports whether the message has at least one video attachment.
+func hasVideoAttachments(m *discordgo.Message) bool {
+	for _, a := range m.Attachments {
+		if strings.HasPrefix(a.ContentType, "video/") {
+			return true
+		}
+	}
+	return false
+}
+
 // formatMessageContent replaces raw Discord mention syntax (<@ID> and <@!ID>)
 // for the bot with a human-readable "@botName" so the LLM sees natural text.
 func formatMessageContent(content, botID, botName string) string {
@@ -90,8 +100,17 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 		if len(refContent) > 200 {
 			refContent = refContent[:200] + "..."
 		}
-		if refContent == "" && hasImageAttachments(m.ReferencedMessage) {
-			refContent = "[image]"
+		if refContent == "" {
+			var labels []string
+			if hasImageAttachments(m.ReferencedMessage) {
+				labels = append(labels, "[image]")
+			}
+			if hasVideoAttachments(m.ReferencedMessage) {
+				labels = append(labels, "[video]")
+			}
+			if len(labels) > 0 {
+				refContent = strings.Join(labels, ", ")
+			}
 		}
 		return fmt.Sprintf("%s (replying to %s: %q): %s",
 			m.Author.Username,
@@ -102,30 +121,44 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 	return fmt.Sprintf("%s: %s", m.Author.Username, content)
 }
 
+const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
+
 // buildUserMessage converts a Discord message into an llm.Message, downloading
-// any image attachments as base64 data URLs for vision content parts.
-// Discord CDN URLs require authentication, so images must be fetched server-side.
+// any image or video attachments as base64 data URLs for vision content parts.
+// Discord CDN URLs require authentication, so media must be fetched server-side.
 func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
 	text := historyUserContent(msg.Message, botID, botName)
 
-	var images []*discordgo.MessageAttachment
+	var images, videos []*discordgo.MessageAttachment
 	for _, a := range msg.Attachments {
 		if strings.HasPrefix(a.ContentType, "image/") {
 			images = append(images, a)
+		} else if strings.HasPrefix(a.ContentType, "video/") {
+			if a.Size > maxVideoBytes {
+				slog.Warn("skipping oversized video attachment", "size", a.Size, "url", a.URL)
+				continue
+			}
+			videos = append(videos, a)
 		}
 	}
 	if msg.ReferencedMessage != nil {
 		for _, a := range msg.ReferencedMessage.Attachments {
 			if strings.HasPrefix(a.ContentType, "image/") {
 				images = append(images, a)
+			} else if strings.HasPrefix(a.ContentType, "video/") {
+				if a.Size > maxVideoBytes {
+					slog.Warn("skipping oversized referenced video attachment", "size", a.Size, "url", a.URL)
+					continue
+				}
+				videos = append(videos, a)
 			}
 		}
 	}
-	if len(images) == 0 {
+	if len(images) == 0 && len(videos) == 0 {
 		return llm.Message{Role: "user", Content: text}
 	}
 
-	parts := make([]llm.ContentPart, 0, 1+len(images))
+	parts := make([]llm.ContentPart, 0, 1+len(images)+len(videos))
 	parts = append(parts, llm.ContentPart{Type: "text", Text: text})
 	for _, a := range images {
 		dataURL, err := downloadImageAsDataURL(ctx, httpClient, a)
@@ -138,8 +171,19 @@ func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discord
 			ImageURL: &llm.ImageURL{URL: dataURL},
 		})
 	}
+	for _, a := range videos {
+		dataURL, err := downloadImageAsDataURL(ctx, httpClient, a)
+		if err != nil {
+			slog.Warn("failed to download video attachment, skipping", "error", err, "url", a.URL)
+			continue
+		}
+		parts = append(parts, llm.ContentPart{
+			Type:     "video_url",
+			VideoURL: &llm.VideoURL{URL: dataURL},
+		})
+	}
 	if len(parts) == 1 {
-		// all image downloads failed; fall back to plain text
+		// all media downloads failed; fall back to plain text
 		return llm.Message{Role: "user", Content: text}
 	}
 	return llm.Message{Role: "user", ContentParts: parts}
@@ -528,34 +572,47 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 }
 
 // buildCombinedUserMessage builds an LLM user message from a batch of coalesced
-// Discord messages, collecting text and image attachments.
+// Discord messages, collecting text, image, and video attachments.
 func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*discordgo.MessageCreate, botID, botName string) llm.Message {
 	combinedContent := buildCombinedContent(msgs, botID, botName)
 
-	var imageParts []llm.ContentPart
+	var mediaParts []llm.ContentPart
 	for _, m := range msgs {
 		for _, att := range m.Attachments {
-			if !strings.HasPrefix(att.ContentType, "image/") {
-				continue
+			if strings.HasPrefix(att.ContentType, "image/") {
+				dataURL, err := downloadImageAsDataURL(ctx, a.httpClient, att)
+				if err != nil {
+					a.logger.Warn("failed to download image attachment, skipping", "error", err, "url", att.URL)
+					continue
+				}
+				mediaParts = append(mediaParts, llm.ContentPart{
+					Type:     "image_url",
+					ImageURL: &llm.ImageURL{URL: dataURL},
+				})
+			} else if strings.HasPrefix(att.ContentType, "video/") {
+				if att.Size > maxVideoBytes {
+					a.logger.Warn("skipping oversized video attachment", "size", att.Size, "url", att.URL)
+					continue
+				}
+				dataURL, err := downloadImageAsDataURL(ctx, a.httpClient, att)
+				if err != nil {
+					a.logger.Warn("failed to download video attachment, skipping", "error", err, "url", att.URL)
+					continue
+				}
+				mediaParts = append(mediaParts, llm.ContentPart{
+					Type:     "video_url",
+					VideoURL: &llm.VideoURL{URL: dataURL},
+				})
 			}
-			dataURL, err := downloadImageAsDataURL(ctx, a.httpClient, att)
-			if err != nil {
-				a.logger.Warn("failed to download image attachment, skipping", "error", err, "url", att.URL)
-				continue
-			}
-			imageParts = append(imageParts, llm.ContentPart{
-				Type:     "image_url",
-				ImageURL: &llm.ImageURL{URL: dataURL},
-			})
 		}
 	}
 
-	if len(imageParts) == 0 {
+	if len(mediaParts) == 0 {
 		return llm.Message{Role: "user", Content: combinedContent}
 	}
-	parts := make([]llm.ContentPart, 0, 1+len(imageParts))
+	parts := make([]llm.ContentPart, 0, 1+len(mediaParts))
 	parts = append(parts, llm.ContentPart{Type: "text", Text: combinedContent})
-	parts = append(parts, imageParts...)
+	parts = append(parts, mediaParts...)
 	return llm.Message{Role: "user", ContentParts: parts}
 }
 
@@ -730,7 +787,7 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 
 // stripImageParts returns a copy of history with ContentParts replaced by their
 // text-only Content equivalent, suitable for the extraction LLM which has no use
-// for image data.
+// for image or video data.
 func stripImageParts(history []llm.Message) []llm.Message {
 	snapshot := make([]llm.Message, len(history))
 	copy(snapshot, history)
