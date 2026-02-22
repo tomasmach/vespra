@@ -62,9 +62,8 @@ type ChannelAgent struct {
 	msgCh chan *discordgo.MessageCreate // buffered 100
 }
 
-// formatMessageContent replaces raw Discord mention syntax for the bot with a
-// human-readable @botName, so the LLM sees "@BotName" instead of "<@123456>".
-// Both the standard mention format <@ID> and the nickname mention format <@!ID> are handled.
+// formatMessageContent replaces raw Discord mention syntax (<@ID> and <@!ID>)
+// for the bot with a human-readable "@botName" so the LLM sees natural text.
 func formatMessageContent(content, botID, botName string) string {
 	content = strings.ReplaceAll(content, "<@"+botID+">", "@"+botName)
 	content = strings.ReplaceAll(content, "<@!"+botID+">", "@"+botName)
@@ -368,7 +367,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		sendFn:       sendFn,
 		reg:          reg,
 		llmMsgs:      llmMsgs,
-		userMsgText:  fmt.Sprintf("%s: %s", msg.Author.Username, formatMessageContent(msg.Content, botID, botName)),
+		userMsgText:  historyUserContent(msg.Message, botID, botName),
 	})
 }
 
@@ -464,7 +463,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	userLogLines := make([]string, 0, len(msgs))
 	for _, m := range msgs {
-		userLogLines = append(userLogLines, fmt.Sprintf("%s: %s", m.Author.Username, formatMessageContent(m.Content, botID, botName)))
+		userLogLines = append(userLogLines, historyUserContent(m.Message, botID, botName))
 	}
 
 	a.processTurn(ctx, cfg, turnParams{
@@ -492,7 +491,7 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 		}
 	}
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
-		sb.WriteString("\n\nAlways respond in " + lang + ".")
+		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 	if mode == "smart" {
 		sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
