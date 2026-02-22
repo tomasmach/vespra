@@ -596,7 +596,7 @@ func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
 	needsConfigUpdate := false
 
 	if agent.SoulFile == "" {
-		soulPath = filepath.Join(filepath.Dir(s.cfgPath), "souls", id+".md")
+		soulPath = filepath.Join(s.agentSoulDir(id), "default.md")
 		needsConfigUpdate = true
 	} else {
 		soulPath = config.ExpandPath(agent.SoulFile)
@@ -796,13 +796,25 @@ func (s *Server) handleCreateAgentSoul(w http.ResponseWriter, r *http.Request) {
 	}
 
 	soulPath := filepath.Join(soulDir, body.Name+".md")
-	if _, err := os.Stat(soulPath); err == nil {
-		http.Error(w, "soul already exists", http.StatusConflict)
+	f, err := os.OpenFile(soulPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			http.Error(w, "soul already exists", http.StatusConflict)
+		} else {
+			slog.Error("create soul file", "error", err)
+			http.Error(w, "failed to write soul file", http.StatusInternalServerError)
+		}
 		return
 	}
-
-	if err := os.WriteFile(soulPath, []byte(body.Content), 0o644); err != nil {
+	if _, err := f.WriteString(body.Content); err != nil {
+		f.Close()
+		os.Remove(soulPath)
 		slog.Error("write soul file", "error", err)
+		http.Error(w, "failed to write soul file", http.StatusInternalServerError)
+		return
+	}
+	if err := f.Close(); err != nil {
+		slog.Error("close soul file", "error", err)
 		http.Error(w, "failed to write soul file", http.StatusInternalServerError)
 		return
 	}
@@ -869,8 +881,13 @@ func (s *Server) handlePutAgentSoulByName(w http.ResponseWriter, r *http.Request
 	}
 
 	soulPath := filepath.Join(s.agentSoulDir(id), name+".md")
-	if _, err := os.Stat(soulPath); os.IsNotExist(err) {
-		http.Error(w, "soul not found", http.StatusNotFound)
+	if _, err := os.Stat(soulPath); err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "soul not found", http.StatusNotFound)
+		} else {
+			slog.Error("stat soul file", "error", err)
+			http.Error(w, "failed to stat soul file", http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -891,8 +908,12 @@ func (s *Server) handleDeleteAgentSoulByName(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	cfg := s.cfgStore.Get()
-	if findAgentIndex(cfg.Agents, id) == -1 {
+	agentIdx := findAgentIndex(cfg.Agents, id)
+	if agentIdx == -1 {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
@@ -906,6 +927,16 @@ func (s *Server) handleDeleteAgentSoulByName(w http.ResponseWriter, r *http.Requ
 		slog.Error("delete soul file", "error", err)
 		http.Error(w, "failed to delete soul file", http.StatusInternalServerError)
 		return
+	}
+
+	// If the deleted soul was the active one, clear the soul_file from config to avoid a dangling reference.
+	if config.ExpandPath(cfg.Agents[agentIdx].SoulFile) == soulPath {
+		newAgents := slices.Clone(cfg.Agents)
+		newAgents[agentIdx].SoulFile = ""
+		if err := s.writeAgents(newAgents); err != nil {
+			slog.Error("clear soul_file after delete", "error", err)
+			// File is already deleted; log but do not fail the request.
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -930,8 +961,13 @@ func (s *Server) handleActivateAgentSoul(w http.ResponseWriter, r *http.Request)
 	}
 
 	soulPath := filepath.Join(s.agentSoulDir(id), name+".md")
-	if _, err := os.Stat(soulPath); os.IsNotExist(err) {
-		http.Error(w, "soul not found", http.StatusNotFound)
+	if _, err := os.Stat(soulPath); err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "soul not found", http.StatusNotFound)
+		} else {
+			slog.Error("stat soul file", "error", err)
+			http.Error(w, "failed to stat soul file", http.StatusInternalServerError)
+		}
 		return
 	}
 
