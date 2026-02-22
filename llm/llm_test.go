@@ -82,7 +82,7 @@ func TestChatRetriesOn5xx(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := clientWithBaseURL(t, srv.URL)
-	choice, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil)
+	choice, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, nil)
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestChatFailsFastOn4xx(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := clientWithBaseURL(t, srv.URL)
-	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil)
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, nil)
 	if err == nil {
 		t.Fatal("expected error on 4xx, got nil")
 	}
@@ -133,7 +133,7 @@ func TestChatRetries429(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := clientWithBaseURL(t, srv.URL)
-	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil)
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, nil)
 	if err != nil {
 		t.Fatalf("expected success after 429 retry, got: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestVisionModelUsedForCurrentImageMessage(t *testing.T) {
 		},
 	}
 
-	_, err := client.Chat(context.Background(), messages, nil)
+	_, err := client.Chat(context.Background(), messages, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestVisionModelNotUsedForHistoricalImageMessage(t *testing.T) {
 		{Role: "user", Content: "what do you think about it?"},
 	}
 
-	_, err := client.Chat(context.Background(), messages, nil)
+	_, err := client.Chat(context.Background(), messages, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestNoVisionModelStripsImages(t *testing.T) {
 		},
 	}
 
-	_, err := client.Chat(context.Background(), messages, nil)
+	_, err := client.Chat(context.Background(), messages, nil, nil)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestNoVisionModelStripsHistoricalImages(t *testing.T) {
 		{Role: "user", Content: "what do you think?"},
 	}
 
-	_, err := client.Chat(context.Background(), messages, nil)
+	_, err := client.Chat(context.Background(), messages, nil, nil)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -338,6 +338,213 @@ func TestNoVisionModelStripsHistoricalImages(t *testing.T) {
 	}
 	if !strings.Contains(content, "image(s) attached") {
 		t.Errorf("expected note about image in historical message content, got %q", content)
+	}
+}
+
+// captureRequestServer captures the request URL path, authorization header, and
+// request body for each call, then returns a success response.
+func captureRequestServer(t *testing.T) (*httptest.Server, *string, *string, *map[string]any) {
+	t.Helper()
+	var capturedURL string
+	var capturedAuth string
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedURL = r.URL.Path
+		capturedAuth = r.Header.Get("Authorization")
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &capturedURL, &capturedAuth, &capturedBody
+}
+
+func newTestClientWithConfig(t *testing.T, cfg *config.Config) *llm.Client {
+	t.Helper()
+	cfgStore := config.NewStoreFromConfig(cfg)
+	return llm.New(cfgStore)
+}
+
+// TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint verifies that when
+// opts.Provider is "openrouter" the request is sent to the OpenRouter base URL
+// rather than the default BaseURL, using openrouter_key.
+func TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint(t *testing.T) {
+	srv, capturedURL, capturedAuth, _ := captureRequestServer(t)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "openrouter-key",
+			Model:                 "global-model",
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               "http://should-not-be-used.invalid",
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+	t.Cleanup(llm.SetOpenRouterBaseURL(client, srv.URL))
+
+	opts := &llm.ChatOptions{Provider: "openrouter"}
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *capturedURL != "/chat/completions" {
+		t.Errorf("expected request path /chat/completions, got %q", *capturedURL)
+	}
+	if *capturedAuth != "Bearer openrouter-key" {
+		t.Errorf("expected Authorization header %q, got %q", "Bearer openrouter-key", *capturedAuth)
+	}
+}
+
+// TestChatOptsProviderGLMRoutesToGLMEndpoint verifies that when opts.Provider is
+// "glm" the request is sent to the configured GLMBaseURL using the GLMKey.
+func TestChatOptsProviderGLMRoutesToGLMEndpoint(t *testing.T) {
+	srv, capturedURL, capturedAuth, _ := captureRequestServer(t)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "or-key",
+			GLMKey:                "glm-secret",
+			GLMBaseURL:            srv.URL,
+			Model:                 "global-model",
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               "http://should-not-be-used.invalid",
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+
+	opts := &llm.ChatOptions{Provider: "glm"}
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *capturedURL != "/chat/completions" {
+		t.Errorf("expected request path /chat/completions, got %q", *capturedURL)
+	}
+	if *capturedAuth != "Bearer glm-secret" {
+		t.Errorf("expected Authorization header %q, got %q", "Bearer glm-secret", *capturedAuth)
+	}
+}
+
+// TestChatOptsModelOverrideIsUsed verifies that when opts.Model is set, the
+// request body contains that model name instead of the global default.
+func TestChatOptsModelOverrideIsUsed(t *testing.T) {
+	srv, capturedModel := captureModelServer(t)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "test-key",
+			Model:                 "global-model",
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               srv.URL,
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+
+	opts := &llm.ChatOptions{Model: "per-agent-model"}
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *capturedModel != "per-agent-model" {
+		t.Errorf("expected model %q, got %q", "per-agent-model", *capturedModel)
+	}
+}
+
+// TestChatOptsProviderWinsOverVisionRouting verifies that when opts.Provider is
+// set and the last message has image ContentParts and a VisionModel is configured
+// globally, the per-agent provider takes precedence and the request goes to the
+// GLM endpoint rather than the vision endpoint.
+func TestChatOptsProviderWinsOverVisionRouting(t *testing.T) {
+	glmSrv, capturedURL, capturedAuth, _ := captureRequestServer(t)
+
+	// Set up a separate vision server so we can confirm it is NOT used.
+	visionCalled := false
+	visionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		visionCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "vision-ok"}},
+			},
+		})
+	}))
+	t.Cleanup(visionSrv.Close)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "or-key",
+			GLMKey:                "glm-secret",
+			GLMBaseURL:            glmSrv.URL,
+			Model:                 "global-model",
+			VisionModel:           "vision-model",
+			VisionBaseURL:         visionSrv.URL,
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+
+	imageMessages := []llm.Message{
+		{Role: "user", Content: "hi"},
+		{
+			Role: "user",
+			ContentParts: []llm.ContentPart{
+				{Type: "text", Text: "what is this?"},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://example.com/img.png"}},
+			},
+		},
+	}
+
+	opts := &llm.ChatOptions{Provider: "glm"}
+	_, err := client.Chat(context.Background(), imageMessages, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if visionCalled {
+		t.Error("vision server was called but per-agent provider should have taken precedence")
+	}
+	if *capturedURL != "/chat/completions" {
+		t.Errorf("expected GLM endpoint /chat/completions, got %q", *capturedURL)
+	}
+	if *capturedAuth != "Bearer glm-secret" {
+		t.Errorf("expected GLM auth header %q, got %q", "Bearer glm-secret", *capturedAuth)
+	}
+}
+
+// TestChatNilOptsFallsBackToGlobalConfig verifies that when opts is nil the
+// global cfg.Model and default BaseURL are used unchanged.
+func TestChatNilOptsFallsBackToGlobalConfig(t *testing.T) {
+	srv, capturedModel := captureModelServer(t)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "test-key",
+			Model:                 "global-model",
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               srv.URL,
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *capturedModel != "global-model" {
+		t.Errorf("expected global model %q, got %q", "global-model", *capturedModel)
 	}
 }
 

@@ -19,7 +19,7 @@ func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(cfgPath, []byte("[bot]\ntoken=\"x\"\n[llm]\napi_key=\"test\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("[bot]\ntoken=\"x\"\n[llm]\nopenrouter_key=\"test\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	store, err := config.NewStore(cfgPath)

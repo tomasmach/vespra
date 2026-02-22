@@ -114,9 +114,17 @@ type Choice struct {
 	FinishReason string  `json:"finish_reason"`
 }
 
+// ChatOptions allows per-request provider and model overrides.
+// A nil pointer or zero value means "use global defaults".
+type ChatOptions struct {
+	Provider string // "openrouter" | "glm" | "" (use global)
+	Model    string // override model name; "" = use global
+}
+
 type Client struct {
-	cfgStore   *config.Store
-	httpClient *http.Client
+	cfgStore          *config.Store
+	httpClient        *http.Client
+	openRouterBaseURL string // for testing: overrides the hardcoded OpenRouter endpoint
 }
 
 func New(cfgStore *config.Store) *Client {
@@ -134,11 +142,7 @@ func (c *Client) apiBase() string {
 }
 
 func (c *Client) chatKey() string {
-	cfg := c.cfgStore.Get().LLM
-	if cfg.APIKey != "" {
-		return cfg.APIKey
-	}
-	return cfg.OpenRouterKey
+	return c.cfgStore.Get().LLM.OpenRouterKey
 }
 
 func (c *Client) embeddingBase() string {
@@ -148,29 +152,37 @@ func (c *Client) embeddingBase() string {
 	return c.apiBase()
 }
 
-func (c *Client) embeddingKey() string {
-	cfg := c.cfgStore.Get().LLM
-	if cfg.EmbeddingKey != "" {
-		return cfg.EmbeddingKey
-	}
-	return c.chatKey()
-}
-
-func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (Choice, error) {
+func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, opts *ChatOptions) (Choice, error) {
 	cfg := c.cfgStore.Get().LLM
 	model := cfg.Model
 	apiBase := c.apiBase()
 	apiKey := c.chatKey()
 
+	// Apply per-request provider override before vision logic.
+	if opts != nil {
+		switch opts.Provider {
+		case "openrouter":
+			if c.openRouterBaseURL != "" {
+				apiBase = c.openRouterBaseURL
+			} else {
+				apiBase = "https://openrouter.ai/api/v1"
+			}
+		case "glm":
+			apiBase = cfg.GLMBaseURL
+			apiKey = cfg.GLMKey
+		}
+		if opts.Model != "" {
+			model = opts.Model
+		}
+	}
+
+	hasPerAgentProvider := opts != nil && opts.Provider != ""
 	last := len(messages) - 1
 	switch {
-	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "":
+	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "" && !hasPerAgentProvider:
 		model = cfg.VisionModel
 		if cfg.VisionBaseURL != "" {
 			apiBase = cfg.VisionBaseURL
-		}
-		if cfg.VisionKey != "" {
-			apiKey = cfg.VisionKey
 		}
 	case cfg.VisionModel == "" && messagesHaveImages(messages):
 		messages = stripImages(messages)
@@ -206,7 +218,7 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		"input": text,
 	}
 
-	respBody, err := c.post(ctx, c.embeddingBase()+"/embeddings", c.embeddingKey(), body)
+	respBody, err := c.post(ctx, c.embeddingBase()+"/embeddings", c.chatKey(), body)
 	if err != nil {
 		return nil, err
 	}

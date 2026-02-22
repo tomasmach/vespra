@@ -34,16 +34,15 @@ type BotConfig struct {
 
 type LLMConfig struct {
 	OpenRouterKey         string `toml:"openrouter_key" json:"-"`
-	APIKey                string `toml:"api_key" json:"-"`
+	GLMKey                string `toml:"glm_key" json:"-"`
+	GLMBaseURL            string `toml:"glm_base_url" json:"-"`
 	Model                 string `toml:"model"`
 	VisionModel           string `toml:"vision_model"`
 	VisionBaseURL         string `toml:"vision_base_url" json:"-"`
-	VisionKey             string `toml:"vision_key" json:"-"`
 	EmbeddingModel        string `toml:"embedding_model"`
 	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
 	BaseURL               string `toml:"base_url" json:"-"`
 	EmbeddingBaseURL      string `toml:"embedding_base_url" json:"-"`
-	EmbeddingKey          string `toml:"embedding_key" json:"-"`
 }
 
 type MemoryConfig struct {
@@ -77,6 +76,8 @@ type AgentConfig struct {
 	DBPath       string          `toml:"db_path" json:"db_path,omitempty"`
 	ResponseMode string          `toml:"response_mode" json:"response_mode,omitempty"`
 	Language     string          `toml:"language" json:"language,omitempty"`
+	Provider     string          `toml:"provider" json:"provider,omitempty"` // "openrouter" | "glm" | "" (inherit global)
+	Model        string          `toml:"model" json:"model,omitempty"`       // model name override; "" = use global
 	IgnoreUsers  []string        `toml:"ignore_users,omitempty" json:"ignore_users,omitempty"`
 	Channels     []ChannelConfig `toml:"channels" json:"channels,omitempty"`
 }
@@ -133,6 +134,9 @@ func Load(path string) (*Config, error) {
 	if cfg.Web.Addr == "" {
 		cfg.Web.Addr = ":8080"
 	}
+	if cfg.LLM.GLMBaseURL == "" {
+		cfg.LLM.GLMBaseURL = "https://open.bigmodel.cn/api/paas/v4"
+	}
 	if cfg.LLM.RequestTimeoutSeconds == 0 {
 		cfg.LLM.RequestTimeoutSeconds = 60
 	}
@@ -165,8 +169,8 @@ func Load(path string) (*Config, error) {
 	if cfg.Bot.Token == "" {
 		return nil, fmt.Errorf("bot.token is required")
 	}
-	if cfg.LLM.OpenRouterKey == "" && cfg.LLM.APIKey == "" {
-		return nil, fmt.Errorf("llm.openrouter_key or llm.api_key is required")
+	if cfg.LLM.OpenRouterKey == "" && cfg.LLM.GLMKey == "" {
+		return nil, fmt.Errorf("llm.openrouter_key or llm.glm_key is required")
 	}
 
 	// Validate response mode values
@@ -174,12 +178,19 @@ func Load(path string) (*Config, error) {
 	if !validModes[cfg.Response.DefaultMode] {
 		return nil, fmt.Errorf("response.default_mode %q is invalid (must be smart, mention, all, or none)", cfg.Response.DefaultMode)
 	}
+	validProviders := map[string]bool{"openrouter": true, "glm": true}
 	for _, agent := range cfg.Agents {
 		if agent.ServerID == "" {
 			return nil, fmt.Errorf("agent %q: server_id is required", agent.ID)
 		}
 		if agent.ResponseMode != "" && !validModes[agent.ResponseMode] {
 			return nil, fmt.Errorf("agent %s response_mode %q is invalid (must be smart, mention, all, or none)", agent.ID, agent.ResponseMode)
+		}
+		if agent.Provider != "" && !validProviders[agent.Provider] {
+			return nil, fmt.Errorf("agent %s provider %q is invalid (must be openrouter or glm)", agent.ID, agent.Provider)
+		}
+		if agent.Provider == "glm" && cfg.LLM.GLMKey == "" {
+			return nil, fmt.Errorf("agent %s uses provider %q but llm.glm_key is not configured", agent.ID, agent.Provider)
 		}
 		for _, ch := range agent.Channels {
 			if ch.ResponseMode != "" && !validModes[ch.ResponseMode] {

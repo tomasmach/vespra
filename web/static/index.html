@@ -105,6 +105,14 @@
             </select>
             <label>Language (optional)</label>
             <input id="na-language" type="text" placeholder="e.g. Czech, Spanish">
+            <label>LLM Provider</label>
+            <select id="na-provider">
+              <option value="">inherit global</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="glm">GLM (智谱AI)</option>
+            </select>
+            <label>Model (optional)</label>
+            <input id="na-model" type="text" placeholder="e.g. gpt-4o, glm-4-flash (leave blank for global default)">
           </div>
           <div class="flex gap-2">
             <button class="btn-secondary" onclick="cancelNewAgent()">Cancel</button>
@@ -149,6 +157,14 @@
             </select>
             <label>Language (optional)</label>
             <input id="cfg-language" type="text" placeholder="e.g. Czech, Spanish">
+            <label>LLM Provider</label>
+            <select id="cfg-provider">
+              <option value="">inherit global</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="glm">GLM (智谱AI)</option>
+            </select>
+            <label>Model (optional)</label>
+            <input id="cfg-model" type="text" placeholder="e.g. gpt-4o, glm-4-flash (leave blank for global default)">
             <label class="col-span-2">Ignored Users</label>
             <div class="col-span-2" id="ignored-users-list"></div>
             <div class="col-span-2 flex gap-2">

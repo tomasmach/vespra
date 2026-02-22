@@ -328,6 +328,8 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		DBPath       string                 `json:"db_path,omitempty"`
 		ResponseMode string                 `json:"response_mode,omitempty"`
 		Language     string                 `json:"language,omitempty"`
+		Provider     string                 `json:"provider,omitempty"`
+		Model        string                 `json:"model,omitempty"`
 		Channels     []config.ChannelConfig `json:"channels,omitempty"`
 	}
 	views := make([]agentView, len(cfg.Agents))
@@ -340,6 +342,8 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			DBPath:       a.DBPath,
 			ResponseMode: a.ResponseMode,
 			Language:     a.Language,
+			Provider:     a.Provider,
+			Model:        a.Model,
 			Channels:     a.Channels,
 		}
 	}
