@@ -341,6 +341,243 @@ func TestNoVisionModelStripsHistoricalImages(t *testing.T) {
 	}
 }
 
+// captureRequestServer captures the request URL path, authorization header, and
+// request body for each call, then returns a success response.
+func captureRequestServer(t *testing.T) (*httptest.Server, *string, *string, *map[string]any) {
+	t.Helper()
+	var capturedURL string
+	var capturedAuth string
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedURL = r.URL.Path
+		capturedAuth = r.Header.Get("Authorization")
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &capturedURL, &capturedAuth, &capturedBody
+}
+
+func newTestClientWithConfig(t *testing.T, cfg *config.Config) *llm.Client {
+	t.Helper()
+	cfgStore := config.NewStoreFromConfig(cfg)
+	return llm.New(cfgStore)
+}
+
+// TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint verifies that when
+// opts.Provider is "openrouter" the request is sent to the OpenRouter base URL
+// rather than the default BaseURL, and that APIKey is preferred over OpenRouterKey.
+func TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint(t *testing.T) {
+	srv, capturedURL, capturedAuth, _ := captureRequestServer(t)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			APIKey:                "preferred-api-key",
+			OpenRouterKey:         "fallback-or-key",
+			Model:                 "global-model",
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               "http://should-not-be-used.invalid",
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+	t.Cleanup(llm.SetOpenRouterBaseURL(client, srv.URL))
+
+	opts := &llm.ChatOptions{Provider: "openrouter"}
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *capturedURL != "/chat/completions" {
+		t.Errorf("expected request path /chat/completions, got %q", *capturedURL)
+	}
+	// APIKey must be preferred over OpenRouterKey when openrouter provider is chosen.
+	if *capturedAuth != "Bearer preferred-api-key" {
+		t.Errorf("expected Authorization header %q, got %q", "Bearer preferred-api-key", *capturedAuth)
+	}
+}
+
+// TestChatOptsProviderOpenRouterFallsBackToOpenRouterKey verifies that when
+// opts.Provider is "openrouter" and APIKey is empty, OpenRouterKey is used.
+func TestChatOptsProviderOpenRouterFallsBackToOpenRouterKey(t *testing.T) {
+	srv, _, capturedAuth, _ := captureRequestServer(t)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "or-key-only",
+			Model:                 "global-model",
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+	t.Cleanup(llm.SetOpenRouterBaseURL(client, srv.URL))
+
+	opts := &llm.ChatOptions{Provider: "openrouter"}
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *capturedAuth != "Bearer or-key-only" {
+		t.Errorf("expected Authorization header %q, got %q", "Bearer or-key-only", *capturedAuth)
+	}
+}
+
+// TestChatOptsProviderGLMRoutesToGLMEndpoint verifies that when opts.Provider is
+// "glm" the request is sent to the configured GLMBaseURL using the GLMKey.
+func TestChatOptsProviderGLMRoutesToGLMEndpoint(t *testing.T) {
+	srv, capturedURL, capturedAuth, _ := captureRequestServer(t)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "or-key",
+			GLMKey:                "glm-secret",
+			GLMBaseURL:            srv.URL,
+			Model:                 "global-model",
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               "http://should-not-be-used.invalid",
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+
+	opts := &llm.ChatOptions{Provider: "glm"}
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *capturedURL != "/chat/completions" {
+		t.Errorf("expected request path /chat/completions, got %q", *capturedURL)
+	}
+	if *capturedAuth != "Bearer glm-secret" {
+		t.Errorf("expected Authorization header %q, got %q", "Bearer glm-secret", *capturedAuth)
+	}
+}
+
+// TestChatOptsModelOverrideIsUsed verifies that when opts.Model is set, the
+// request body contains that model name instead of the global default.
+func TestChatOptsModelOverrideIsUsed(t *testing.T) {
+	srv, capturedModel := captureModelServer(t)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "test-key",
+			Model:                 "global-model",
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               srv.URL,
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+
+	opts := &llm.ChatOptions{Model: "per-agent-model"}
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *capturedModel != "per-agent-model" {
+		t.Errorf("expected model %q, got %q", "per-agent-model", *capturedModel)
+	}
+}
+
+// TestChatOptsProviderWinsOverVisionRouting verifies that when opts.Provider is
+// set and the last message has image ContentParts and a VisionModel is configured
+// globally, the per-agent provider takes precedence and the request goes to the
+// GLM endpoint rather than the vision endpoint.
+func TestChatOptsProviderWinsOverVisionRouting(t *testing.T) {
+	glmSrv, capturedURL, capturedAuth, _ := captureRequestServer(t)
+
+	// Set up a separate vision server so we can confirm it is NOT used.
+	visionCalled := false
+	visionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		visionCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": "vision-ok"}},
+			},
+		})
+	}))
+	t.Cleanup(visionSrv.Close)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "or-key",
+			GLMKey:                "glm-secret",
+			GLMBaseURL:            glmSrv.URL,
+			Model:                 "global-model",
+			VisionModel:           "vision-model",
+			VisionBaseURL:         visionSrv.URL,
+			VisionKey:             "vision-secret",
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+
+	imageMessages := []llm.Message{
+		{Role: "user", Content: "hi"},
+		{
+			Role: "user",
+			ContentParts: []llm.ContentPart{
+				{Type: "text", Text: "what is this?"},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://example.com/img.png"}},
+			},
+		},
+	}
+
+	opts := &llm.ChatOptions{Provider: "glm"}
+	_, err := client.Chat(context.Background(), imageMessages, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if visionCalled {
+		t.Error("vision server was called but per-agent provider should have taken precedence")
+	}
+	if *capturedURL != "/chat/completions" {
+		t.Errorf("expected GLM endpoint /chat/completions, got %q", *capturedURL)
+	}
+	if *capturedAuth != "Bearer glm-secret" {
+		t.Errorf("expected GLM auth header %q, got %q", "Bearer glm-secret", *capturedAuth)
+	}
+}
+
+// TestChatNilOptsFallsBackToGlobalConfig verifies that when opts is nil the
+// global cfg.Model and default BaseURL are used unchanged.
+func TestChatNilOptsFallsBackToGlobalConfig(t *testing.T) {
+	srv, capturedModel := captureModelServer(t)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "test-key",
+			Model:                 "global-model",
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               srv.URL,
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *capturedModel != "global-model" {
+		t.Errorf("expected global model %q, got %q", "global-model", *capturedModel)
+	}
+}
+
 func TestMessageMarshalContentParts(t *testing.T) {
 	msg := llm.Message{
 		Role: "user",

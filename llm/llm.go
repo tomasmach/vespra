@@ -122,8 +122,9 @@ type ChatOptions struct {
 }
 
 type Client struct {
-	cfgStore   *config.Store
-	httpClient *http.Client
+	cfgStore          *config.Store
+	httpClient        *http.Client
+	openRouterBaseURL string // for testing: overrides the hardcoded OpenRouter endpoint
 }
 
 func New(cfgStore *config.Store) *Client {
@@ -173,8 +174,16 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	if opts != nil {
 		switch opts.Provider {
 		case "openrouter":
-			apiBase = "https://openrouter.ai/api/v1"
-			apiKey = cfg.OpenRouterKey
+			if c.openRouterBaseURL != "" {
+				apiBase = c.openRouterBaseURL
+			} else {
+				apiBase = "https://openrouter.ai/api/v1"
+			}
+			if cfg.APIKey != "" {
+				apiKey = cfg.APIKey
+			} else {
+				apiKey = cfg.OpenRouterKey
+			}
 		case "glm":
 			apiBase = cfg.GLMBaseURL
 			apiKey = cfg.GLMKey
@@ -185,8 +194,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	}
 
 	last := len(messages) - 1
+	noPerAgentProvider := opts == nil || opts.Provider == ""
 	switch {
-	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "":
+	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "" && noPerAgentProvider:
 		model = cfg.VisionModel
 		if cfg.VisionBaseURL != "" {
 			apiBase = cfg.VisionBaseURL
