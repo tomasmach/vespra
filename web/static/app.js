@@ -231,6 +231,7 @@ function loadSoul(agentId) {
   document.getElementById('soul-path-info').textContent = 'Loading…';
   document.getElementById('soul-status').textContent = '';
   document.getElementById('btn-activate-soul').hidden = true;
+  document.getElementById('btn-delete-soul').hidden = true;
   hideNewSoulForm();
 
   fetch('/api/agents/' + encodeURIComponent(agentId) + '/souls')
@@ -272,23 +273,28 @@ function loadAgentSouls(agentId) {
 }
 
 function renderAgentSouls(data) {
-  const list = document.getElementById('soul-library-list');
+  const select = document.getElementById('soul-select');
   const souls = data.souls || [];
+  const prev = select.value;
 
-  if (!souls.length) {
-    list.innerHTML = '<p class="empty-msg text-xs" style="padding:0.25rem 0;font-size:0.75rem;color:#71717a">No souls in library yet.</p>';
-    return;
-  }
+  select.innerHTML = '<option value="">— select a soul —</option>';
+  souls.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.name;
+    opt.textContent = s.name + (s.active ? ' ★' : '');
+    if (s.name === prev || s.name === editingSoulName) opt.selected = true;
+    select.appendChild(opt);
+  });
 
-  list.innerHTML = souls.map(s => {
-    const isEditing = editingSoulName === s.name;
-    return '<div class="flex items-center gap-2 py-1">' +
-      '<span class="font-mono flex-1 text-sm' + (isEditing ? ' text-zinc-100' : ' text-zinc-400') + '">' + esc(s.name) + '</span>' +
-      (s.active ? '<span class="badge badge-green" style="font-size:0.65rem;padding:1px 5px">active</span>' : '') +
-      '<button class="btn-secondary text-xs" onclick="editAgentSoul(\'' + esc(s.name) + '\')">' + (isEditing ? 'Editing' : 'Edit') + '</button>' +
-      '<button class="btn-danger-sm" onclick="deleteAgentSoul(\'' + esc(s.name) + '\')">Delete</button>' +
-    '</div>';
-  }).join('');
+  // Update toolbar button visibility
+  const hasSelection = !!editingSoulName;
+  document.getElementById('btn-activate-soul').hidden = !hasSelection;
+  document.getElementById('btn-delete-soul').hidden = !hasSelection;
+}
+
+function onSoulSelectChange() {
+  const name = document.getElementById('soul-select').value;
+  if (name) editAgentSoul(name);
 }
 
 function showNewSoulForm() {
@@ -327,7 +333,9 @@ function editAgentSoul(name) {
   editingSoulName = name;
   document.getElementById('soul-editor').value = '';
   document.getElementById('soul-path-info').textContent = 'Loading…';
+  document.getElementById('soul-select').value = name;
   document.getElementById('btn-activate-soul').hidden = false;
+  document.getElementById('btn-delete-soul').hidden = false;
 
   fetch('/api/agents/' + encodeURIComponent(selectedAgentId) + '/souls/' + encodeURIComponent(name))
     .then(r => {
@@ -401,6 +409,11 @@ function activateAgentSoul(name) {
     .catch(() => setSoulStatus('Activate failed', true));
 }
 
+function deleteSelectedSoul() {
+  if (!selectedAgentId || !editingSoulName) return;
+  deleteAgentSoul(editingSoulName);
+}
+
 function deleteAgentSoul(name) {
   if (!selectedAgentId) return;
   if (!confirm('Delete soul "' + name + '"?')) return;
@@ -414,7 +427,6 @@ function deleteAgentSoul(name) {
           editingSoulName = null;
           document.getElementById('soul-editor').value = '';
           document.getElementById('soul-path-info').textContent = '';
-          document.getElementById('btn-activate-soul').hidden = true;
         }
         loadAgentSouls(selectedAgentId);
       } else {

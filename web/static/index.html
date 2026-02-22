@@ -166,17 +166,20 @@
         <div id="detail-soul" class="flex flex-col flex-1 overflow-hidden" hidden>
           <!-- Library section -->
           <div class="flex-shrink-0 px-6 pt-5 pb-4 border-b border-zinc-800">
-            <div class="flex items-center justify-between mb-3">
-              <span class="text-[10px] font-semibold tracking-widest text-zinc-500 uppercase">Soul Library</span>
-              <button class="btn-secondary text-xs" onclick="showNewSoulForm()">+ New Soul</button>
+            <div class="flex items-center gap-2 mb-3">
+              <select id="soul-select" class="flex-1" onchange="onSoulSelectChange()">
+                <option value="">— select a soul —</option>
+              </select>
+              <button class="btn-secondary text-xs flex-shrink-0" onclick="showNewSoulForm()">+ New</button>
+              <button id="btn-activate-soul" class="btn-secondary text-xs flex-shrink-0" onclick="activateEditingSoul()" hidden>Activate</button>
+              <button id="btn-delete-soul" class="btn-danger-sm flex-shrink-0" onclick="deleteSelectedSoul()" hidden>Delete</button>
             </div>
-            <div id="soul-new-form" hidden class="flex gap-2 items-center mb-3">
+            <div id="soul-new-form" hidden class="flex gap-2 items-center mb-2">
               <input id="new-soul-name" type="text" class="flex-1" placeholder="soul-name (letters, digits, -, _)">
               <button class="btn-primary text-xs" onclick="createAgentSoul()">Create</button>
               <button class="btn-secondary text-xs" onclick="hideNewSoulForm()">Cancel</button>
             </div>
             <span id="soul-lib-status" class="status-msg"></span>
-            <div id="soul-library-list" class="flex flex-col gap-0.5"></div>
           </div>
           <!-- Editor section -->
           <div class="flex flex-col flex-1 overflow-hidden px-6 py-4">
@@ -184,7 +187,6 @@
             <textarea id="soul-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
             <div class="flex gap-2 mt-3 flex-shrink-0">
               <button class="btn-primary" onclick="saveSoul()">Save</button>
-              <button id="btn-activate-soul" class="btn-secondary" onclick="activateEditingSoul()" hidden>Activate</button>
             </div>
             <span id="soul-status" class="status-msg"></span>
           </div>
