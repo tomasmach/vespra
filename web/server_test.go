@@ -1,12 +1,13 @@
 package web_test
 
 import (
-	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tomasmach/vespra/agent"
@@ -31,122 +32,166 @@ func newTestServer(t *testing.T) (*httptest.Server, string) {
 	return ts, dir
 }
 
-func TestSoulLibraryCRUD(t *testing.T) {
-	ts, dir := newTestServer(t)
-
-	// List — initially empty
-	resp, _ := http.Get(ts.URL + "/api/soul-library")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list got %d", resp.StatusCode)
-	}
-	var list []map[string]any
-	json.NewDecoder(resp.Body).Decode(&list)
-	resp.Body.Close()
-	if len(list) != 0 {
-		t.Fatalf("want empty list, got %v", list)
-	}
-
-	// Create
-	body, _ := json.Marshal(map[string]string{"name": "friendly", "content": "You are friendly."})
-	resp, _ = http.Post(ts.URL+"/api/soul-library", "application/json", bytes.NewReader(body))
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create got %d", resp.StatusCode)
-	}
-	resp.Body.Close()
-
-	// Verify file on disk
-	wantPath := filepath.Join(dir, "soul-library", "friendly.md")
-	data, err := os.ReadFile(wantPath)
-	if err != nil {
-		t.Fatalf("file not created: %v", err)
-	}
-	if string(data) != "You are friendly." {
-		t.Fatalf("wrong content: %s", data)
-	}
-
-	// Get
-	resp, _ = http.Get(ts.URL + "/api/soul-library/friendly")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("get got %d", resp.StatusCode)
-	}
-	var got map[string]any
-	json.NewDecoder(resp.Body).Decode(&got)
-	resp.Body.Close()
-	if got["content"] != "You are friendly." {
-		t.Fatalf("wrong content: %v", got)
-	}
-
-	// Update
-	body, _ = json.Marshal(map[string]string{"content": "You are very friendly."})
-	req, _ := http.NewRequest("PUT", ts.URL+"/api/soul-library/friendly", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, _ = http.DefaultClient.Do(req)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("update got %d", resp.StatusCode)
-	}
-	resp.Body.Close()
-	data, _ = os.ReadFile(wantPath)
-	if string(data) != "You are very friendly." {
-		t.Fatalf("wrong content after update: %s", data)
-	}
-
-	// List — now has one entry
-	resp, _ = http.Get(ts.URL + "/api/soul-library")
-	json.NewDecoder(resp.Body).Decode(&list)
-	resp.Body.Close()
-	if len(list) != 1 {
-		t.Fatalf("want 1 entry, got %d", len(list))
-	}
-	if list[0]["name"] != "friendly" {
-		t.Fatalf("wrong name: %v", list[0])
-	}
-
-	// Delete
-	req, _ = http.NewRequest("DELETE", ts.URL+"/api/soul-library/friendly", nil)
-	resp, _ = http.DefaultClient.Do(req)
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("delete got %d", resp.StatusCode)
-	}
-	resp.Body.Close()
-	if _, err := os.Stat(wantPath); !os.IsNotExist(err) {
-		t.Fatal("file should be deleted")
-	}
-}
-
-func TestSoulLibraryInvalidName(t *testing.T) {
+func TestAgentSoulLibrary(t *testing.T) {
 	ts, _ := newTestServer(t)
-	for _, name := range []string{"", "../evil", "has space", "x/y"} {
-		body, _ := json.Marshal(map[string]string{"name": name, "content": "x"})
-		resp, _ := http.Post(ts.URL+"/api/soul-library", "application/json", bytes.NewReader(body))
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("name %q: want 400, got %d", name, resp.StatusCode)
-		}
-		resp.Body.Close()
+
+	// Create an agent first.
+	agentBody := `{"id":"test-agent","server_id":"111222333"}`
+	resp, err := http.Post(ts.URL+"/api/agents", "application/json", strings.NewReader(agentBody))
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestActivateLibrarySoul(t *testing.T) {
-	ts, dir := newTestServer(t)
-
-	// Create a library soul first
-	body, _ := json.Marshal(map[string]string{"name": "calm", "content": "You are calm."})
-	resp, _ := http.Post(ts.URL+"/api/soul-library", "application/json", bytes.NewReader(body))
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create agent: got %d", resp.StatusCode)
+	}
 
-	// Activate it as global soul
-	body, _ = json.Marshal(map[string]string{"soul_library_name": "calm"})
-	req, _ := http.NewRequest("PUT", ts.URL+"/api/soul", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, _ = http.DefaultClient.Do(req)
+	// List souls — should be empty.
+	resp, err = http.Get(ts.URL + "/api/agents/test-agent/souls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("activate got %d", resp.StatusCode)
+		t.Fatalf("list souls: got %d: %s", resp.StatusCode, data)
+	}
+	var listResp map[string]any
+	if err := json.Unmarshal(data, &listResp); err != nil {
+		t.Fatal(err)
+	}
+	souls := listResp["souls"].([]any)
+	if len(souls) != 0 {
+		t.Fatalf("expected 0 souls, got %d", len(souls))
+	}
+
+	// Create a soul.
+	resp, err = http.Post(ts.URL+"/api/agents/test-agent/souls", "application/json",
+		strings.NewReader(`{"name":"friendly","content":"You are friendly."}`))
+	if err != nil {
+		t.Fatal(err)
 	}
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create soul: got %d", resp.StatusCode)
+	}
 
-	// Verify config was updated
-	wantPath := filepath.Join(dir, "soul-library", "calm.md")
-	cfgData, _ := os.ReadFile(filepath.Join(dir, "config.toml"))
-	if !bytes.Contains(cfgData, []byte(wantPath)) {
-		t.Fatalf("config not updated with soul path; config:\n%s", cfgData)
+	// Duplicate create should conflict.
+	resp, err = http.Post(ts.URL+"/api/agents/test-agent/souls", "application/json",
+		strings.NewReader(`{"name":"friendly","content":"duplicate"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate soul: expected 409, got %d", resp.StatusCode)
+	}
+
+	// Invalid name should be rejected.
+	resp, err = http.Post(ts.URL+"/api/agents/test-agent/souls", "application/json",
+		strings.NewReader(`{"name":"../evil","content":""}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid name: expected 400, got %d", resp.StatusCode)
+	}
+
+	// List souls — should have one.
+	resp, err = http.Get(ts.URL + "/api/agents/test-agent/souls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	json.Unmarshal(data, &listResp)
+	souls = listResp["souls"].([]any)
+	if len(souls) != 1 {
+		t.Fatalf("expected 1 soul, got %d", len(souls))
+	}
+	soul := souls[0].(map[string]any)
+	if soul["name"] != "friendly" {
+		t.Fatalf("expected name=friendly, got %v", soul["name"])
+	}
+	if soul["active"].(bool) {
+		t.Fatal("soul should not be active yet")
+	}
+
+	// Get soul content.
+	resp, err = http.Get(ts.URL + "/api/agents/test-agent/souls/friendly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get soul: got %d", resp.StatusCode)
+	}
+	var getResp map[string]any
+	json.Unmarshal(data, &getResp)
+	if getResp["content"] != "You are friendly." {
+		t.Fatalf("unexpected content: %v", getResp["content"])
+	}
+
+	// Update soul content.
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/agents/test-agent/souls/friendly",
+		strings.NewReader(`{"content":"You are very friendly."}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("update soul: got %d", resp.StatusCode)
+	}
+
+	// Activate soul.
+	resp, err = http.Post(ts.URL+"/api/agents/test-agent/souls/friendly/activate", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("activate soul: got %d", resp.StatusCode)
+	}
+
+	// List should now show active=true.
+	resp, err = http.Get(ts.URL + "/api/agents/test-agent/souls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	json.Unmarshal(data, &listResp)
+	souls = listResp["souls"].([]any)
+	soul = souls[0].(map[string]any)
+	if !soul["active"].(bool) {
+		t.Fatal("soul should be active after activate")
+	}
+
+	// Delete soul.
+	req, _ = http.NewRequest(http.MethodDelete, ts.URL+"/api/agents/test-agent/souls/friendly", nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete soul: got %d", resp.StatusCode)
+	}
+
+	// List should be empty again.
+	resp, err = http.Get(ts.URL + "/api/agents/test-agent/souls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	json.Unmarshal(data, &listResp)
+	souls = listResp["souls"].([]any)
+	if len(souls) != 0 {
+		t.Fatalf("expected 0 souls after delete, got %d", len(souls))
 	}
 }
