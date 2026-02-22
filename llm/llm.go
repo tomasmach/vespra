@@ -170,12 +170,18 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	apiKey := c.chatKey()
 
 	// Apply per-request provider override before vision logic.
-	if opts != nil && opts.Provider == "glm" {
-		apiBase = cfg.GLMBaseURL
-		apiKey = cfg.GLMKey
-	}
-	if opts != nil && opts.Model != "" {
-		model = opts.Model
+	if opts != nil {
+		switch opts.Provider {
+		case "openrouter":
+			apiBase = "https://openrouter.ai/api/v1"
+			apiKey = cfg.OpenRouterKey
+		case "glm":
+			apiBase = cfg.GLMBaseURL
+			apiKey = cfg.GLMKey
+		}
+		if opts.Model != "" {
+			model = opts.Model
+		}
 	}
 
 	last := len(messages) - 1
