@@ -182,11 +182,14 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		}
 	}
 
-	hasPerAgentProvider := opts != nil && opts.Provider != ""
 	last := len(messages) - 1
 	switch {
-	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "" && !hasPerAgentProvider:
+	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "":
+		// Vision model always takes priority over per-agent provider; reset to
+		// default endpoint and key so GLM (or another chat provider) is not used.
 		model = cfg.VisionModel
+		apiBase = c.apiBase()
+		apiKey = c.chatKey()
 		if cfg.VisionBaseURL != "" {
 			apiBase = cfg.VisionBaseURL
 		}

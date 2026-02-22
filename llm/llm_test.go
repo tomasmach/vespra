@@ -460,17 +460,16 @@ func TestChatOptsModelOverrideIsUsed(t *testing.T) {
 	}
 }
 
-// TestChatOptsProviderWinsOverVisionRouting verifies that when opts.Provider is
-// set and the last message has image ContentParts and a VisionModel is configured
-// globally, the per-agent provider takes precedence and the request goes to the
-// GLM endpoint rather than the vision endpoint.
-func TestChatOptsProviderWinsOverVisionRouting(t *testing.T) {
-	glmSrv, capturedURL, capturedAuth, _ := captureRequestServer(t)
-
-	// Set up a separate vision server so we can confirm it is NOT used.
+// TestVisionModelWinsOverPerAgentProviderForImageContent verifies that when a
+// per-agent GLM provider is set but a vision model is also configured globally,
+// the vision endpoint is used (not GLM) when the last message contains images.
+func TestVisionModelWinsOverPerAgentProviderForImageContent(t *testing.T) {
+	// Set up a vision server to confirm it IS called.
 	visionCalled := false
+	var capturedAuth string
 	visionSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		visionCalled = true
+		capturedAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
@@ -479,6 +478,14 @@ func TestChatOptsProviderWinsOverVisionRouting(t *testing.T) {
 		})
 	}))
 	t.Cleanup(visionSrv.Close)
+
+	// Set up a GLM server to confirm it is NOT called.
+	glmCalled := false
+	glmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		glmCalled = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(glmSrv.Close)
 
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
@@ -511,14 +518,14 @@ func TestChatOptsProviderWinsOverVisionRouting(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if visionCalled {
-		t.Error("vision server was called but per-agent provider should have taken precedence")
+	if !visionCalled {
+		t.Error("vision server was not called; vision model should override per-agent provider for image content")
 	}
-	if *capturedURL != "/chat/completions" {
-		t.Errorf("expected GLM endpoint /chat/completions, got %q", *capturedURL)
+	if glmCalled {
+		t.Error("GLM server was called but vision model should have taken precedence")
 	}
-	if *capturedAuth != "Bearer glm-secret" {
-		t.Errorf("expected GLM auth header %q, got %q", "Bearer glm-secret", *capturedAuth)
+	if capturedAuth != "Bearer or-key" {
+		t.Errorf("expected OpenRouter key for vision request, got %q", capturedAuth)
 	}
 }
 
