@@ -1,4 +1,4 @@
-module github.com/tomasmach/mnemon-bot
+module github.com/tomasmach/vespra
 
 go 1.24
 

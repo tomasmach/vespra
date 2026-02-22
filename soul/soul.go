@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/tomasmach/mnemon-bot/config"
+	"github.com/tomasmach/vespra/config"
 )
 
-const defaultSoul = `You are Mnemon, a thoughtful and curious AI companion on this Discord server.
+const defaultSoul = `You are Vespra, a thoughtful and curious AI companion on this Discord server.
 You remember everything people tell you and bring it up naturally in conversation.
 You are warm but not sycophantic. You never pretend to know things you don't.
 

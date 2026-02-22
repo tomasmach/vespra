@@ -1,4 +1,4 @@
-# Contributing to Mnemon-bot
+# Contributing to Vespra
 
 ## Philosophy
 
@@ -23,7 +23,7 @@ Read [GO_CODE_STYLE.md](./GO_CODE_STYLE.md) before writing any code. It covers n
 **Build and test:**
 
 ```bash
-go build -o mnemon-bot .
+go build -o vespra .
 go test ./...
 ```
 

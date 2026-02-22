@@ -6,20 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build
-go build -o mnemon-bot .
+go build -o vespra .
 
-# Run (config path resolution: MNEMON_CONFIG env → --config flag → ~/.config/mnemon-bot/config.toml)
-./mnemon-bot --config ./config.toml
+# Run (config path resolution: VESPRA_CONFIG env → --config flag → ~/.config/vespra/config.toml)
+./vespra --config ./config.toml
 
 # CLI flags
-./mnemon-bot --config /path/to/config.toml --log-level debug --log-format json
+./vespra --config /path/to/config.toml --log-level debug --log-format json
 ```
 
 The project uses CGO (via `go-sqlite3`), so a C compiler is required.
 
 ## Architecture
 
-Mnemon-bot is a Discord AI companion with persistent memory and a web management UI. Layers:
+Vespra is a Discord AI companion with persistent memory and a web management UI. Layers:
 
 **`main.go`** — Wires everything together: config → LLM client → per-agent memory stores → bots → agent router → web server. Handles SIGTERM/SIGINT with 30s graceful drain.
 

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tomasmach/mnemon-bot/config"
+	"github.com/tomasmach/vespra/config"
 )
 
 func TestResolveResponseMode(t *testing.T) {
@@ -45,7 +45,7 @@ func TestResolveResponseMode(t *testing.T) {
 	}
 }
 
-func TestLoadMNEMON_DB_PATHEnvOverride(t *testing.T) {
+func TestLoadVESPRA_DB_PATHEnvOverride(t *testing.T) {
 	const minimalTOML = `
 [bot]
 token = "test-token"
@@ -63,7 +63,7 @@ db_path = "/original/path/memory.db"
 	}
 
 	wantDBPath := "/override/path/memory.db"
-	t.Setenv("MNEMON_DB_PATH", wantDBPath)
+	t.Setenv("VESPRA_DB_PATH", wantDBPath)
 
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
@@ -71,7 +71,7 @@ db_path = "/original/path/memory.db"
 	}
 
 	if cfg.Memory.DBPath != wantDBPath {
-		t.Errorf("Memory.DBPath = %q, want %q (MNEMON_DB_PATH override not applied)", cfg.Memory.DBPath, wantDBPath)
+		t.Errorf("Memory.DBPath = %q, want %q (VESPRA_DB_PATH override not applied)", cfg.Memory.DBPath, wantDBPath)
 	}
 }
 

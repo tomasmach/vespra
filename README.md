@@ -1,4 +1,4 @@
-<h1 align="center">Mnemon-bot</h1>
+<h1 align="center">Vespra</h1>
 
 <p align="center">
   <strong>A Discord AI companion with persistent memory.</strong>
@@ -19,7 +19,7 @@
 
 ## How It Works
 
-Mnemon-bot runs one goroutine per active Discord channel. When a message arrives, the bot checks the configured response mode, recalls relevant memories via hybrid search, builds a system prompt from the agent's soul file and recalled memories, then calls an LLM through OpenRouter. The LLM can invoke tools — saving or recalling memories, reacting to messages, searching the web — in a loop until it produces a plain text reply.
+Vespra runs one goroutine per active Discord channel. When a message arrives, the bot checks the configured response mode, recalls relevant memories via hybrid search, builds a system prompt from the agent's soul file and recalled memories, then calls an LLM through OpenRouter. The LLM can invoke tools — saving or recalling memories, reacting to messages, searching the web — in a loop until it produces a plain text reply.
 
 Conversation history lives in memory per channel goroutine and is not persisted across restarts. Memories are different: they survive restarts, are scoped per server, and are stored in SQLite with vector embeddings for semantic recall. Each server gets its own database file and can have its own personality via a `soul.md` file.
 
@@ -38,9 +38,9 @@ DMs are handled automatically by the default bot using a synthetic server ID (`D
 ### Build
 
 ```bash
-git clone https://github.com/tomasmach/mnemon-bot
-cd mnemon-bot
-go build -o mnemon-bot .
+git clone https://github.com/tomasmach/vespra
+cd vespra
+go build -o vespra .
 ```
 
 ### Minimal Config
@@ -57,7 +57,7 @@ model = "anthropic/claude-3.5-sonnet"
 embedding_model = "openai/text-embedding-3-small"
 
 [memory]
-db_path = "~/.local/share/mnemon-bot/mnemon.db"
+db_path = "~/.local/share/vespra/vespra.db"
 
 [response]
 default_mode = "mention"
@@ -66,11 +66,11 @@ default_mode = "mention"
 ### Run
 
 ```bash
-# Config path resolution: MNEMON_CONFIG env → --config flag → ~/.config/mnemon-bot/config.toml
-./mnemon-bot --config ./config.toml
+# Config path resolution: VESPRA_CONFIG env → --config flag → ~/.config/vespra/config.toml
+./vespra --config ./config.toml
 
 # With debug logging
-./mnemon-bot --config ./config.toml --log-level debug --log-format json
+./vespra --config ./config.toml --log-level debug --log-format json
 ```
 
 ---
@@ -78,7 +78,7 @@ default_mode = "mention"
 ## Architecture
 
 ```
-mnemon-bot/
+vespra/
 ├── main.go             — wires everything together: config → LLM → memory → bot → router → web
 ├── agent/
 │   ├── agent.go        — per-channel conversation loop
@@ -167,7 +167,7 @@ Full `config.toml` reference:
 ```toml
 [bot]
 token = "..."                                    # default bot token (required)
-soul_file = "~/.config/mnemon-bot/soul.md"       # global personality fallback
+soul_file = "~/.config/vespra/soul.md"       # global personality fallback
 
 [llm]
 openrouter_key = "..."
@@ -176,7 +176,7 @@ embedding_model = "openai/text-embedding-3-small"
 request_timeout_seconds = 60
 
 [memory]
-db_path = "~/.local/share/mnemon-bot/mnemon.db"  # default DB; agents can override
+db_path = "~/.local/share/vespra/vespra.db"  # default DB; agents can override
 
 [agent]
 history_limit = 20          # messages kept in-memory per channel
@@ -195,9 +195,9 @@ addr = ":8080"              # management UI address (default :8080)
 # Per-server agents (optional; multiple allowed)
 [[agents]]
 server_id = "123456789"
-soul_file = "~/.config/mnemon-bot/souls/my-server.md"
+soul_file = "~/.config/vespra/souls/my-server.md"
 response_mode = "mention"
-db_path = "~/.local/share/mnemon-bot/my-server.db"   # optional
+db_path = "~/.local/share/vespra/my-server.db"   # optional
 
 [[agents.channels]]
 channel_id = "111222333"
@@ -223,7 +223,7 @@ token = "..."               # custom bot token (requires restart to apply)
 A markdown file defining the bot's name, personality, and tone. It becomes the system prompt prefix for all conversations on that server.
 
 ```markdown
-You are Mnemon, a thoughtful and curious AI companion on this Discord server.
+You are Vespra, a thoughtful and curious AI companion on this Discord server.
 You remember everything people tell you and bring it up naturally in conversation.
 You are warm but not sycophantic. You never pretend to know things you don't.
 ```
@@ -234,7 +234,7 @@ Resolution order: per-agent `soul_file` → global `soul_file` → built-in defa
 
 ## Web UI
 
-Mnemon-bot ships an embedded HTTP management UI accessible at `http://localhost:8080` by default. It provides:
+Vespra ships an embedded HTTP management UI accessible at `http://localhost:8080` by default. It provides:
 
 - **Config editor** — read and write the raw TOML config; changes are validated before applying and hot-reloaded without restart
 - **Memory browser** — browse, search, edit, and delete memories by server
