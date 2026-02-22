@@ -21,6 +21,12 @@ import (
 	"github.com/tomasmach/vespra/tools"
 )
 
+// toolCallRecord is used to log tool calls made during a conversation turn.
+type toolCallRecord struct {
+	Name   string `json:"name"`
+	Result string `json:"result"`
+}
+
 const extractionPrompt = `You are a memory extraction assistant. Your only job is to analyze the conversation and save important information to long-term memory.
 
 Save a memory for each of the following you find:
@@ -141,15 +147,79 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 
 func (a *ChannelAgent) run(ctx context.Context) {
 	idleTimeout := time.Duration(a.cfgStore.Get().Agent.IdleTimeoutMinutes) * time.Minute
+	idleTimer := time.NewTimer(idleTimeout)
+	defer idleTimer.Stop()
+
+	var (
+		coalesceBuffer []*discordgo.MessageCreate
+		debounceTimer  <-chan time.Time
+		deadlineTimer  <-chan time.Time
+	)
+
+	flush := func(fctx context.Context) {
+		if len(coalesceBuffer) == 0 {
+			return
+		}
+		msgs := coalesceBuffer
+		coalesceBuffer = nil
+		debounceTimer = nil
+		deadlineTimer = nil
+		a.handleMessages(fctx, msgs)
+	}
+
 	for {
 		select {
 		case msg := <-a.msgCh:
-			a.handleMessage(ctx, msg)
-		case <-time.After(idleTimeout):
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(idleTimeout)
+
+			cfg := a.cfgStore.Get()
+			if cfg.Agent.CoalesceDisabled {
+				a.handleMessage(ctx, msg)
+			} else {
+				coalesceBuffer = append(coalesceBuffer, msg)
+				debounceTimer = time.After(time.Duration(cfg.Agent.CoalesceDebounceMs) * time.Millisecond)
+				if deadlineTimer == nil {
+					deadlineTimer = time.After(time.Duration(cfg.Agent.CoalesceMaxWaitMs) * time.Millisecond)
+				}
+			}
+
+		case <-debounceTimer:
+			flush(ctx)
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(idleTimeout)
+
+		case <-deadlineTimer:
+			flush(ctx)
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(idleTimeout)
+
+		case <-idleTimer.C:
+			flush(ctx)
 			a.logger.Info("channel agent idle timeout")
 			return
+
 		case <-ctx.Done():
-			// drain only messages already buffered; no new ones can arrive after b.Stop()
+			if len(coalesceBuffer) > 0 {
+				drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				flush(drainCtx)
+				cancel()
+			}
 			n := len(a.msgCh)
 			for i := 0; i < n; i++ {
 				msg := <-a.msgCh
@@ -273,10 +343,6 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	msgs = append(msgs, userMsg)
 
 	// Tool-call loop
-	type toolCallRecord struct {
-		Name   string `json:"name"`
-		Result string `json:"result"`
-	}
 	var toolCalls []toolCallRecord
 	var assistantContent string
 	for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
@@ -382,6 +448,253 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		msgs = msgs[len(msgs)-cfg.Agent.HistoryLimit:]
 	}
 	a.history = msgs
+	if assistantContent != "" || reg.Replied {
+		a.turnCount++
+		if interval := cfg.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
+			a.runMemoryExtraction(ctx, a.history)
+		}
+	}
+}
+
+func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.MessageCreate) {
+	if len(msgs) == 1 {
+		a.handleMessage(ctx, msgs[0])
+		return
+	}
+
+	a.lastActive.Store(time.Now().UnixNano())
+
+	cfg := a.cfgStore.Get()
+	botID := a.resources.Session.State.User.ID
+	lastMsg := msgs[len(msgs)-1]
+	mode := cfg.ResolveResponseMode(a.serverID, lastMsg.ChannelID)
+
+	isDM := lastMsg.GuildID == ""
+	var anyAddressed bool
+	for _, m := range msgs {
+		isMentioned := strings.Contains(m.Content, "<@"+botID+">")
+		isReplyToBot := m.MessageReference != nil &&
+			m.ReferencedMessage != nil &&
+			m.ReferencedMessage.Author != nil &&
+			m.ReferencedMessage.Author.ID == botID
+		if isDM || isMentioned || isReplyToBot {
+			anyAddressed = true
+			break
+		}
+	}
+
+	switch mode {
+	case "none":
+		return
+	case "mention":
+		if !anyAddressed {
+			return
+		}
+	}
+
+	stopTyping := func() {}
+	if mode != "smart" || anyAddressed {
+		stopTyping = a.startTyping(ctx)
+	}
+	defer stopTyping()
+
+	if len(a.history) == 0 {
+		a.history = a.backfillHistory(ctx, msgs[0].ID)
+		if len(a.history) > cfg.Agent.HistoryLimit {
+			a.history = a.history[len(a.history)-cfg.Agent.HistoryLimit:]
+		}
+	}
+
+	recallParts := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		recallParts = append(recallParts, m.Content)
+	}
+	recallQuery := strings.Join(recallParts, " ")
+
+	memories, err := a.resources.Memory.Recall(ctx, recallQuery, a.serverID, 10)
+	if err != nil {
+		a.logger.Warn("memory recall error", "error", err)
+	}
+
+	systemPrompt := a.soulText
+	if len(memories) > 0 {
+		systemPrompt += "\n\n## Relevant Memories\n"
+		for _, m := range memories {
+			systemPrompt += fmt.Sprintf("- [%s] %s\n", m.ID, m.Content)
+		}
+	}
+	if lang := cfg.ResolveLanguage(a.serverID, lastMsg.ChannelID); lang != "" {
+		systemPrompt += "\n\nAlways respond in " + lang + "."
+	}
+	if mode == "smart" {
+		systemPrompt += "\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent."
+	}
+
+	sendFn := func(content string) error {
+		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
+		return err
+	}
+	reactFn := func(emoji string) error {
+		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
+	}
+
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
+
+	// histMsgs: individual messages appended to history, used for history storage after turn.
+	histMsgs := make([]llm.Message, len(a.history), len(a.history)+len(msgs)+1)
+	copy(histMsgs, a.history)
+	for _, m := range msgs {
+		histMsgs = append(histMsgs, llm.Message{Role: "user", Content: fmt.Sprintf("%s: %s", m.Author.Username, m.Content)})
+	}
+
+	// Build combined user content with relative timestamps.
+	firstTime := msgs[0].Timestamp
+	var combinedLines []string
+	combinedLines = append(combinedLines, fmt.Sprintf("[%d messages arrived rapidly in quick succession]", len(msgs)))
+	combinedLines = append(combinedLines, "")
+	for _, m := range msgs {
+		line := fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
+		gap := m.Timestamp.Sub(firstTime)
+		if gap >= time.Second {
+			secs := int(gap.Seconds())
+			line += fmt.Sprintf(" (+%ds)", secs)
+		}
+		combinedLines = append(combinedLines, line)
+	}
+	combinedContent := strings.Join(combinedLines, "\n")
+
+	// Build combined LLM user message, including any image attachments.
+	var imageParts []llm.ContentPart
+	for _, m := range msgs {
+		for _, att := range m.Attachments {
+			if strings.HasPrefix(att.ContentType, "image/") {
+				dataURL, err := downloadImageAsDataURL(ctx, a.httpClient, att)
+				if err != nil {
+					a.logger.Warn("failed to download image attachment, skipping", "error", err, "url", att.URL)
+					continue
+				}
+				imageParts = append(imageParts, llm.ContentPart{
+					Type:     "image_url",
+					ImageURL: &llm.ImageURL{URL: dataURL},
+				})
+			}
+		}
+	}
+
+	var combinedUserMsg llm.Message
+	if len(imageParts) > 0 {
+		parts := make([]llm.ContentPart, 0, 1+len(imageParts))
+		parts = append(parts, llm.ContentPart{Type: "text", Text: combinedContent})
+		parts = append(parts, imageParts...)
+		combinedUserMsg = llm.Message{Role: "user", ContentParts: parts}
+	} else {
+		combinedUserMsg = llm.Message{Role: "user", Content: combinedContent}
+	}
+
+	// llmMsgs: history + combined user message, used for LLM input.
+	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
+	copy(llmMsgs, a.history)
+	llmMsgs = append(llmMsgs, combinedUserMsg)
+
+	var toolCalls []toolCallRecord
+	var assistantContent string
+	for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
+		choice, err := a.llm.Chat(ctx, buildMessages(systemPrompt, llmMsgs), reg.Definitions())
+		if err != nil {
+			a.logger.Error("llm chat error", "error", err)
+			if err := sendFn("I encountered an error. Please try again."); err != nil {
+				a.logger.Error("send message", "error", err)
+			}
+			return
+		}
+
+		if len(choice.Message.ToolCalls) == 0 {
+			assistantContent = choice.Message.Content
+			break
+		}
+
+		llmMsgs = append(llmMsgs, choice.Message)
+		for _, tc := range choice.Message.ToolCalls {
+			a.logger.Debug("tool call", "tool", tc.Function.Name)
+			result, err := reg.Dispatch(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
+			if err != nil {
+				a.logger.Warn("tool dispatch error", "tool", tc.Function.Name, "error", err)
+				result = fmt.Sprintf("Error: %s", err)
+			}
+			toolCalls = append(toolCalls, toolCallRecord{Name: tc.Function.Name, Result: result})
+			llmMsgs = append(llmMsgs, llm.Message{
+				Role:       "tool",
+				Content:    result,
+				ToolCallID: tc.ID,
+				Name:       tc.Function.Name,
+			})
+		}
+
+		if iter == cfg.Agent.MaxToolIterations-1 {
+			if err := sendFn("I got stuck in a loop. Please try again."); err != nil {
+				a.logger.Error("send message", "error", err)
+			}
+			return
+		}
+	}
+
+	if assistantContent != "" && looksLikeToolCall(assistantContent, reg.Definitions()) {
+		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
+		assistantContent = ""
+		if !reg.Replied && mode != "smart" {
+			if err := sendFn("I'm not sure how to respond. Please try again."); err != nil {
+				a.logger.Error("send message", "error", err)
+			}
+		}
+	}
+
+	if mode == "smart" && assistantContent != "" && !reg.Replied {
+		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
+		assistantContent = ""
+	}
+
+	if assistantContent != "" && !reg.Replied && isStageDirection(assistantContent) {
+		a.logger.Debug("suppressed stage-direction non-reply", "content", assistantContent)
+		assistantContent = ""
+	}
+
+	if assistantContent != "" || reg.Replied {
+		var toolCallsJSON string
+		if len(toolCalls) > 0 {
+			if b, err := json.Marshal(toolCalls); err == nil {
+				toolCallsJSON = string(b)
+			}
+		}
+		responseText := assistantContent
+		if responseText == "" && reg.Replied {
+			responseText = reg.ReplyText
+		}
+		userLogLines := make([]string, 0, len(msgs))
+		for _, m := range msgs {
+			userLogLines = append(userLogLines, fmt.Sprintf("%s: %s", m.Author.Username, m.Content))
+		}
+		userMsgText := strings.Join(userLogLines, "\n")
+		if err := a.resources.Memory.LogConversation(ctx, a.channelID, userMsgText, toolCallsJSON, responseText); err != nil {
+			a.logger.Warn("log conversation error", "error", err)
+		}
+	}
+
+	if assistantContent != "" && !reg.Replied {
+		parts := tools.SplitMessage(assistantContent, 2000)
+		for _, p := range parts {
+			if err := sendFn(p); err != nil {
+				a.logger.Error("send message", "error", err)
+			}
+		}
+	}
+
+	if assistantContent != "" {
+		histMsgs = append(histMsgs, llm.Message{Role: "assistant", Content: assistantContent})
+	}
+	if len(histMsgs) > cfg.Agent.HistoryLimit {
+		histMsgs = histMsgs[len(histMsgs)-cfg.Agent.HistoryLimit:]
+	}
+	a.history = histMsgs
 	if assistantContent != "" || reg.Replied {
 		a.turnCount++
 		if interval := cfg.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
