@@ -48,6 +48,9 @@
         <button id="btn-settings" class="w-full text-left text-xs text-zinc-400 hover:text-zinc-100 border border-zinc-700/60 hover:border-zinc-600 bg-transparent hover:bg-zinc-800 rounded-md py-2 px-3 transition-colors flex items-center gap-1.5">
           <span class="text-zinc-500">⚙</span> Settings
         </button>
+        <button id="btn-souls" class="w-full text-left text-xs text-zinc-400 hover:text-zinc-100 border border-zinc-700/60 hover:border-zinc-600 bg-transparent hover:bg-zinc-800 rounded-md py-2 px-3 transition-colors flex items-center gap-1.5">
+          <span class="text-zinc-500">✦</span> Souls
+        </button>
         <button id="btn-new-agent" class="w-full text-left text-xs text-zinc-500 hover:text-zinc-100 border border-dashed border-zinc-700/60 hover:border-violet-500/60 bg-transparent hover:bg-zinc-800/50 rounded-md py-2 px-3 transition-colors">
           + New Agent
         </button>
@@ -87,6 +90,55 @@
             <button class="btn-primary" onclick="saveGlobalSoul()">Save Soul</button>
           </div>
           <span id="global-soul-status" class="status-msg"></span>
+          <div class="mt-4 pt-4 border-t border-zinc-800 flex-shrink-0">
+            <div class="text-xs text-zinc-500 mb-2 font-medium">Load from Library</div>
+            <div class="flex gap-2 items-center">
+              <select id="global-soul-library-select" class="form-input text-xs font-mono flex-1">
+                <option value="">— select a soul —</option>
+              </select>
+              <button class="btn-secondary text-xs whitespace-nowrap" onclick="activateLibrarySoulAsGlobal()">Activate</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Souls Library panel -->
+      <div id="panel-souls" class="flex flex-col h-full overflow-hidden" hidden>
+        <!-- List view -->
+        <div id="souls-list-view" class="flex flex-col h-full overflow-hidden">
+          <div class="flex-shrink-0 px-6 pt-5 pb-0 flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-zinc-200 tracking-wide">Souls Library</h2>
+            <button class="btn-primary text-xs py-1 px-3" onclick="showNewSoulForm()">+ New Soul</button>
+          </div>
+          <!-- New soul form (hidden by default) -->
+          <div id="new-soul-form" class="px-6 pt-4 flex-shrink-0" hidden>
+            <div class="form-grid">
+              <label class="form-label">Name</label>
+              <input id="new-soul-name" type="text" class="form-input font-mono" placeholder="e.g. friendly-vespra">
+            </div>
+            <div class="flex gap-2 mt-3">
+              <button class="btn-primary text-xs" onclick="createLibrarySoul()">Create</button>
+              <button class="btn-secondary text-xs" onclick="hideNewSoulForm()">Cancel</button>
+            </div>
+            <span id="new-soul-status" class="status-msg"></span>
+          </div>
+          <div id="souls-list-items" class="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-2"></div>
+        </div>
+        <!-- Editor view -->
+        <div id="souls-editor-view" class="flex flex-col h-full overflow-hidden" hidden>
+          <div class="flex-shrink-0 px-6 pt-5 pb-0 flex items-center gap-3">
+            <button class="text-xs text-zinc-500 hover:text-zinc-200 transition-colors" onclick="showSoulsList()">← Library</button>
+            <span class="text-zinc-600">|</span>
+            <span id="souls-editor-name" class="font-mono text-sm text-zinc-200"></span>
+          </div>
+          <div class="flex-1 overflow-hidden flex flex-col px-6 py-4">
+            <textarea id="souls-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
+            <div class="flex gap-2 mt-3 flex-shrink-0">
+              <button class="btn-primary" onclick="saveLibrarySoul()">Save Soul</button>
+              <button class="btn-secondary" onclick="activateLibrarySoulGlobal()">Set as Global</button>
+            </div>
+            <span id="souls-editor-status" class="status-msg"></span>
+          </div>
         </div>
       </div>
 
@@ -182,6 +234,15 @@
             <button class="btn-primary" onclick="saveSoul()">Save Soul</button>
           </div>
           <span id="soul-status" class="status-msg"></span>
+          <div class="mt-4 pt-4 border-t border-zinc-800 flex-shrink-0">
+            <div class="text-xs text-zinc-500 mb-2 font-medium">Load from Library</div>
+            <div class="flex gap-2 items-center">
+              <select id="soul-library-select" class="form-input text-xs font-mono flex-1">
+                <option value="">— select a soul —</option>
+              </select>
+              <button class="btn-secondary text-xs whitespace-nowrap" onclick="activateLibrarySoulForAgent()">Activate</button>
+            </div>
+          </div>
         </div>
 
         <!-- Agent memories tab -->

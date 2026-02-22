@@ -19,6 +19,7 @@ function init() {
   connectSSE();
   window.addEventListener('hashchange', router);
   document.getElementById('btn-settings').addEventListener('click', () => navigate('#/config'));
+  document.getElementById('btn-souls').addEventListener('click', () => navigate('#/souls'));
   document.getElementById('btn-new-agent').addEventListener('click', () => navigate('#/agents/new'));
 }
 
@@ -45,7 +46,7 @@ function renderConfigTab(tab) {
     document.getElementById('global-' + t).hidden = (t !== tab);
   });
   if (tab === 'config') loadConfig();
-  if (tab === 'soul') loadGlobalSoul();
+  if (tab === 'soul') { loadGlobalSoul(); loadSoulLibrary(); }
 }
 
 function router() {
@@ -56,6 +57,16 @@ function router() {
     renderAgentSidebar();
     showPanel('config');
     renderConfigTab(hash === '#/config/soul' ? 'soul' : 'config');
+    return;
+  }
+
+  if (hash === '#/souls') {
+    selectedAgentId = null;
+    renderAgentSidebar();
+    showPanel('souls');
+    document.getElementById('souls-list-view').hidden = false;
+    document.getElementById('souls-editor-view').hidden = true;
+    loadSoulLibrary();
     return;
   }
 
@@ -121,7 +132,9 @@ function showPanel(name) {
   document.getElementById('panel-config').hidden = name !== 'config';
   document.getElementById('panel-new-agent').hidden = name !== 'new-agent';
   document.getElementById('panel-agent').hidden = name !== 'agent';
+  document.getElementById('panel-souls').hidden = name !== 'souls';
   document.getElementById('btn-settings').classList.toggle('active', name === 'config');
+  document.getElementById('btn-souls').classList.toggle('active', name === 'souls');
 }
 
 // --- Agent detail ---
@@ -148,7 +161,7 @@ function renderDetailTab(tab) {
     document.getElementById('detail-' + t).hidden = (t !== tab);
   });
 
-  if (tab === 'soul' && selectedAgentId) loadSoul(selectedAgentId);
+  if (tab === 'soul' && selectedAgentId) { loadSoul(selectedAgentId); loadSoulLibrary(); }
   if (tab === 'memories' && selectedAgentId) {
     const agent = agents.find(a => a.id === selectedAgentId);
     if (agent) {
@@ -766,6 +779,178 @@ function esc(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ─── Soul Library ────────────────────────────────────────────────────────────
+
+let editingSoulName = null;
+
+function loadSoulLibrary() {
+  fetch('/api/soul-library')
+    .then(r => r.json())
+    .then(souls => {
+      renderSoulsList(souls);
+      populateSoulSelects(souls);
+    })
+    .catch(() => {});
+}
+
+function renderSoulsList(souls) {
+  const container = document.getElementById('souls-list-items');
+  if (!container) return;
+  if (!souls.length) {
+    container.innerHTML = '<p class="text-xs text-zinc-600">No souls in library yet. Create one to get started.</p>';
+    return;
+  }
+  container.innerHTML = souls.map(s => `
+    <div class="flex items-center justify-between px-3 py-2 rounded-md bg-zinc-800/50 border border-zinc-800 hover:border-zinc-700 transition-colors">
+      <span class="font-mono text-sm text-zinc-200">${esc(s.name)}</span>
+      <div class="flex gap-2">
+        <button class="text-xs text-zinc-400 hover:text-violet-400 transition-colors" onclick="editLibrarySoul('${esc(s.name)}')">Edit</button>
+        <button class="text-xs text-zinc-500 hover:text-red-400 transition-colors" onclick="deleteLibrarySoul('${esc(s.name)}')">Delete</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function populateSoulSelects(souls) {
+  ['soul-library-select', 'global-soul-library-select'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '<option value="">— select a soul —</option>' +
+      souls.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
+    if (souls.find(s => s.name === current)) sel.value = current;
+  });
+}
+
+function showNewSoulForm() {
+  document.getElementById('new-soul-form').hidden = false;
+  document.getElementById('new-soul-name').focus();
+}
+
+function hideNewSoulForm() {
+  document.getElementById('new-soul-form').hidden = true;
+  document.getElementById('new-soul-name').value = '';
+  document.getElementById('new-soul-status').textContent = '';
+}
+
+function createLibrarySoul() {
+  const name = document.getElementById('new-soul-name').value.trim();
+  if (!name) return;
+  fetch('/api/soul-library', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name, content: ''}),
+  })
+    .then(r => {
+      if (r.ok) return r.json();
+      return r.text().then(t => { throw new Error(t || 'Create failed'); });
+    })
+    .then(() => {
+      hideNewSoulForm();
+      loadSoulLibrary();
+      editLibrarySoul(name);
+    })
+    .catch(err => setStatus('new-soul-status', err.message, true));
+}
+
+function editLibrarySoul(name) {
+  editingSoulName = name;
+  document.getElementById('souls-editor-name').textContent = name;
+  document.getElementById('souls-list-view').hidden = true;
+  document.getElementById('souls-editor-view').hidden = false;
+  fetch('/api/soul-library/' + encodeURIComponent(name))
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('souls-editor').value = data.content || '';
+    });
+}
+
+function showSoulsList() {
+  editingSoulName = null;
+  document.getElementById('souls-editor-view').hidden = true;
+  document.getElementById('souls-list-view').hidden = false;
+  loadSoulLibrary();
+}
+
+function saveLibrarySoul() {
+  if (!editingSoulName) return;
+  const content = document.getElementById('souls-editor').value;
+  fetch('/api/soul-library/' + encodeURIComponent(editingSoulName), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({content}),
+  })
+    .then(r => {
+      if (r.ok) return;
+      return r.text().then(t => { throw new Error(t || 'Save failed'); });
+    })
+    .then(() => setStatus('souls-editor-status', 'Saved.', false))
+    .catch(err => setStatus('souls-editor-status', err.message, true));
+}
+
+function activateLibrarySoulGlobal() {
+  if (!editingSoulName) return;
+  fetch('/api/soul', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({soul_library_name: editingSoulName}),
+  })
+    .then(r => {
+      if (r.ok) return;
+      return r.text().then(t => { throw new Error(t || 'Activate failed'); });
+    })
+    .then(() => setStatus('souls-editor-status', 'Set as global soul.', false))
+    .catch(err => setStatus('souls-editor-status', err.message, true));
+}
+
+function activateLibrarySoulForAgent() {
+  const name = document.getElementById('soul-library-select').value;
+  if (!name || !selectedAgentId) return;
+  fetch('/api/agents/' + encodeURIComponent(selectedAgentId) + '/soul', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({soul_library_name: name}),
+  })
+    .then(r => {
+      if (r.ok) return r.json();
+      return r.text().then(t => { throw new Error(t || 'Activate failed'); });
+    })
+    .then(data => {
+      setStatus('soul-status', 'Active: ' + name, false);
+      document.getElementById('soul-path-info').textContent = data.path;
+    })
+    .catch(err => setStatus('soul-status', err.message, true));
+}
+
+function activateLibrarySoulAsGlobal() {
+  const name = document.getElementById('global-soul-library-select').value;
+  if (!name) return;
+  fetch('/api/soul', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({soul_library_name: name}),
+  })
+    .then(r => {
+      if (r.ok) return r.json();
+      return r.text().then(t => { throw new Error(t || 'Activate failed'); });
+    })
+    .then(data => {
+      setStatus('global-soul-status', 'Active: ' + name, false);
+      document.getElementById('global-soul-path-info').textContent = data.path;
+    })
+    .catch(err => setStatus('global-soul-status', err.message, true));
+}
+
+function deleteLibrarySoul(name) {
+  if (!confirm('Delete soul "' + name + '"?')) return;
+  fetch('/api/soul-library/' + encodeURIComponent(name), {method: 'DELETE'})
+    .then(r => {
+      if (!r.ok) return r.text().then(t => { throw new Error(t); });
+      loadSoulLibrary();
+    })
+    .catch(err => alert(err.message));
 }
 
 // --- Boot ---
