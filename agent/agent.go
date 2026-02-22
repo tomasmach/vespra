@@ -64,8 +64,11 @@ type ChannelAgent struct {
 
 // formatMessageContent replaces raw Discord mention syntax for the bot with a
 // human-readable @botName, so the LLM sees "@BotName" instead of "<@123456>".
+// Both the standard mention format <@ID> and the nickname mention format <@!ID> are handled.
 func formatMessageContent(content, botID, botName string) string {
-	return strings.ReplaceAll(content, "<@"+botID+">", "@"+botName)
+	content = strings.ReplaceAll(content, "<@"+botID+">", "@"+botName)
+	content = strings.ReplaceAll(content, "<@!"+botID+">", "@"+botName)
+	return content
 }
 
 // historyUserContent formats the text content for a user message in history,
@@ -287,7 +290,7 @@ func isAddressedToBot(m *discordgo.MessageCreate, botID string) bool {
 	if m.GuildID == "" {
 		return true // DMs are always addressed
 	}
-	if strings.Contains(m.Content, "<@"+botID+">") {
+	if strings.Contains(m.Content, "<@"+botID+">") || strings.Contains(m.Content, "<@!"+botID+">") {
 		return true
 	}
 	return m.MessageReference != nil &&
@@ -365,7 +368,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		sendFn:       sendFn,
 		reg:          reg,
 		llmMsgs:      llmMsgs,
-		userMsgText:  fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content),
+		userMsgText:  fmt.Sprintf("%s: %s", msg.Author.Username, formatMessageContent(msg.Content, botID, botName)),
 	})
 }
 
@@ -461,7 +464,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	userLogLines := make([]string, 0, len(msgs))
 	for _, m := range msgs {
-		userLogLines = append(userLogLines, fmt.Sprintf("%s: %s", m.Author.Username, m.Content))
+		userLogLines = append(userLogLines, fmt.Sprintf("%s: %s", m.Author.Username, formatMessageContent(m.Content, botID, botName)))
 	}
 
 	a.processTurn(ctx, cfg, turnParams{
@@ -477,20 +480,24 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 // buildSystemPrompt assembles the system prompt from the soul text, memories,
 // language override, and response mode.
 func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string) string {
-	systemPrompt := fmt.Sprintf("Your Discord username is %s.\n\n", botName) + a.soulText
+	var sb strings.Builder
+	if botName != "" {
+		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
+	}
+	sb.WriteString(a.soulText)
 	if len(memories) > 0 {
-		systemPrompt += "\n\n## Relevant Memories\n"
+		sb.WriteString("\n\n## Relevant Memories\n")
 		for _, m := range memories {
-			systemPrompt += fmt.Sprintf("- [%s] %s\n", m.ID, m.Content)
+			fmt.Fprintf(&sb, "- [%s] %s\n", m.ID, m.Content)
 		}
 	}
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
-		systemPrompt += "\n\nAlways respond in " + lang + "."
+		sb.WriteString("\n\nAlways respond in " + lang + ".")
 	}
 	if mode == "smart" {
-		systemPrompt += "\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent."
+		sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
 	}
-	return systemPrompt
+	return sb.String()
 }
 
 // buildCombinedUserMessage builds an LLM user message from a batch of coalesced

@@ -265,3 +265,58 @@ func TestBuildCombinedContentSingleMessage(t *testing.T) {
 		t.Errorf("single message should not have timestamp suffix, got %q", got)
 	}
 }
+
+func TestFormatMessageContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		botID   string
+		botName string
+		want    string
+	}{
+		{
+			name:    "basic mention replacement",
+			content: "hello <@123456> how are you",
+			botID:   "123456",
+			botName: "BotName",
+			want:    "hello @BotName how are you",
+		},
+		{
+			name:    "nickname mention replacement",
+			content: "hello <@!123456> how are you",
+			botID:   "123456",
+			botName: "BotName",
+			want:    "hello @BotName how are you",
+		},
+		{
+			name:    "multiple mentions in one message",
+			content: "<@123456> said hi and <@!123456> waved",
+			botID:   "123456",
+			botName: "BotName",
+			want:    "@BotName said hi and @BotName waved",
+		},
+		{
+			name:    "no mentions content unchanged",
+			content: "just a regular message with no mentions",
+			botID:   "123456",
+			botName: "BotName",
+			want:    "just a regular message with no mentions",
+		},
+		{
+			name:    "empty botID and botName content unchanged",
+			content: "hello there, no mentions at all",
+			botID:   "",
+			botName: "",
+			want:    "hello there, no mentions at all",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatMessageContent(tt.content, tt.botID, tt.botName)
+			if got != tt.want {
+				t.Errorf("formatMessageContent(%q, %q, %q) = %q, want %q",
+					tt.content, tt.botID, tt.botName, got, tt.want)
+			}
+		})
+	}
+}
