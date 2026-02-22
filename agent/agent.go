@@ -62,6 +62,16 @@ type ChannelAgent struct {
 	msgCh chan *discordgo.MessageCreate // buffered 100
 }
 
+// hasImageAttachments reports whether the message has at least one image attachment.
+func hasImageAttachments(m *discordgo.Message) bool {
+	for _, a := range m.Attachments {
+		if strings.HasPrefix(a.ContentType, "image/") {
+			return true
+		}
+	}
+	return false
+}
+
 // formatMessageContent replaces raw Discord mention syntax (<@ID> and <@!ID>)
 // for the bot with a human-readable "@botName" so the LLM sees natural text.
 func formatMessageContent(content, botID, botName string) string {
@@ -79,6 +89,9 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 		refContent := formatMessageContent(m.ReferencedMessage.Content, botID, botName)
 		if len(refContent) > 200 {
 			refContent = refContent[:200] + "..."
+		}
+		if refContent == "" && hasImageAttachments(m.ReferencedMessage) {
+			refContent = "[image]"
 		}
 		return fmt.Sprintf("%s (replying to %s: %q): %s",
 			m.Author.Username,
@@ -99,6 +112,13 @@ func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discord
 	for _, a := range msg.Attachments {
 		if strings.HasPrefix(a.ContentType, "image/") {
 			images = append(images, a)
+		}
+	}
+	if msg.ReferencedMessage != nil {
+		for _, a := range msg.ReferencedMessage.Attachments {
+			if strings.HasPrefix(a.ContentType, "image/") {
+				images = append(images, a)
+			}
 		}
 	}
 	if len(images) == 0 {

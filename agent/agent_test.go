@@ -157,6 +157,25 @@ func TestHistoryUserContentWithReply(t *testing.T) {
 	}
 }
 
+func TestHistoryUserContentReplyWithImageOnly(t *testing.T) {
+	m := &discordgo.Message{
+		Author:  &discordgo.User{Username: "alice"},
+		Content: "nice",
+		ReferencedMessage: &discordgo.Message{
+			Author:  &discordgo.User{Username: "bob"},
+			Content: "",
+			Attachments: []*discordgo.MessageAttachment{
+				{ContentType: "image/png", URL: "https://cdn.example.com/img.png"},
+			},
+		},
+	}
+	got := historyUserContent(m, "", "")
+	want := `alice (replying to bob: "[image]"): nice`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestHistoryUserContentReplyNoAuthor(t *testing.T) {
 	// ReferencedMessage exists but author is nil (deleted user) — should not panic
 	m := &discordgo.Message{
@@ -168,6 +187,41 @@ func TestHistoryUserContentReplyNoAuthor(t *testing.T) {
 	want := "alice: hello"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildUserMessageReferencedImage(t *testing.T) {
+	fakeData := []byte("fake ref image bytes")
+	srv, cleanup := imageServer(t, fakeData)
+	defer cleanup()
+
+	refMsg := &discordgo.Message{
+		Author:  &discordgo.User{Username: "bob"},
+		Content: "",
+		Attachments: []*discordgo.MessageAttachment{
+			{ContentType: "image/jpeg", URL: srv.URL + "/ref.jpg"},
+		},
+	}
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content:           "look at this",
+			Author:            &discordgo.User{Username: "alice"},
+			ReferencedMessage: refMsg,
+		},
+	}
+	result := buildUserMessage(context.Background(), srv.Client(), m, "", "")
+	if len(result.ContentParts) != 2 {
+		t.Fatalf("expected 2 content parts (text + ref image), got %d", len(result.ContentParts))
+	}
+	if result.ContentParts[0].Type != "text" {
+		t.Errorf("expected first part type=text, got %q", result.ContentParts[0].Type)
+	}
+	if result.ContentParts[1].Type != "image_url" {
+		t.Errorf("expected second part type=image_url, got %q", result.ContentParts[1].Type)
+	}
+	wantURL := fmt.Sprintf("data:image/jpeg;base64,%s", base64.StdEncoding.EncodeToString(fakeData))
+	if result.ContentParts[1].ImageURL.URL != wantURL {
+		t.Errorf("unexpected image URL: %q", result.ContentParts[1].ImageURL.URL)
 	}
 }
 
