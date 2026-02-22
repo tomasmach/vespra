@@ -78,7 +78,10 @@ type memorySaveTool struct {
 
 func (t *memorySaveTool) Name() string { return "memory_save" }
 func (t *memorySaveTool) Description() string {
-	return "Save a fact or observation to long-term memory."
+	return "Save important information to long-term memory. " +
+		"Use this for: user preferences or opinions, personal facts (location, job, hobbies, relationships), " +
+		"decisions made, goals or plans, tasks to follow up on, or anything the user explicitly asks to remember. " +
+		"Check memory_recall first to avoid saving duplicates."
 }
 func (t *memorySaveTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -117,7 +120,9 @@ type memoryRecallTool struct {
 
 func (t *memoryRecallTool) Name() string { return "memory_recall" }
 func (t *memoryRecallTool) Description() string {
-	return "Search long-term memory for relevant facts."
+	return "Search long-term memory for relevant facts. " +
+		"Call this proactively when the topic might connect to something already saved, " +
+		"and before calling memory_save to check for duplicates."
 }
 func (t *memoryRecallTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -355,5 +360,14 @@ func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, rea
 	if webSearchKey != "" {
 		r.Register(&webSearchTool{apiKey: webSearchKey})
 	}
+	return r
+}
+
+// NewMemoryOnlyRegistry creates a registry with only memory_save and memory_recall.
+// Used by the background memory extraction pass.
+func NewMemoryOnlyRegistry(store *memory.Store, serverID string) *Registry {
+	r := NewRegistry()
+	r.Register(&memorySaveTool{store: store, serverID: serverID})
+	r.Register(&memoryRecallTool{store: store, serverID: serverID})
 	return r
 }
