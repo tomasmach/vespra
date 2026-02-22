@@ -456,6 +456,24 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 }
 
+// buildCombinedContent builds the combined user content string for a batch of coalesced messages.
+func buildCombinedContent(msgs []*discordgo.MessageCreate) string {
+	firstTime := msgs[0].Timestamp
+	lines := make([]string, 0, len(msgs)+2)
+	lines = append(lines, fmt.Sprintf("[%d messages arrived rapidly in quick succession]", len(msgs)))
+	lines = append(lines, "")
+	for _, m := range msgs {
+		line := fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
+		gap := m.Timestamp.Sub(firstTime)
+		if gap >= time.Second {
+			secs := int(gap.Seconds())
+			line += fmt.Sprintf(" (+%ds)", secs)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.MessageCreate) {
 	if len(msgs) == 1 {
 		a.handleMessage(ctx, msgs[0])
@@ -548,20 +566,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 
 	// Build combined user content with relative timestamps.
-	firstTime := msgs[0].Timestamp
-	var combinedLines []string
-	combinedLines = append(combinedLines, fmt.Sprintf("[%d messages arrived rapidly in quick succession]", len(msgs)))
-	combinedLines = append(combinedLines, "")
-	for _, m := range msgs {
-		line := fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
-		gap := m.Timestamp.Sub(firstTime)
-		if gap >= time.Second {
-			secs := int(gap.Seconds())
-			line += fmt.Sprintf(" (+%ds)", secs)
-		}
-		combinedLines = append(combinedLines, line)
-	}
-	combinedContent := strings.Join(combinedLines, "\n")
+	combinedContent := buildCombinedContent(msgs)
 
 	// Build combined LLM user message, including any image attachments.
 	var imageParts []llm.ContentPart

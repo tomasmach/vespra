@@ -188,6 +188,11 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
+	if cfg.Agent.CoalesceDebounceMs > cfg.Agent.CoalesceMaxWaitMs {
+		return nil, fmt.Errorf("agent.coalesce_debounce_ms (%d) must not exceed coalesce_max_wait_ms (%d)",
+			cfg.Agent.CoalesceDebounceMs, cfg.Agent.CoalesceMaxWaitMs)
+	}
+
 	return &cfg, nil
 }
 

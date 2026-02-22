@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -166,5 +167,101 @@ func TestHistoryUserContentReplyNoAuthor(t *testing.T) {
 	want := "alice: hello"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// msgAt creates a MessageCreate with the given username, content, and timestamp.
+func msgAt(username, content string, ts time.Time) *discordgo.MessageCreate {
+	return &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content:   content,
+			Author:    &discordgo.User{Username: username},
+			Timestamp: ts,
+		},
+	}
+}
+
+func TestBuildCombinedContentHeader(t *testing.T) {
+	now := time.Now()
+	msgs := []*discordgo.MessageCreate{
+		msgAt("alice", "hello", now),
+		msgAt("bob", "world", now),
+		msgAt("alice", "again", now),
+	}
+	got := buildCombinedContent(msgs)
+	firstLine := strings.Split(got, "\n")[0]
+	want := "[3 messages arrived rapidly in quick succession]"
+	if firstLine != want {
+		t.Errorf("got header %q, want %q", firstLine, want)
+	}
+}
+
+func TestBuildCombinedContentMessageLines(t *testing.T) {
+	now := time.Now()
+	msgs := []*discordgo.MessageCreate{
+		msgAt("alice", "hello", now),
+		msgAt("bob", "world", now),
+		msgAt("alice", "again", now),
+	}
+	got := buildCombinedContent(msgs)
+	lines := strings.Split(got, "\n")
+	// lines[0] = header, lines[1] = blank, lines[2..4] = messages
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 lines, got %d: %q", len(lines), got)
+	}
+	if lines[1] != "" {
+		t.Errorf("expected blank separator line, got %q", lines[1])
+	}
+	if lines[2] != "alice: hello" {
+		t.Errorf("expected %q, got %q", "alice: hello", lines[2])
+	}
+	if lines[3] != "bob: world" {
+		t.Errorf("expected %q, got %q", "bob: world", lines[3])
+	}
+	if lines[4] != "alice: again" {
+		t.Errorf("expected %q, got %q", "alice: again", lines[4])
+	}
+}
+
+func TestBuildCombinedContentTimestampOnlyWhenGapAtLeastOneSecond(t *testing.T) {
+	base := time.Now()
+	msgs := []*discordgo.MessageCreate{
+		msgAt("alice", "first", base),
+		msgAt("bob", "quick", base.Add(500*time.Millisecond)),
+		msgAt("alice", "later", base.Add(2*time.Second)),
+	}
+	got := buildCombinedContent(msgs)
+	lines := strings.Split(got, "\n")
+	// lines[2] = first message (no timestamp, it is the reference)
+	// lines[3] = second message (gap < 1s, no timestamp)
+	// lines[4] = third message (gap >= 1s, timestamp appended)
+	if strings.Contains(lines[2], "(+") {
+		t.Errorf("first message should not have timestamp, got %q", lines[2])
+	}
+	if strings.Contains(lines[3], "(+") {
+		t.Errorf("second message (gap < 1s) should not have timestamp, got %q", lines[3])
+	}
+	if !strings.HasSuffix(lines[4], "(+2s)") {
+		t.Errorf("third message (gap 2s) should end with (+2s), got %q", lines[4])
+	}
+}
+
+func TestBuildCombinedContentSingleMessage(t *testing.T) {
+	// handleMessages delegates to handleMessage for single messages, but
+	// buildCombinedContent itself should still work correctly with one message.
+	now := time.Now()
+	msgs := []*discordgo.MessageCreate{
+		msgAt("alice", "solo", now),
+	}
+	got := buildCombinedContent(msgs)
+	if !strings.HasPrefix(got, "[1 messages arrived rapidly in quick succession]") {
+		t.Errorf("unexpected output for single message: %q", got)
+	}
+	if !strings.Contains(got, "alice: solo") {
+		t.Errorf("expected message line in output, got %q", got)
+	}
+	// No timestamp suffix for the only (first) message
+	if strings.Contains(got, "(+") {
+		t.Errorf("single message should not have timestamp suffix, got %q", got)
 	}
 }
