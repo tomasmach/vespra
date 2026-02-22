@@ -76,7 +76,15 @@ func formatMessageContent(content, botID, botName string) string {
 func historyUserContent(m *discordgo.Message, botID, botName string) string {
 	content := formatMessageContent(m.Content, botID, botName)
 	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil {
-		return fmt.Sprintf("%s (replying to %s): %s", m.Author.Username, m.ReferencedMessage.Author.Username, content)
+		refContent := formatMessageContent(m.ReferencedMessage.Content, botID, botName)
+		if len(refContent) > 200 {
+			refContent = refContent[:200] + "..."
+		}
+		return fmt.Sprintf("%s (replying to %s: %q): %s",
+			m.Author.Username,
+			m.ReferencedMessage.Author.Username,
+			refContent,
+			content)
 	}
 	return fmt.Sprintf("%s: %s", m.Author.Username, content)
 }

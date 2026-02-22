@@ -146,11 +146,12 @@ func TestHistoryUserContentWithReply(t *testing.T) {
 		Author:  &discordgo.User{Username: "alice"},
 		Content: "I agree",
 		ReferencedMessage: &discordgo.Message{
-			Author: &discordgo.User{Username: "bob"},
+			Author:  &discordgo.User{Username: "bob"},
+			Content: "What do you think?",
 		},
 	}
 	got := historyUserContent(m, "", "")
-	want := "alice (replying to bob): I agree"
+	want := `alice (replying to bob: "What do you think?"): I agree`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
