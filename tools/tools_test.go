@@ -46,20 +46,59 @@ func TestSplitMessageShortString(t *testing.T) {
 	}
 }
 
+func utf16Len(r rune) int {
+	if r >= 0x10000 {
+		return 2
+	}
+	return 1
+}
+
+func utf16Units(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16Len(r)
+	}
+	return n
+}
+
 func TestSplitMessageUnicode(t *testing.T) {
-	// Each emoji is 1 rune but multiple bytes; limit should be in runes
+	// Each emoji (U+1F600) is 1 rune but 2 UTF-16 code units.
+	// 2500 emoji = 5000 UTF-16 units, so limit of 2000 must split on UTF-16 boundaries.
 	emoji := "😀"
 	long := strings.Repeat(emoji, 2500)
 	parts := tools.SplitMessage(long, 2000)
 	for i, p := range parts {
-		runeCount := len([]rune(p))
-		if runeCount > 2000 {
-			t.Errorf("part %d has %d runes, exceeds limit", i, runeCount)
+		units := utf16Units(p)
+		if units > 2000 {
+			t.Errorf("part %d has %d UTF-16 units, exceeds limit of 2000", i, units)
 		}
 	}
 	got := strings.Join(parts, "")
 	if got != long {
 		t.Error("SplitMessage() lost content with unicode input")
+	}
+}
+
+func TestSplitMessageMixedASCIIAndEmoji(t *testing.T) {
+	// 1500 ASCII chars (1 UTF-16 unit each) + 500 emoji (2 UTF-16 units each)
+	// = 1500 + 1000 = 2500 UTF-16 units total, which exceeds the 2000 limit.
+	// The old rune-based code would wrongly count this as 2000 runes and not split.
+	ascii := strings.Repeat("a", 1500)
+	emoji := strings.Repeat("😀", 500)
+	combined := ascii + emoji
+	parts := tools.SplitMessage(combined, 2000)
+	if len(parts) < 2 {
+		t.Errorf("expected message to be split into at least 2 parts, got %d", len(parts))
+	}
+	for i, p := range parts {
+		units := utf16Units(p)
+		if units > 2000 {
+			t.Errorf("part %d has %d UTF-16 units, exceeds limit of 2000", i, units)
+		}
+	}
+	got := strings.Join(parts, "")
+	if got != combined {
+		t.Error("SplitMessage() lost content with mixed ASCII and emoji input")
 	}
 }
 

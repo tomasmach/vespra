@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -89,11 +90,8 @@ func TestSaveAndRecall(t *testing.T) {
 }
 
 func TestForgetHidesFromRecall(t *testing.T) {
-	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(failSrv.Close)
-	store := newTestStore(t, failSrv)
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
 	ctx := context.Background()
 
 	id, err := store.Save(ctx, "secret memory", "srv1", "user1", "chan1", 0.5)
@@ -117,7 +115,8 @@ func TestForgetHidesFromRecall(t *testing.T) {
 }
 
 func TestSaveWithEmbeddingFailure(t *testing.T) {
-	// Embedding server always returns 500
+	// Embedding server always returns 500; Save must now return an error
+	// to avoid writing an orphaned memory row with no embedding.
 	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -126,37 +125,15 @@ func TestSaveWithEmbeddingFailure(t *testing.T) {
 	store := newTestStore(t, failSrv)
 	ctx := context.Background()
 
-	// Save should succeed even if embedding fails (keyword search still works)
-	id, err := store.Save(ctx, "keyword-only memory", "srv1", "user1", "chan1", 0.5)
-	if err != nil {
-		t.Fatalf("Save() should succeed without embedding, got: %v", err)
-	}
-	if id == "" {
-		t.Fatal("Save() returned empty ID")
-	}
-
-	// Keyword recall should still find it
-	results, err := store.Recall(ctx, "keyword-only memory", "srv1", 5)
-	if err != nil {
-		t.Fatalf("Recall() error: %v", err)
-	}
-	found := false
-	for _, r := range results {
-		if r.ID == id {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("memory not found via keyword fallback: %v", results)
+	_, err := store.Save(ctx, "keyword-only memory", "srv1", "user1", "chan1", 0.5)
+	if err == nil {
+		t.Fatal("Save() should fail when embedding fails, but it succeeded")
 	}
 }
 
 func TestListLIKEEscaping(t *testing.T) {
-	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(failSrv.Close)
-	store := newTestStore(t, failSrv)
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
 	ctx := context.Background()
 
 	id, err := store.Save(ctx, "100% done with task_1", "srv1", "user1", "chan1", 0.5)
@@ -180,12 +157,100 @@ func TestListLIKEEscaping(t *testing.T) {
 	}
 }
 
+func TestForgetUnknownIDReturnsErrMemoryNotFound(t *testing.T) {
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
+	ctx := context.Background()
+
+	err := store.Forget(ctx, "srv1", "nonexistent-id")
+	if !errors.Is(err, ErrMemoryNotFound) {
+		t.Errorf("Forget() with unknown ID should return ErrMemoryNotFound, got: %v", err)
+	}
+}
+
+func TestForgetWrongServerReturnsErrMemoryNotFound(t *testing.T) {
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
+	ctx := context.Background()
+
+	id, err := store.Save(ctx, "cross-server memory", "srv1", "user1", "chan1", 0.5)
+	if err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	// Attempt to forget using a different server_id.
+	err = store.Forget(ctx, "srv2", id)
+	if !errors.Is(err, ErrMemoryNotFound) {
+		t.Errorf("Forget() with wrong server_id should return ErrMemoryNotFound, got: %v", err)
+	}
+}
+
+func TestUpdateContentRefreshesEmbedding(t *testing.T) {
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
+	ctx := context.Background()
+
+	id, err := store.Save(ctx, "original content", "srv1", "user1", "chan1", 0.5)
+	if err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	// Verify an embedding row exists after Save.
+	var beforeBlob []byte
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT vector FROM embeddings WHERE memory_id = ?`, id,
+	).Scan(&beforeBlob); err != nil {
+		t.Fatalf("embedding not found after Save: %v", err)
+	}
+
+	if err := store.UpdateContent(ctx, id, "srv1", "updated content"); err != nil {
+		t.Fatalf("UpdateContent() error: %v", err)
+	}
+
+	// The embedding row should still exist (upserted) after UpdateContent.
+	var afterBlob []byte
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT vector FROM embeddings WHERE memory_id = ?`, id,
+	).Scan(&afterBlob); err != nil {
+		t.Fatalf("embedding not found after UpdateContent: %v", err)
+	}
+
+	// The content column should reflect the new value.
+	var content string
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT content FROM memories WHERE id = ?`, id,
+	).Scan(&content); err != nil {
+		t.Fatalf("memory not found after UpdateContent: %v", err)
+	}
+	if content != "updated content" {
+		t.Errorf("content not updated: got %q", content)
+	}
+}
+
+func TestRecallDoesNotLeakCrossServer(t *testing.T) {
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
+	ctx := context.Background()
+
+	// Save a memory under srv1.
+	_, err := store.Save(ctx, "srv1 private data", "srv1", "user1", "chan1", 0.5)
+	if err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	// Recall for srv2 should return nothing.
+	results, err := store.Recall(ctx, "srv1 private data", "srv2", 10)
+	if err != nil {
+		t.Fatalf("Recall() error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("cross-server leak: Recall for srv2 returned %d results from srv1", len(results))
+	}
+}
+
 func TestListUnderscoreEscaping(t *testing.T) {
-	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(failSrv.Close)
-	store := newTestStore(t, failSrv)
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
 	ctx := context.Background()
 
 	// Save two memories: one matching, one that would match with unescaped _

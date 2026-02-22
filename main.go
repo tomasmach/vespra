@@ -107,7 +107,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	router := agent.NewRouter(ctx, cfgStore, llmClient, defaultBot.Session(), agentsByServerID)
+	router, err := agent.NewRouter(ctx, cfgStore, llmClient, defaultBot.Session(), agentsByServerID)
+	if err != nil {
+		slog.Error("failed to create router", "error", err)
+		os.Exit(1)
+	}
 
 	// Wire router to all bots
 	defaultBot.SetRouter(router)

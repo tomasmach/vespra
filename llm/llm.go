@@ -123,14 +123,12 @@ type ChatOptions struct {
 
 type Client struct {
 	cfgStore          *config.Store
-	httpClient        *http.Client
 	openRouterBaseURL string // for testing: overrides the hardcoded OpenRouter endpoint
 }
 
 func New(cfgStore *config.Store) *Client {
 	return &Client{
-		cfgStore:   cfgStore,
-		httpClient: &http.Client{Timeout: time.Duration(cfgStore.Get().LLM.RequestTimeoutSeconds) * time.Second},
+		cfgStore: cfgStore,
 	}
 }
 
@@ -243,6 +241,11 @@ var retryDelays = []time.Duration{500 * time.Millisecond, 1000 * time.Millisecon
 // post sends a JSON POST request to the given URL with retry on transient errors.
 // Returns the response body on success; the caller must close it.
 func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCloser, error) {
+	cfg := c.cfgStore.Get()
+	timeout := time.Duration(cfg.LLM.RequestTimeoutSeconds) * time.Second
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -266,7 +269,7 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("HTTP-Referer", "https://github.com/tomasmach/vespra")
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			lastErr = err
 			continue // all network errors are transient

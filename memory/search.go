@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -78,9 +79,13 @@ func (s *Store) Recall(ctx context.Context, query, serverID string, topN int) ([
 	for _, id := range merged {
 		var row MemoryRow
 		err := s.db.QueryRowContext(ctx,
-			`SELECT id, content, importance, COALESCE(user_id, ''), COALESCE(channel_id, ''), created_at FROM memories WHERE id = ?`,
-			id,
+			`SELECT id, content, importance, COALESCE(user_id, ''), COALESCE(channel_id, ''), created_at
+			 FROM memories WHERE id = ? AND server_id = ? AND forgotten = 0`,
+			id, serverID,
 		).Scan(&row.ID, &row.Content, &row.Importance, &row.UserID, &row.ChannelID, &row.CreatedAt)
+		if err == sql.ErrNoRows {
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("fetch memory %s: %w", id, err)
 		}
