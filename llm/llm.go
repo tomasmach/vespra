@@ -179,7 +179,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 			} else {
 				apiBase = "https://openrouter.ai/api/v1"
 			}
-			apiKey = c.chatKey()
+			if cfg.OpenRouterKey != "" {
+				apiKey = cfg.OpenRouterKey
+			}
 		case "glm":
 			apiBase = cfg.GLMBaseURL
 			apiKey = cfg.GLMKey
