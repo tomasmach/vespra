@@ -762,7 +762,6 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 				Role:       "tool",
 				Content:    result,
 				ToolCallID: tc.ID,
-				Name:       tc.Function.Name,
 			})
 		}
 
@@ -881,7 +880,6 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 					Role:       "tool",
 					Content:    result,
 					ToolCallID: tc.ID,
-					Name:       tc.Function.Name,
 				})
 			}
 		}
@@ -949,12 +947,16 @@ func looksLikeToolCall(s string, defs []llm.ToolDefinition) bool {
 	return false
 }
 
-// isStageDirection reports whether s is a parenthesized stage direction
-// like "(staying silent)" that the model sometimes emits as a non-reply.
+// isStageDirection reports whether s is a stage direction like "(staying silent)"
+// or "[MLČÍM]" that the model sometimes emits as a non-reply.
 // Multi-line strings are never stage directions.
 func isStageDirection(s string) bool {
 	s = strings.TrimSpace(s)
-	return !strings.Contains(s, "\n") && strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")")
+	if strings.Contains(s, "\n") {
+		return false
+	}
+	return (strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")")) ||
+		(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]"))
 }
 
 // buildMessages constructs the message slice for the LLM with system prompt prepended.
