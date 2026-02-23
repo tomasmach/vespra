@@ -550,17 +550,14 @@ function restartSelectedAgent() {
   if (!selectedAgentId) return;
   fetch('/api/agents/' + encodeURIComponent(selectedAgentId) + '/restart', { method: 'POST' })
     .then(r => {
-      if (r.ok) {
-        r.json().then(data => {
-          if (data && data.discord_session_restarted === false) {
-            setCfgStatus('Agent state cleared. Discord session requires process restart.', false);
-          } else {
-            setCfgStatus('Agent restarted.', false);
-          }
-        }).catch(() => setCfgStatus('Agent restarted.', false));
-      } else {
-        r.text().then(t => setCfgStatus(t || 'Restart failed', true));
-      }
+      if (!r.ok) return r.text().then(t => setCfgStatus(t || 'Restart failed', true));
+      return r.json().then(data => {
+        if (data && data.discord_session_restarted === false) {
+          setCfgStatus('Agent state cleared. Discord session requires process restart.', false);
+        } else {
+          setCfgStatus('Agent restarted.', false);
+        }
+      });
     })
     .catch(() => setCfgStatus('Restart failed', true));
 }

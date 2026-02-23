@@ -157,8 +157,8 @@ func TestRestartAgentEvictsChannelAgents(t *testing.T) {
 	registerFakeAgent(t, r, "srv1", nil)
 
 	// Add two fake channel agents for srv1 directly to r.agents.
-	_, cancel1 := context.WithCancel(context.Background())
-	_, cancel2 := context.WithCancel(context.Background())
+	cancel1 := func() {}
+	cancel2 := func() {}
 
 	r.mu.Lock()
 	r.agents["chan1"] = &ChannelAgent{channelID: "chan1", serverID: "srv1", msgCh: make(chan *discordgo.MessageCreate, 100), cancel: cancel1}

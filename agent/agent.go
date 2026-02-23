@@ -52,7 +52,7 @@ func sanitizeHistory(msgs []llm.Message) []llm.Message {
 		dropped++
 	}
 	if dropped > 0 {
-		slog.Warn("sanitizeHistory: dropped leading non-user messages after HistoryLimit trim", "count", dropped)
+		slog.Warn("dropped leading non-user messages after history trim", "count", dropped)
 	}
 	return msgs
 }

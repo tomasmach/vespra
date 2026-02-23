@@ -463,18 +463,18 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRestartAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	cfg := s.cfgStore.Get()
-	for _, a := range cfg.Agents {
-		if a.ID == id {
-			slog.Info("restart agent", "agent_id", id)
-			s.router.RestartAgent(a.ServerID)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"discord_session_restarted": a.Token == "",
-			})
-			return
-		}
+	idx := findAgentIndex(cfg.Agents, id)
+	if idx == -1 {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
 	}
-	http.Error(w, "agent not found", http.StatusNotFound)
+	a := cfg.Agents[idx]
+	slog.Info("restart agent", "agent_id", id)
+	s.router.RestartAgent(a.ServerID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"discord_session_restarted": a.Token == "",
+	})
 }
 
 // findAgentIndex returns the index of the agent with the given ID, or -1 if not found.
