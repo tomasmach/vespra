@@ -735,7 +735,7 @@ function renderLogs(data) {
       return '<tr>' +
         '<td class="log-time">' + esc(t) + '</td>' +
         '<td><span class="badge log-badge-' + esc(lvl.toLowerCase()) + '">' + esc(lvl) + '</span></td>' +
-        '<td class="log-msg">' + esc(r.msg) + (r.attrs ? ' <span class="log-attrs">' + esc(r.attrs) + '</span>' : '') + '</td>' +
+        '<td class="log-msg">' + esc(r.msg) + (r.attrs ? ' <span class="log-attrs">' + esc(fmtAttrs(r.attrs)) + '</span>' : '') + '</td>' +
         '<td class="log-channel">' + esc(r.channel_id || '') + '</td>' +
         '</tr>';
     }).join('') +
@@ -913,6 +913,16 @@ function setStatus(elementId, msg, isError) {
   el.textContent = msg;
   el.className = 'status-msg' + (isError ? ' error' : '');
   if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
+}
+
+function fmtAttrs(attrsJSON) {
+  if (!attrsJSON) return '';
+  try {
+    const obj = JSON.parse(attrsJSON);
+    return Object.entries(obj)
+      .map(([k, v]) => k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v))
+      .join(' ');
+  } catch { return attrsJSON; }
 }
 
 function esc(str) {

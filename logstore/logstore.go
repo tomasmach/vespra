@@ -208,7 +208,7 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		case "channel_id":
 			channelID = a.Value.String()
 		default:
-			extra[a.Key] = a.Value.Any()
+			extra[a.Key] = attrValue(a.Value)
 		}
 		return true
 	})
@@ -221,6 +221,17 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 
 	h.store.write(ctx, r.Time, r.Level.String(), r.Message, serverID, channelID, attrsJSON)
 	return nil
+}
+
+// attrValue extracts the value from a slog.Value, converting error types to
+// strings so they serialize as meaningful text instead of empty JSON objects.
+func attrValue(v slog.Value) any {
+	if v.Kind() == slog.KindAny {
+		if err, ok := v.Any().(error); ok {
+			return err.Error()
+		}
+	}
+	return v.Any()
 }
 
 func copyMap(m map[string]string) map[string]string {
