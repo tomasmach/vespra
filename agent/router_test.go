@@ -30,7 +30,11 @@ func newTestRouter(t *testing.T) *Router {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	return NewRouter(ctx, cfgStore, llmClient, nil, make(map[string]*AgentResources))
+	r, err := NewRouter(ctx, cfgStore, llmClient, nil, make(map[string]*AgentResources))
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	return r
 }
 
 func fakeMsg(guildID, channelID, userID string) *discordgo.MessageCreate {

@@ -140,16 +140,16 @@ func Load(path string) (*Config, error) {
 	if cfg.LLM.RequestTimeoutSeconds == 0 {
 		cfg.LLM.RequestTimeoutSeconds = 60
 	}
-	if cfg.Agent.HistoryLimit == 0 {
+	if cfg.Agent.HistoryLimit <= 0 {
 		cfg.Agent.HistoryLimit = 20
 	}
-	if cfg.Agent.IdleTimeoutMinutes == 0 {
+	if cfg.Agent.IdleTimeoutMinutes <= 0 {
 		cfg.Agent.IdleTimeoutMinutes = 10
 	}
-	if cfg.Agent.MaxToolIterations == 0 {
+	if cfg.Agent.MaxToolIterations <= 0 {
 		cfg.Agent.MaxToolIterations = 10
 	}
-	if cfg.Agent.HistoryBackfillLimit == 0 {
+	if cfg.Agent.HistoryBackfillLimit <= 0 {
 		cfg.Agent.HistoryBackfillLimit = 50
 	}
 	if cfg.Agent.MemoryExtractionInterval == 0 {

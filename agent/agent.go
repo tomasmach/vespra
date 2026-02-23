@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -73,6 +74,7 @@ type ChannelAgent struct {
 	turnCount         int           // incremented each completed turn; triggers background extraction
 	lastActive        atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
 	extractionRunning atomic.Bool   // prevents concurrent extraction goroutines from piling up
+	extractionWg      sync.WaitGroup // tracks in-flight memory extraction goroutines
 
 	msgCh  chan *discordgo.MessageCreate // buffered 100
 	cancel context.CancelFunc           // cancels this agent's context
@@ -300,6 +302,10 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 }
 
 func (a *ChannelAgent) run(ctx context.Context) {
+	// Wait for all in-flight memory extraction goroutines before returning,
+	// so that SQLite connections are not closed while extractions are still writing.
+	defer a.extractionWg.Wait()
+
 	idleTimeout := time.Duration(a.cfgStore.Get().Agent.IdleTimeoutMinutes) * time.Minute
 	idleTimer := time.NewTimer(idleTimeout)
 	defer idleTimer.Stop()
@@ -717,7 +723,14 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	var toolCalls []toolCallRecord
 	var assistantContent string
-	for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
+	for iter := 0; ; iter++ {
+		if iter >= cfg.Agent.MaxToolIterations {
+			if err := tp.sendFn("I got stuck in a loop. Please try again."); err != nil {
+				a.logger.Error("send message", "error", err)
+			}
+			return
+		}
+
 		choice, err := a.llm.Chat(ctx, buildMessages(tp.systemPrompt, tp.llmMsgs), tp.reg.Definitions(), chatOpts)
 		if err != nil {
 			effectiveModel := cfg.LLM.Model
@@ -753,11 +766,12 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			})
 		}
 
-		if iter == cfg.Agent.MaxToolIterations-1 {
-			if err := tp.sendFn("I got stuck in a loop. Please try again."); err != nil {
-				a.logger.Error("send message", "error", err)
-			}
-			return
+		// After executing tool calls, if the reply tool was used, record what was said
+		// so subsequent LLM calls have context of what the assistant replied.
+		// Reset ReplyText after appending so this only fires once (Replied is a sticky latch).
+		if tp.reg.Replied && tp.reg.ReplyText != "" {
+			tp.llmMsgs = append(tp.llmMsgs, llm.Message{Role: "assistant", Content: tp.reg.ReplyText})
+			tp.reg.ReplyText = ""
 		}
 	}
 
@@ -836,7 +850,9 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 	snapshot := stripImageParts(history)
 	reg := tools.NewMemoryOnlyRegistry(a.resources.Memory, a.serverID)
 
+	a.extractionWg.Add(1)
 	go func() {
+		defer a.extractionWg.Done()
 		defer a.extractionRunning.Store(false)
 
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)

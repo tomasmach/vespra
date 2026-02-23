@@ -6,6 +6,7 @@ import (
 	crand "crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -19,6 +20,10 @@ import (
 	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
 )
+
+// ErrMemoryNotFound is returned when a memory operation targets an ID that does
+// not exist or belongs to a different server.
+var ErrMemoryNotFound = errors.New("memory not found")
 
 const migrationSQL = `
 CREATE TABLE IF NOT EXISTS memories (
@@ -83,40 +88,62 @@ func newID() (string, error) {
 }
 
 func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID string, importance float64) (string, error) {
+	vec, embedErr := s.llm.Embed(ctx, content)
+	if embedErr != nil {
+		slog.Warn("embed failed, skipping embedding", "error", embedErr)
+	}
+
 	id, err := newID()
 	if err != nil {
 		return "", fmt.Errorf("generate id: %w", err)
 	}
 	now := time.Now().UTC()
-	_, err = s.db.ExecContext(ctx,
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err = tx.ExecContext(ctx,
 		`INSERT INTO memories (id, content, importance, server_id, user_id, channel_id, created_at, updated_at, forgotten)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 		id, content, importance, serverID, userID, channelID, now, now,
-	)
-	if err != nil {
+	); err != nil {
 		return "", fmt.Errorf("insert memory: %w", err)
 	}
 
-	vec, err := s.llm.Embed(ctx, content)
-	if err != nil {
-		slog.Warn("embed failed, skipping embedding", "error", err)
-		return id, nil
+	if embedErr == nil {
+		if _, err = tx.ExecContext(ctx,
+			`INSERT INTO embeddings (memory_id, vector) VALUES (?, ?)`,
+			id, llm.VectorToBlob(vec),
+		); err != nil {
+			return "", fmt.Errorf("insert embedding: %w", err)
+		}
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO embeddings (memory_id, vector) VALUES (?, ?)`,
-		id, llm.VectorToBlob(vec),
-	); err != nil {
-		slog.Warn("insert embedding failed", "error", err)
+
+	if err = tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit transaction: %w", err)
 	}
 	return id, nil
 }
 
 func (s *Store) Forget(ctx context.Context, serverID, memoryID string) error {
-	_, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`UPDATE memories SET forgotten = 1, updated_at = ? WHERE id = ? AND server_id = ?`,
 		time.Now().UTC(), memoryID, serverID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrMemoryNotFound
+	}
+	return nil
 }
 
 type ListOptions struct {
@@ -173,11 +200,44 @@ func (s *Store) List(ctx context.Context, opts ListOptions) ([]MemoryRow, int, e
 }
 
 func (s *Store) UpdateContent(ctx context.Context, id, serverID, content string) error {
-	_, err := s.db.ExecContext(ctx,
+	vec, err := s.llm.Embed(ctx, content)
+	if err != nil {
+		return fmt.Errorf("embed content: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	result, err := tx.ExecContext(ctx,
 		`UPDATE memories SET content = ?, updated_at = ? WHERE id = ? AND server_id = ? AND forgotten = 0`,
 		content, time.Now().UTC(), id, serverID,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("update memory: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrMemoryNotFound
+	}
+
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO embeddings (memory_id, vector) VALUES (?, ?)
+		 ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector`,
+		id, llm.VectorToBlob(vec),
+	); err != nil {
+		return fmt.Errorf("upsert embedding: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
 }
 
 // ConversationRow holds a single persisted conversation turn returned by ListConversations.

@@ -56,12 +56,13 @@ type Router struct {
 	spamMap          map[string]*spamRecord // key: "serverID:userID", protected by mu
 }
 
-// NewRouter creates a new Router.
-func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Client, defaultSession *discordgo.Session, agentsByServerID map[string]*AgentResources) *Router {
+// NewRouter creates a new Router. Returns an error if the DM memory store cannot be opened,
+// since a nil DM store would silently discard all direct messages.
+func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Client, defaultSession *discordgo.Session, agentsByServerID map[string]*AgentResources) (*Router, error) {
 	cfg := cfgStore.Get()
 	dmMem, err := memory.New(&config.MemoryConfig{DBPath: config.ExpandPath(cfg.Memory.DBPath)}, llmClient)
 	if err != nil {
-		slog.Error("failed to open DM memory store", "error", err)
+		return nil, fmt.Errorf("open DM memory store: %w", err)
 	}
 	return &Router{
 		agents:           make(map[string]*ChannelAgent),
@@ -72,7 +73,7 @@ func NewRouter(ctx context.Context, cfgStore *config.Store, llmClient *llm.Clien
 		agentsByServerID: agentsByServerID,
 		dmMemory:         dmMem,
 		spamMap:          make(map[string]*spamRecord),
-	}
+	}, nil
 }
 
 // Route delivers a message to the appropriate channel agent, spawning one if needed.

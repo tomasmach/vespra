@@ -129,14 +129,12 @@ type ChatOptions struct {
 
 type Client struct {
 	cfgStore          *config.Store
-	httpClient        *http.Client
 	openRouterBaseURL string // for testing: overrides the hardcoded OpenRouter endpoint
 }
 
 func New(cfgStore *config.Store) *Client {
 	return &Client{
-		cfgStore:   cfgStore,
-		httpClient: &http.Client{Timeout: time.Duration(cfgStore.Get().LLM.RequestTimeoutSeconds) * time.Second},
+		cfgStore: cfgStore,
 	}
 }
 
@@ -250,11 +248,26 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	return result.Data[0].Embedding, nil
 }
 
+// cancelOnClose wraps an io.ReadCloser to call a cancel function on Close.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
+}
+
 var retryDelays = []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond}
 
 // post sends a JSON POST request to the given URL with retry on transient errors.
 // Returns the response body on success; the caller must close it.
 func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCloser, error) {
+	cfg := c.cfgStore.Get()
+	timeout := time.Duration(cfg.LLM.RequestTimeoutSeconds) * time.Second
+
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -270,32 +283,39 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, timeout)
+		req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, url, bytes.NewReader(data))
 		if err != nil {
+			attemptCancel()
 			return nil, fmt.Errorf("build request: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+key)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("HTTP-Referer", "https://github.com/tomasmach/vespra")
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
+			attemptCancel()
 			lastErr = err
 			continue // all network errors are transient
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			resp.Body.Close()
+			attemptCancel()
 			lastErr = fmt.Errorf("transient HTTP %d", resp.StatusCode)
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			resp.Body.Close()
+			attemptCancel()
 			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		}
 
-		return resp.Body, nil
+		// Cancel the per-attempt context when the caller closes the body,
+		// not before — the context must remain live while the body is being read.
+		return &cancelOnClose{ReadCloser: resp.Body, cancel: attemptCancel}, nil
 	}
 	return nil, lastErr
 }

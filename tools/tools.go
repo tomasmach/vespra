@@ -4,12 +4,12 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/tomasmach/vespra/llm"
 	"github.com/tomasmach/vespra/memory"
@@ -96,17 +96,18 @@ func (t *memorySaveTool) Parameters() json.RawMessage {
 }
 func (t *memorySaveTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		Content    string  `json:"content"`
-		UserID     string  `json:"user_id"`
-		Importance float64 `json:"importance"`
+		Content    string   `json:"content"`
+		UserID     string   `json:"user_id"`
+		Importance *float64 `json:"importance"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
 	}
-	if p.Importance == 0 {
-		p.Importance = 0.5
+	importance := 0.5
+	if p.Importance != nil {
+		importance = *p.Importance
 	}
-	id, err := t.store.Save(ctx, p.Content, t.serverID, p.UserID, "", p.Importance)
+	id, err := t.store.Save(ctx, p.Content, t.serverID, p.UserID, "", importance)
 	if err != nil {
 		return "", err
 	}
@@ -185,6 +186,9 @@ func (t *memoryForgetTool) Call(ctx context.Context, args json.RawMessage) (stri
 		return "", err
 	}
 	if err := t.store.Forget(ctx, t.serverID, p.MemoryID); err != nil {
+		if errors.Is(err, memory.ErrMemoryNotFound) {
+			return "Memory not found.", nil
+		}
 		return "", err
 	}
 	return "Memory forgotten.", nil
@@ -227,20 +231,40 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	return "Replied.", nil
 }
 
-// SplitMessage splits s into chunks of at most limit Unicode code points.
+// utf16Len returns the number of UTF-16 code units for a rune.
+func utf16Len(r rune) int {
+	if r >= 0x10000 {
+		return 2 // surrogate pair
+	}
+	return 1
+}
+
+// SplitMessage splits s into chunks of at most limit UTF-16 code units,
+// matching Discord's 2000-character limit which is measured in UTF-16 units.
 func SplitMessage(s string, limit int) []string {
-	if utf8.RuneCountInString(s) <= limit {
+	// fast path: count total UTF-16 units
+	total := 0
+	for _, r := range s {
+		total += utf16Len(r)
+	}
+	if total <= limit {
 		return []string{s}
 	}
 	var parts []string
-	runes := []rune(s)
-	for len(runes) > 0 {
-		end := limit
-		if end > len(runes) {
-			end = len(runes)
+	var buf strings.Builder
+	units := 0
+	for _, r := range s {
+		rLen := utf16Len(r)
+		if units+rLen > limit {
+			parts = append(parts, buf.String())
+			buf.Reset()
+			units = 0
 		}
-		parts = append(parts, string(runes[:end]))
-		runes = runes[end:]
+		buf.WriteRune(r)
+		units += rLen
+	}
+	if buf.Len() > 0 {
+		parts = append(parts, buf.String())
 	}
 	return parts
 }
