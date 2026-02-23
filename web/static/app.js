@@ -546,6 +546,22 @@ function setNewAgentStatus(msg, isError) {
   setStatus('new-agent-status', msg, isError);
 }
 
+function restartSelectedAgent() {
+  if (!selectedAgentId) return;
+  fetch('/api/agents/' + encodeURIComponent(selectedAgentId) + '/restart', { method: 'POST' })
+    .then(r => {
+      if (!r.ok) return r.text().then(t => setCfgStatus(t || 'Restart failed', true));
+      return r.json().then(data => {
+        if (data && data.discord_session_restarted === false) {
+          setCfgStatus('Agent state cleared. Discord session requires process restart.', false);
+        } else {
+          setCfgStatus('Agent restarted.', false);
+        }
+      });
+    })
+    .catch(() => setCfgStatus('Restart failed', true));
+}
+
 function deleteSelectedAgent() {
   if (!selectedAgentId) return;
   if (!confirm('Delete agent "' + selectedAgentId + '"? The memory DB will not be deleted.')) return;

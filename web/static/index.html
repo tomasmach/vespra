@@ -126,7 +126,10 @@
       <div id="panel-agent" class="flex flex-col h-full overflow-hidden" hidden>
         <div class="flex-shrink-0 flex items-center justify-between px-6 pt-5 pb-0">
           <h2 id="agent-detail-name" class="text-sm font-semibold text-zinc-200 tracking-wide"></h2>
-          <button class="btn-danger text-xs" onclick="deleteSelectedAgent()">Delete</button>
+          <div class="flex items-center gap-2">
+            <button class="btn-secondary text-xs" onclick="restartSelectedAgent()">Restart</button>
+            <button class="btn-danger text-xs" onclick="deleteSelectedAgent()">Delete</button>
+          </div>
         </div>
         <div class="flex px-6 mt-4 border-b border-zinc-800 flex-shrink-0 gap-1">
           <button class="detail-tab active" id="dtab-config" onclick="navigateTab('config')">Config</button>

@@ -120,12 +120,15 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 	}
 
 	// spawn new agent
+	agentCtx, agentCancel := context.WithCancel(r.ctx)
 	a := newChannelAgent(channelID, serverID, r.cfgStore, r.llm, resources)
+	a.cancel = agentCancel
 	r.agents[channelID] = a
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		a.run(r.ctx)
+		defer agentCancel()
+		a.run(agentCtx)
 		r.mu.Lock()
 		if r.agents[channelID] == a {
 			delete(r.agents, channelID)
@@ -195,6 +198,20 @@ func (r *Router) tryHotLoad(serverID string) *AgentResources {
 func (r *Router) UnloadAgent(serverID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	delete(r.agentsByServerID, serverID)
+}
+
+// RestartAgent clears all active channel agents for the given server and removes
+// the resource cache, forcing a fresh start on the next incoming message.
+func (r *Router) RestartAgent(serverID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for channelID, a := range r.agents {
+		if a.serverID == serverID {
+			a.cancel()
+			delete(r.agents, channelID)
+		}
+	}
 	delete(r.agentsByServerID, serverID)
 }
 

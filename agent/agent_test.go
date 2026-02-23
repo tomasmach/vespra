@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
+	"github.com/tomasmach/vespra/llm"
 )
 
 func msg(content string, attachments ...*discordgo.MessageAttachment) *discordgo.MessageCreate {
@@ -646,6 +648,62 @@ func TestFormatMessageContent(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("formatMessageContent(%q, %q, %q) = %q, want %q",
 					tt.content, tt.botID, tt.botName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeHistory(t *testing.T) {
+	user := llm.Message{Role: "user", Content: "hello"}
+	assistant := llm.Message{Role: "assistant", Content: "hi"}
+	tool := llm.Message{Role: "tool", Content: "result"}
+
+	tests := []struct {
+		name string
+		in   []llm.Message
+		want []llm.Message
+	}{
+		{
+			name: "empty input returns empty",
+			in:   []llm.Message{},
+			want: []llm.Message{},
+		},
+		{
+			name: "already starts with user no change",
+			in:   []llm.Message{user, assistant},
+			want: []llm.Message{user, assistant},
+		},
+		{
+			name: "starts with assistant drops it",
+			in:   []llm.Message{assistant, user},
+			want: []llm.Message{user},
+		},
+		{
+			name: "starts with tool drops it",
+			in:   []llm.Message{tool, user},
+			want: []llm.Message{user},
+		},
+		{
+			name: "multiple leading non-user messages all dropped",
+			in:   []llm.Message{assistant, tool, assistant, user, assistant},
+			want: []llm.Message{user, assistant},
+		},
+		{
+			name: "all non-user messages returns empty",
+			in:   []llm.Message{assistant, tool, assistant},
+			want: []llm.Message{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeHistory(tt.in)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len(got)=%d, len(want)=%d; got=%v", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				if got[i].Role != tt.want[i].Role || got[i].Content != tt.want[i].Content {
+					t.Errorf("got[%d]=%+v, want[%d]=%+v", i, got[i], i, tt.want[i])
+				}
 			}
 		})
 	}

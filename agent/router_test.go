@@ -152,6 +152,49 @@ func TestSpamBlockExpires(t *testing.T) {
 	}
 }
 
+func TestRestartAgentEvictsChannelAgents(t *testing.T) {
+	r := newTestRouter(t)
+	registerFakeAgent(t, r, "srv1", nil)
+
+	// Add two fake channel agents for srv1 directly to r.agents.
+	cancel1 := func() {}
+	cancel2 := func() {}
+
+	r.mu.Lock()
+	r.agents["chan1"] = &ChannelAgent{channelID: "chan1", serverID: "srv1", msgCh: make(chan *discordgo.MessageCreate, 100), cancel: cancel1}
+	r.agents["chan2"] = &ChannelAgent{channelID: "chan2", serverID: "srv1", msgCh: make(chan *discordgo.MessageCreate, 100), cancel: cancel2}
+	r.mu.Unlock()
+
+	r.RestartAgent("srv1")
+
+	r.mu.Lock()
+	_, exists1 := r.agents["chan1"]
+	_, exists2 := r.agents["chan2"]
+	r.mu.Unlock()
+
+	if exists1 {
+		t.Error("RestartAgent() should remove chan1 from agents map")
+	}
+	if exists2 {
+		t.Error("RestartAgent() should remove chan2 from agents map")
+	}
+}
+
+func TestRestartAgentEvictsResourceCache(t *testing.T) {
+	r := newTestRouter(t)
+	registerFakeAgent(t, r, "srv1", nil)
+
+	r.RestartAgent("srv1")
+
+	r.mu.Lock()
+	_, exists := r.agentsByServerID["srv1"]
+	r.mu.Unlock()
+
+	if exists {
+		t.Error("RestartAgent() should remove server from agentsByServerID")
+	}
+}
+
 func TestIgnoreUserDropsMessage(t *testing.T) {
 	r := newTestRouter(t)
 	registerFakeAgent(t, r, "srv1", []string{"ignored-user"})

@@ -42,6 +42,21 @@ Before saving each memory, call memory_recall to check if it already exists. Ski
 Do not save trivial small talk or anything unlikely to be useful later.
 When you have finished saving all notable memories, stop.`
 
+// sanitizeHistory drops leading messages that are not role "user", preventing
+// orphaned tool-result or partial tool-call messages from corrupting history
+// after a HistoryLimit trim.
+func sanitizeHistory(msgs []llm.Message) []llm.Message {
+	dropped := 0
+	for len(msgs) > 0 && msgs[0].Role != "user" {
+		msgs = msgs[1:]
+		dropped++
+	}
+	if dropped > 0 {
+		slog.Warn("dropped leading non-user messages after history trim", "count", dropped)
+	}
+	return msgs
+}
+
 // ChannelAgent is a per-channel conversation goroutine.
 type ChannelAgent struct {
 	channelID string
@@ -59,7 +74,8 @@ type ChannelAgent struct {
 	lastActive        atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
 	extractionRunning atomic.Bool   // prevents concurrent extraction goroutines from piling up
 
-	msgCh chan *discordgo.MessageCreate // buffered 100
+	msgCh  chan *discordgo.MessageCreate // buffered 100
+	cancel context.CancelFunc           // cancels this agent's context
 }
 
 // hasImageAttachments reports whether the message has at least one image attachment.
@@ -464,6 +480,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		if len(a.history) > cfg.Agent.HistoryLimit {
 			a.history = a.history[len(a.history)-cfg.Agent.HistoryLimit:]
 		}
+		a.history = sanitizeHistory(a.history)
 	}
 
 	memories, err := a.resources.Memory.Recall(ctx, msg.Content, a.serverID, 10)
@@ -703,7 +720,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
 		choice, err := a.llm.Chat(ctx, buildMessages(tp.systemPrompt, tp.llmMsgs), tp.reg.Definitions(), chatOpts)
 		if err != nil {
-			a.logger.Error("llm chat error", "error", err)
+			a.logger.Error("llm chat error", "error", err, "model", chatOpts.Model)
 			if err := tp.sendFn("I encountered an error. Please try again."); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
@@ -795,6 +812,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	if len(tp.llmMsgs) > cfg.Agent.HistoryLimit {
 		tp.llmMsgs = tp.llmMsgs[len(tp.llmMsgs)-cfg.Agent.HistoryLimit:]
 	}
+	tp.llmMsgs = sanitizeHistory(tp.llmMsgs)
 	a.history = tp.llmMsgs
 	if assistantContent != "" || tp.reg.Replied {
 		a.turnCount++
