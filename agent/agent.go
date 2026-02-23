@@ -46,8 +46,13 @@ When you have finished saving all notable memories, stop.`
 // orphaned tool-result or partial tool-call messages from corrupting history
 // after a HistoryLimit trim.
 func sanitizeHistory(msgs []llm.Message) []llm.Message {
+	dropped := 0
 	for len(msgs) > 0 && msgs[0].Role != "user" {
 		msgs = msgs[1:]
+		dropped++
+	}
+	if dropped > 0 {
+		slog.Warn("sanitizeHistory: dropped leading non-user messages after HistoryLimit trim", "count", dropped)
 	}
 	return msgs
 }
@@ -69,7 +74,8 @@ type ChannelAgent struct {
 	lastActive        atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
 	extractionRunning atomic.Bool   // prevents concurrent extraction goroutines from piling up
 
-	msgCh chan *discordgo.MessageCreate // buffered 100
+	msgCh  chan *discordgo.MessageCreate // buffered 100
+	cancel context.CancelFunc           // cancels this agent's context
 }
 
 // hasImageAttachments reports whether the message has at least one image attachment.

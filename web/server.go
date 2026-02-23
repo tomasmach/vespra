@@ -465,8 +465,12 @@ func (s *Server) handleRestartAgent(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfgStore.Get()
 	for _, a := range cfg.Agents {
 		if a.ID == id {
+			slog.Info("restart agent", "agent_id", id)
 			s.router.RestartAgent(a.ServerID)
-			w.WriteHeader(http.StatusNoContent)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"discord_session_restarted": a.Token == "",
+			})
 			return
 		}
 	}
