@@ -546,6 +546,16 @@ function setNewAgentStatus(msg, isError) {
   setStatus('new-agent-status', msg, isError);
 }
 
+function restartSelectedAgent() {
+  if (!selectedAgentId) return;
+  fetch('/api/agents/' + encodeURIComponent(selectedAgentId) + '/restart', { method: 'POST' })
+    .then(r => {
+      if (r.ok) setCfgStatus('Agent restarted.', false);
+      else r.text().then(t => setCfgStatus(t || 'Restart failed', true));
+    })
+    .catch(() => setCfgStatus('Restart failed', true));
+}
+
 function deleteSelectedAgent() {
   if (!selectedAgentId) return;
   if (!confirm('Delete agent "' + selectedAgentId + '"? The memory DB will not be deleted.')) return;

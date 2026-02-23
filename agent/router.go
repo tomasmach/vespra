@@ -198,6 +198,19 @@ func (r *Router) UnloadAgent(serverID string) {
 	delete(r.agentsByServerID, serverID)
 }
 
+// RestartAgent clears all active channel agents for the given server and removes
+// the resource cache, forcing a fresh start on the next incoming message.
+func (r *Router) RestartAgent(serverID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for channelID, a := range r.agents {
+		if a.serverID == serverID {
+			delete(r.agents, channelID)
+		}
+	}
+	delete(r.agentsByServerID, serverID)
+}
+
 // Status returns a snapshot of all active channel agents.
 func (r *Router) Status() []ChannelStatus {
 	r.mu.Lock()

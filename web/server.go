@@ -69,6 +69,7 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("PUT /api/agents/{id}/souls/{name}", s.handlePutAgentSoulByName)
 	mux.HandleFunc("DELETE /api/agents/{id}/souls/{name}", s.handleDeleteAgentSoulByName)
 	mux.HandleFunc("POST /api/agents/{id}/souls/{name}/activate", s.handleActivateAgentSoul)
+	mux.HandleFunc("POST /api/agents/{id}/restart", s.handleRestartAgent)
 	mux.HandleFunc("GET /api/agents/{id}/logs", s.handleGetAgentLogs)
 	mux.HandleFunc("GET /api/agents/{id}/conversations", s.handleGetAgentConversations)
 	mux.HandleFunc("GET /api/soul", s.handleGetGlobalSoul)
@@ -457,6 +458,19 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 
 	s.router.UnloadAgent(serverID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRestartAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	cfg := s.cfgStore.Get()
+	for _, a := range cfg.Agents {
+		if a.ID == id {
+			s.router.RestartAgent(a.ServerID)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+	http.Error(w, "agent not found", http.StatusNotFound)
 }
 
 // findAgentIndex returns the index of the agent with the given ID, or -1 if not found.
