@@ -433,6 +433,169 @@ func TestBuildUserMessageVideoSkippedWhenTooLarge(t *testing.T) {
 	}
 }
 
+func TestHasGifEmbeds(t *testing.T) {
+	gifv := &discordgo.Message{
+		Embeds: []*discordgo.MessageEmbed{
+			{Type: discordgo.EmbedTypeGifv, Thumbnail: &discordgo.MessageEmbedThumbnail{URL: "https://tenor.com/thumb.jpg"}},
+		},
+	}
+	if !hasGifEmbeds(gifv) {
+		t.Error("expected hasGifEmbeds=true for gifv embed with thumbnail")
+	}
+
+	noThumb := &discordgo.Message{
+		Embeds: []*discordgo.MessageEmbed{
+			{Type: discordgo.EmbedTypeGifv},
+		},
+	}
+	if hasGifEmbeds(noThumb) {
+		t.Error("expected hasGifEmbeds=false for gifv embed without thumbnail")
+	}
+
+	rich := &discordgo.Message{
+		Embeds: []*discordgo.MessageEmbed{
+			{Type: discordgo.EmbedTypeRich, Thumbnail: &discordgo.MessageEmbedThumbnail{URL: "https://example.com/img.jpg"}},
+		},
+	}
+	if hasGifEmbeds(rich) {
+		t.Error("expected hasGifEmbeds=false for non-gifv embed")
+	}
+
+	empty := &discordgo.Message{}
+	if hasGifEmbeds(empty) {
+		t.Error("expected hasGifEmbeds=false for message with no embeds")
+	}
+}
+
+func TestHistoryUserContentReplyWithGif(t *testing.T) {
+	m := &discordgo.Message{
+		Author:  &discordgo.User{Username: "alice"},
+		Content: "look",
+		ReferencedMessage: &discordgo.Message{
+			Author:  &discordgo.User{Username: "bob"},
+			Content: "",
+			Embeds: []*discordgo.MessageEmbed{
+				{Type: discordgo.EmbedTypeGifv, Thumbnail: &discordgo.MessageEmbedThumbnail{URL: "https://tenor.com/thumb.jpg"}},
+			},
+		},
+	}
+	got := historyUserContent(m, "", "")
+	want := `alice (replying to bob: "[gif]"): look`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildUserMessageWithGifEmbed(t *testing.T) {
+	fakeData := []byte("fake jpeg thumbnail bytes")
+	srv, cleanup := imageServer(t, fakeData)
+	defer cleanup()
+
+	gifMsg := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content: "check this gif",
+			Author:  &discordgo.User{Username: "alice"},
+			Embeds: []*discordgo.MessageEmbed{
+				{
+					Type: discordgo.EmbedTypeGifv,
+					Thumbnail: &discordgo.MessageEmbedThumbnail{
+						ProxyURL: srv.URL + "/thumb.jpg",
+						URL:      "https://tenor.com/original.gif",
+					},
+				},
+			},
+		},
+	}
+	m := buildUserMessage(context.Background(), srv.Client(), gifMsg, "", "")
+	if len(m.ContentParts) != 2 {
+		t.Fatalf("expected 2 content parts (text + gif thumbnail), got %d", len(m.ContentParts))
+	}
+	if m.ContentParts[0].Type != "text" {
+		t.Errorf("expected first part type=text, got %q", m.ContentParts[0].Type)
+	}
+	if m.ContentParts[1].Type != "image_url" {
+		t.Errorf("expected second part type=image_url, got %q", m.ContentParts[1].Type)
+	}
+	if m.ContentParts[1].ImageURL == nil {
+		t.Fatal("expected non-nil ImageURL")
+	}
+	if !strings.HasPrefix(m.ContentParts[1].ImageURL.URL, "data:") {
+		t.Errorf("expected base64 data URL, got: %q", m.ContentParts[1].ImageURL.URL)
+	}
+}
+
+func TestBuildUserMessageGifEmbedNoThumbnail(t *testing.T) {
+	gifMsg := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content: "a gif with no thumbnail",
+			Author:  &discordgo.User{Username: "alice"},
+			Embeds: []*discordgo.MessageEmbed{
+				{Type: discordgo.EmbedTypeGifv}, // nil Thumbnail
+			},
+		},
+	}
+	m := buildUserMessage(context.Background(), nil, gifMsg, "", "")
+	if len(m.ContentParts) != 0 {
+		t.Errorf("expected no content parts for gifv embed with nil thumbnail, got %d", len(m.ContentParts))
+	}
+	if m.Content != "alice: a gif with no thumbnail" {
+		t.Errorf("unexpected content: %q", m.Content)
+	}
+}
+
+func TestBuildCombinedUserMessageWithGifEmbed(t *testing.T) {
+	fakeData := []byte("fake jpeg thumbnail bytes")
+	srv, cleanup := imageServer(t, fakeData)
+	defer cleanup()
+
+	gifMsg := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content: "check this gif",
+			Author:  &discordgo.User{Username: "alice"},
+			Embeds: []*discordgo.MessageEmbed{
+				{
+					Type: discordgo.EmbedTypeGifv,
+					Thumbnail: &discordgo.MessageEmbedThumbnail{
+						ProxyURL: srv.URL + "/thumb.jpg",
+						URL:      "https://tenor.com/original.gif",
+					},
+				},
+			},
+		},
+	}
+	plainMsg := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content: "just a regular message",
+			Author:  &discordgo.User{Username: "bob"},
+		},
+	}
+
+	a := &ChannelAgent{httpClient: srv.Client()}
+	m := a.buildCombinedUserMessage(context.Background(), []*discordgo.MessageCreate{gifMsg, plainMsg}, "", "")
+
+	if len(m.ContentParts) == 0 {
+		t.Fatal("expected ContentParts to be non-empty")
+	}
+	if m.ContentParts[0].Type != "text" {
+		t.Errorf("expected first part type=text, got %q", m.ContentParts[0].Type)
+	}
+	hasImageURL := false
+	for _, part := range m.ContentParts {
+		if part.Type == "image_url" {
+			hasImageURL = true
+			if part.ImageURL == nil {
+				t.Fatal("expected non-nil ImageURL")
+			}
+			if !strings.HasPrefix(part.ImageURL.URL, "data:") {
+				t.Errorf("expected base64 data URL, got: %q", part.ImageURL.URL)
+			}
+		}
+	}
+	if !hasImageURL {
+		t.Error("expected an image_url part for the GIF thumbnail")
+	}
+}
+
 func TestFormatMessageContent(t *testing.T) {
 	tests := []struct {
 		name    string

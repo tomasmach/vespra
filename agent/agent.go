@@ -82,6 +82,30 @@ func hasVideoAttachments(m *discordgo.Message) bool {
 	return false
 }
 
+// hasGifEmbeds reports whether the message has at least one gifv embed with a thumbnail.
+func hasGifEmbeds(m *discordgo.Message) bool {
+	return len(gifEmbedURLs(m)) > 0
+}
+
+// gifEmbedURLs returns the thumbnail URLs of all gifv embeds in the message,
+// preferring ProxyURL for Discord CDN stability.
+func gifEmbedURLs(m *discordgo.Message) []string {
+	var urls []string
+	for _, e := range m.Embeds {
+		if e.Type != discordgo.EmbedTypeGifv || e.Thumbnail == nil {
+			continue
+		}
+		thumbnailURL := e.Thumbnail.ProxyURL
+		if thumbnailURL == "" {
+			thumbnailURL = e.Thumbnail.URL
+		}
+		if thumbnailURL != "" {
+			urls = append(urls, thumbnailURL)
+		}
+	}
+	return urls
+}
+
 // formatMessageContent replaces raw Discord mention syntax (<@ID> and <@!ID>)
 // for the bot with a human-readable "@botName" so the LLM sees natural text.
 func formatMessageContent(content, botID, botName string) string {
@@ -108,6 +132,9 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 			if hasVideoAttachments(m.ReferencedMessage) {
 				labels = append(labels, "[video]")
 			}
+			if hasGifEmbeds(m.ReferencedMessage) {
+				labels = append(labels, "[gif]")
+			}
 			if len(labels) > 0 {
 				refContent = strings.Join(labels, ", ")
 			}
@@ -123,14 +150,10 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 
 const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
 
-// buildUserMessage converts a Discord message into an llm.Message, downloading
-// any image or video attachments as base64 data URLs for vision content parts.
-// Discord CDN URLs require authentication, so media must be fetched server-side.
-func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
-	text := historyUserContent(msg.Message, botID, botName)
-
-	var images, videos []*discordgo.MessageAttachment
-	for _, a := range msg.Attachments {
+// classifyAttachments partitions attachments into images and videos,
+// skipping videos that exceed maxVideoBytes.
+func classifyAttachments(attachments []*discordgo.MessageAttachment) (images, videos []*discordgo.MessageAttachment) {
+	for _, a := range attachments {
 		if strings.HasPrefix(a.ContentType, "image/") {
 			images = append(images, a)
 		} else if strings.HasPrefix(a.ContentType, "video/") {
@@ -141,24 +164,32 @@ func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discord
 			videos = append(videos, a)
 		}
 	}
+	return images, videos
+}
+
+// buildUserMessage converts a Discord message into an llm.Message, downloading
+// any image, video attachments, or GIF embed thumbnails as base64 data URLs for vision content parts.
+// Discord CDN URLs require authentication, so media must be fetched server-side.
+func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
+	text := historyUserContent(msg.Message, botID, botName)
+
+	images, videos := classifyAttachments(msg.Attachments)
 	if msg.ReferencedMessage != nil {
-		for _, a := range msg.ReferencedMessage.Attachments {
-			if strings.HasPrefix(a.ContentType, "image/") {
-				images = append(images, a)
-			} else if strings.HasPrefix(a.ContentType, "video/") {
-				if a.Size > maxVideoBytes {
-					slog.Warn("skipping oversized referenced video attachment", "size", a.Size, "url", a.URL)
-					continue
-				}
-				videos = append(videos, a)
-			}
-		}
+		refImages, refVideos := classifyAttachments(msg.ReferencedMessage.Attachments)
+		images = append(images, refImages...)
+		videos = append(videos, refVideos...)
 	}
-	if len(images) == 0 && len(videos) == 0 {
+
+	gifURLs := gifEmbedURLs(msg.Message)
+	if msg.ReferencedMessage != nil {
+		gifURLs = append(gifURLs, gifEmbedURLs(msg.ReferencedMessage)...)
+	}
+
+	if len(images) == 0 && len(videos) == 0 && len(gifURLs) == 0 {
 		return llm.Message{Role: "user", Content: text}
 	}
 
-	parts := make([]llm.ContentPart, 0, 1+len(images)+len(videos))
+	parts := make([]llm.ContentPart, 0, 1+len(images)+len(videos)+len(gifURLs))
 	parts = append(parts, llm.ContentPart{Type: "text", Text: text})
 	for _, a := range images {
 		dataURL, err := downloadImageAsDataURL(ctx, httpClient, a)
@@ -182,6 +213,17 @@ func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discord
 			VideoURL: &llm.VideoURL{URL: dataURL},
 		})
 	}
+	for _, u := range gifURLs {
+		dataURL, err := downloadURLAsDataURL(ctx, httpClient, u, "")
+		if err != nil {
+			slog.Warn("failed to download gif embed thumbnail, skipping", "error", err, "url", u)
+			continue
+		}
+		parts = append(parts, llm.ContentPart{
+			Type:     "image_url",
+			ImageURL: &llm.ImageURL{URL: dataURL},
+		})
+	}
 	if len(parts) == 1 {
 		// all media downloads failed; fall back to plain text
 		return llm.Message{Role: "user", Content: text}
@@ -189,29 +231,42 @@ func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discord
 	return llm.Message{Role: "user", ContentParts: parts}
 }
 
-// downloadImageAsDataURL fetches an image attachment and returns it encoded as a base64 data URL.
-func downloadImageAsDataURL(ctx context.Context, client *http.Client, a *discordgo.MessageAttachment) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
+// downloadURLAsDataURL fetches url and returns it encoded as a base64 data URL.
+// If contentType is empty, the response Content-Type header is used, defaulting to "image/jpeg".
+func downloadURLAsDataURL(ctx context.Context, client *http.Client, url, contentType string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", fmt.Errorf("build image request: %w", err)
+		return "", fmt.Errorf("build request: %w", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("fetch image: %w", err)
+		return "", fmt.Errorf("fetch url: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("fetch image: HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("fetch url: HTTP %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read image body: %w", err)
+		return "", fmt.Errorf("read body: %w", err)
 	}
-	mediaType := a.ContentType
-	if mediaType == "" {
-		mediaType = "image/jpeg"
+	if contentType == "" {
+		contentType, _, _ = strings.Cut(resp.Header.Get("Content-Type"), ";")
+		contentType = strings.TrimSpace(contentType)
+		if contentType == "" {
+			contentType = "image/jpeg"
+		}
 	}
-	return fmt.Sprintf("data:%s;base64,%s", mediaType, base64.StdEncoding.EncodeToString(data)), nil
+	return fmt.Sprintf("data:%s;base64,%s", contentType, base64.StdEncoding.EncodeToString(data)), nil
+}
+
+// downloadImageAsDataURL fetches an image attachment and returns it encoded as a base64 data URL.
+func downloadImageAsDataURL(ctx context.Context, client *http.Client, a *discordgo.MessageAttachment) (string, error) {
+	ct := a.ContentType
+	if ct == "" {
+		ct = "image/jpeg"
+	}
+	return downloadURLAsDataURL(ctx, client, a.URL, ct)
 }
 
 func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClient *llm.Client, resources *AgentResources) *ChannelAgent {
@@ -604,6 +659,17 @@ func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*dis
 					VideoURL: &llm.VideoURL{URL: dataURL},
 				})
 			}
+		}
+		for _, gifURL := range gifEmbedURLs(m.Message) {
+			dataURL, err := downloadURLAsDataURL(ctx, a.httpClient, gifURL, "")
+			if err != nil {
+				a.logger.Warn("failed to download gif embed thumbnail, skipping", "error", err, "url", gifURL)
+				continue
+			}
+			mediaParts = append(mediaParts, llm.ContentPart{
+				Type:     "image_url",
+				ImageURL: &llm.ImageURL{URL: dataURL},
+			})
 		}
 	}
 
