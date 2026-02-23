@@ -84,12 +84,7 @@ func hasVideoAttachments(m *discordgo.Message) bool {
 
 // hasGifEmbeds reports whether the message has at least one gifv embed with a thumbnail.
 func hasGifEmbeds(m *discordgo.Message) bool {
-	for _, e := range m.Embeds {
-		if e.Type == discordgo.EmbedTypeGifv && e.Thumbnail != nil {
-			return true
-		}
-	}
-	return false
+	return len(gifEmbedURLs(m)) > 0
 }
 
 // gifEmbedURLs returns the thumbnail URLs of all gifv embeds in the message,
@@ -155,14 +150,10 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 
 const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
 
-// buildUserMessage converts a Discord message into an llm.Message, downloading
-// any image, video attachments, or GIF embed thumbnails as base64 data URLs for vision content parts.
-// Discord CDN URLs require authentication, so media must be fetched server-side.
-func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
-	text := historyUserContent(msg.Message, botID, botName)
-
-	var images, videos []*discordgo.MessageAttachment
-	for _, a := range msg.Attachments {
+// classifyAttachments partitions attachments into images and videos,
+// skipping videos that exceed maxVideoBytes.
+func classifyAttachments(attachments []*discordgo.MessageAttachment) (images, videos []*discordgo.MessageAttachment) {
+	for _, a := range attachments {
 		if strings.HasPrefix(a.ContentType, "image/") {
 			images = append(images, a)
 		} else if strings.HasPrefix(a.ContentType, "video/") {
@@ -173,18 +164,20 @@ func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discord
 			videos = append(videos, a)
 		}
 	}
+	return images, videos
+}
+
+// buildUserMessage converts a Discord message into an llm.Message, downloading
+// any image, video attachments, or GIF embed thumbnails as base64 data URLs for vision content parts.
+// Discord CDN URLs require authentication, so media must be fetched server-side.
+func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
+	text := historyUserContent(msg.Message, botID, botName)
+
+	images, videos := classifyAttachments(msg.Attachments)
 	if msg.ReferencedMessage != nil {
-		for _, a := range msg.ReferencedMessage.Attachments {
-			if strings.HasPrefix(a.ContentType, "image/") {
-				images = append(images, a)
-			} else if strings.HasPrefix(a.ContentType, "video/") {
-				if a.Size > maxVideoBytes {
-					slog.Warn("skipping oversized referenced video attachment", "size", a.Size, "url", a.URL)
-					continue
-				}
-				videos = append(videos, a)
-			}
-		}
+		refImages, refVideos := classifyAttachments(msg.ReferencedMessage.Attachments)
+		images = append(images, refImages...)
+		videos = append(videos, refVideos...)
 	}
 
 	gifURLs := gifEmbedURLs(msg.Message)
@@ -258,10 +251,8 @@ func downloadURLAsDataURL(ctx context.Context, client *http.Client, url, content
 		return "", fmt.Errorf("read body: %w", err)
 	}
 	if contentType == "" {
-		contentType = resp.Header.Get("Content-Type")
-		if idx := strings.IndexByte(contentType, ';'); idx >= 0 {
-			contentType = strings.TrimSpace(contentType[:idx])
-		}
+		contentType, _, _ = strings.Cut(resp.Header.Get("Content-Type"), ";")
+		contentType = strings.TrimSpace(contentType)
 		if contentType == "" {
 			contentType = "image/jpeg"
 		}
