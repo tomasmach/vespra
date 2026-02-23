@@ -92,6 +92,25 @@ func hasGifEmbeds(m *discordgo.Message) bool {
 	return false
 }
 
+// gifEmbedURLs returns the thumbnail URLs of all gifv embeds in the message,
+// preferring ProxyURL for Discord CDN stability.
+func gifEmbedURLs(m *discordgo.Message) []string {
+	var urls []string
+	for _, e := range m.Embeds {
+		if e.Type != discordgo.EmbedTypeGifv || e.Thumbnail == nil {
+			continue
+		}
+		thumbnailURL := e.Thumbnail.ProxyURL
+		if thumbnailURL == "" {
+			thumbnailURL = e.Thumbnail.URL
+		}
+		if thumbnailURL != "" {
+			urls = append(urls, thumbnailURL)
+		}
+	}
+	return urls
+}
+
 // formatMessageContent replaces raw Discord mention syntax (<@ID> and <@!ID>)
 // for the bot with a human-readable "@botName" so the LLM sees natural text.
 func formatMessageContent(content, botID, botName string) string {
@@ -137,7 +156,7 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
 
 // buildUserMessage converts a Discord message into an llm.Message, downloading
-// any image or video attachments as base64 data URLs for vision content parts.
+// any image, video attachments, or GIF embed thumbnails as base64 data URLs for vision content parts.
 // Discord CDN URLs require authentication, so media must be fetched server-side.
 func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
 	text := historyUserContent(msg.Message, botID, botName)
@@ -168,24 +187,9 @@ func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discord
 		}
 	}
 
-	var gifURLs []string
-	collectGifURLs := func(m *discordgo.Message) {
-		for _, e := range m.Embeds {
-			if e.Type != discordgo.EmbedTypeGifv || e.Thumbnail == nil {
-				continue
-			}
-			u := e.Thumbnail.ProxyURL
-			if u == "" {
-				u = e.Thumbnail.URL
-			}
-			if u != "" {
-				gifURLs = append(gifURLs, u)
-			}
-		}
-	}
-	collectGifURLs(msg.Message)
+	gifURLs := gifEmbedURLs(msg.Message)
 	if msg.ReferencedMessage != nil {
-		collectGifURLs(msg.ReferencedMessage)
+		gifURLs = append(gifURLs, gifEmbedURLs(msg.ReferencedMessage)...)
 	}
 
 	if len(images) == 0 && len(videos) == 0 && len(gifURLs) == 0 {
@@ -255,6 +259,9 @@ func downloadURLAsDataURL(ctx context.Context, client *http.Client, url, content
 	}
 	if contentType == "" {
 		contentType = resp.Header.Get("Content-Type")
+		if idx := strings.IndexByte(contentType, ';'); idx >= 0 {
+			contentType = strings.TrimSpace(contentType[:idx])
+		}
 		if contentType == "" {
 			contentType = "image/jpeg"
 		}
@@ -662,20 +669,10 @@ func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*dis
 				})
 			}
 		}
-		for _, e := range m.Embeds {
-			if e.Type != discordgo.EmbedTypeGifv || e.Thumbnail == nil {
-				continue
-			}
-			u := e.Thumbnail.ProxyURL
-			if u == "" {
-				u = e.Thumbnail.URL
-			}
-			if u == "" {
-				continue
-			}
-			dataURL, err := downloadURLAsDataURL(ctx, a.httpClient, u, "")
+		for _, gifURL := range gifEmbedURLs(m.Message) {
+			dataURL, err := downloadURLAsDataURL(ctx, a.httpClient, gifURL, "")
 			if err != nil {
-				a.logger.Warn("failed to download gif embed thumbnail, skipping", "error", err, "url", u)
+				a.logger.Warn("failed to download gif embed thumbnail, skipping", "error", err, "url", gifURL)
 				continue
 			}
 			mediaParts = append(mediaParts, llm.ContentPart{

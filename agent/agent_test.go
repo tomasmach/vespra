@@ -543,6 +543,59 @@ func TestBuildUserMessageGifEmbedNoThumbnail(t *testing.T) {
 	}
 }
 
+func TestBuildCombinedUserMessageWithGifEmbed(t *testing.T) {
+	fakeData := []byte("fake jpeg thumbnail bytes")
+	srv, cleanup := imageServer(t, fakeData)
+	defer cleanup()
+
+	gifMsg := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content: "check this gif",
+			Author:  &discordgo.User{Username: "alice"},
+			Embeds: []*discordgo.MessageEmbed{
+				{
+					Type: discordgo.EmbedTypeGifv,
+					Thumbnail: &discordgo.MessageEmbedThumbnail{
+						ProxyURL: srv.URL + "/thumb.jpg",
+						URL:      "https://tenor.com/original.gif",
+					},
+				},
+			},
+		},
+	}
+	plainMsg := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			Content: "just a regular message",
+			Author:  &discordgo.User{Username: "bob"},
+		},
+	}
+
+	a := &ChannelAgent{httpClient: srv.Client()}
+	m := a.buildCombinedUserMessage(context.Background(), []*discordgo.MessageCreate{gifMsg, plainMsg}, "", "")
+
+	if len(m.ContentParts) == 0 {
+		t.Fatal("expected ContentParts to be non-empty")
+	}
+	if m.ContentParts[0].Type != "text" {
+		t.Errorf("expected first part type=text, got %q", m.ContentParts[0].Type)
+	}
+	hasImageURL := false
+	for _, part := range m.ContentParts {
+		if part.Type == "image_url" {
+			hasImageURL = true
+			if part.ImageURL == nil {
+				t.Fatal("expected non-nil ImageURL")
+			}
+			if !strings.HasPrefix(part.ImageURL.URL, "data:") {
+				t.Errorf("expected base64 data URL, got: %q", part.ImageURL.URL)
+			}
+		}
+	}
+	if !hasImageURL {
+		t.Error("expected an image_url part for the GIF thumbnail")
+	}
+}
+
 func TestFormatMessageContent(t *testing.T) {
 	tests := []struct {
 		name    string
