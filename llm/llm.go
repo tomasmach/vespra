@@ -176,6 +176,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		case "glm":
 			apiBase = cfg.GLMBaseURL
 			apiKey = cfg.GLMKey
+			// GLM uses its own model namespace; reset to GLM default so the global
+			// OpenRouter model (if any) is not sent to the GLM API by mistake.
+			model = "glm-4.7"
 		}
 		if opts.Model != "" {
 			model = opts.Model

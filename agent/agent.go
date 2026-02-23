@@ -720,7 +720,11 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
 		choice, err := a.llm.Chat(ctx, buildMessages(tp.systemPrompt, tp.llmMsgs), tp.reg.Definitions(), chatOpts)
 		if err != nil {
-			a.logger.Error("llm chat error", "error", err, "model", chatOpts.Model)
+			effectiveModel := cfg.LLM.Model
+			if chatOpts != nil && chatOpts.Model != "" {
+				effectiveModel = chatOpts.Model
+			}
+			a.logger.Error("llm chat error", "error", err, "model", effectiveModel)
 			if err := tp.sendFn("I encountered an error. Please try again."); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
