@@ -65,7 +65,6 @@ type ResponseConfig struct {
 }
 
 type ToolsConfig struct {
-	WebSearchKey string `toml:"web_search_key" json:"-"`
 }
 
 type AgentConfig struct {

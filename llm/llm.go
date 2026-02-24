@@ -124,8 +124,9 @@ type Choice struct {
 // ChatOptions allows per-request provider and model overrides.
 // A nil pointer or zero value means "use global defaults".
 type ChatOptions struct {
-	Provider string // "openrouter" | "glm" | "" (use global)
-	Model    string // override model name; "" = use global
+	Provider   string             // "openrouter" | "glm" | "" (use global)
+	Model      string             // override model name; "" = use global
+	ExtraTools []json.RawMessage  // raw tool objects appended to the tools array (e.g. GLM native tools)
 }
 
 type Client struct {
@@ -187,13 +188,18 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	last := len(messages) - 1
 	switch {
 	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "":
-		// Vision model always takes priority over per-agent provider; reset to
-		// default endpoint and key so GLM (or another chat provider) is not used.
+		// Vision model takes priority over per-agent provider. Default to the
+		// OpenRouter endpoint/key, but if VisionBaseURL matches the GLM base, use
+		// the GLM key instead.
 		model = cfg.VisionModel
 		apiBase = c.apiBase()
 		apiKey = c.chatKey()
 		if cfg.VisionBaseURL != "" {
 			apiBase = cfg.VisionBaseURL
+			// If vision routes through the same endpoint as GLM, use the GLM key.
+			if cfg.VisionBaseURL == cfg.GLMBaseURL {
+				apiKey = cfg.GLMKey
+			}
 		}
 		// Strip stale media from older history messages — only the current
 		// message needs its content parts; re-sending old base64 blobs wastes
@@ -205,14 +211,42 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	case messagesHaveImages(messages):
 		messages = stripImages(messages)
 	}
+
+	// GLM doesn't support the OpenAI multimodal content format for
+	// non-vision models. Strip images that would otherwise be sent to
+	// a GLM endpoint with a model that isn't the configured vision model.
+	if cfg.GLMBaseURL != "" && apiBase == cfg.GLMBaseURL &&
+		model != cfg.VisionModel && messagesHaveImages(messages) {
+		messages = stripImages(messages)
+	}
+
 	body := map[string]any{
 		"model":    model,
 		"messages": messages,
 	}
-	if len(tools) > 0 {
-		body["tools"] = tools
+
+	// GLM vision models don't support function-calling tools alongside
+	// multimodal content. Omit tools when the request goes to GLM with images.
+	glmVision := cfg.GLMBaseURL != "" && apiBase == cfg.GLMBaseURL && messagesHaveImages(messages)
+
+	if !glmVision {
+		if opts != nil && len(opts.ExtraTools) > 0 {
+			combined := make([]json.RawMessage, 0, len(tools)+len(opts.ExtraTools))
+			for _, t := range tools {
+				b, err := json.Marshal(t)
+				if err != nil {
+					return Choice{}, fmt.Errorf("marshal tool definition: %w", err)
+				}
+				combined = append(combined, b)
+			}
+			combined = append(combined, opts.ExtraTools...)
+			body["tools"] = combined
+		} else if len(tools) > 0 {
+			body["tools"] = tools
+		}
 	}
 
+	slog.Debug("llm chat dispatch", "model", model, "base_url", apiBase)
 	respBody, err := c.post(ctx, apiBase+"/chat/completions", apiKey, body)
 	if err != nil {
 		return Choice{}, err

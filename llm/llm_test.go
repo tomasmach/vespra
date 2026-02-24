@@ -555,6 +555,104 @@ func TestChatNilOptsFallsBackToGlobalConfig(t *testing.T) {
 	}
 }
 
+func TestExtraToolsIncludedInRequestBody(t *testing.T) {
+	srv, capturedBody := captureBodyServer(t)
+	client := clientWithBaseURL(t, srv.URL)
+
+	extraTool := json.RawMessage(`{"type":"web_search","web_search":{"enable":true}}`)
+	opts := &llm.ChatOptions{
+		ExtraTools: []json.RawMessage{extraTool},
+	}
+
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tools, ok := (*capturedBody)["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected tools array with 1 entry, got %v", (*capturedBody)["tools"])
+	}
+	toolMap := tools[0].(map[string]any)
+	if toolMap["type"] != "web_search" {
+		t.Errorf("expected tool type web_search, got %v", toolMap["type"])
+	}
+}
+
+func TestExtraToolsMergedWithFunctionTools(t *testing.T) {
+	srv, capturedBody := captureBodyServer(t)
+	client := clientWithBaseURL(t, srv.URL)
+
+	funcTools := []llm.ToolDefinition{{
+		Type: "function",
+		Function: llm.FunctionDef{
+			Name:        "test_func",
+			Description: "A test function",
+			Parameters:  json.RawMessage(`{"type":"object"}`),
+		},
+	}}
+	extraTool := json.RawMessage(`{"type":"web_search","web_search":{"enable":true}}`)
+	opts := &llm.ChatOptions{
+		ExtraTools: []json.RawMessage{extraTool},
+	}
+
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, funcTools, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tools, ok := (*capturedBody)["tools"].([]any)
+	if !ok || len(tools) != 2 {
+		t.Fatalf("expected tools array with 2 entries, got %v", (*capturedBody)["tools"])
+	}
+}
+
+// TestVisionRoutesToGLMWhenVisionBaseURLMatchesGLMBaseURL verifies that when
+// VisionBaseURL is the same as GLMBaseURL, vision requests use the GLM key.
+func TestVisionRoutesToGLMWhenVisionBaseURLMatchesGLMBaseURL(t *testing.T) {
+	glmSrv, _, capturedAuth, capturedBody := captureRequestServer(t)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "or-key",
+			GLMKey:                "glm-secret",
+			GLMBaseURL:            glmSrv.URL,
+			Model:                 "global-model",
+			VisionModel:           "glm-5",
+			VisionBaseURL:         glmSrv.URL, // same as GLMBaseURL
+			EmbeddingModel:        "embed-model",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               "http://should-not-be-used.invalid",
+		},
+	}
+	client := newTestClientWithConfig(t, cfg)
+
+	imageMessages := []llm.Message{
+		{Role: "user", Content: "hi"},
+		{
+			Role: "user",
+			ContentParts: []llm.ContentPart{
+				{Type: "text", Text: "what is this?"},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://example.com/img.png"}},
+			},
+		},
+	}
+
+	opts := &llm.ChatOptions{Provider: "glm"}
+	_, err := client.Chat(context.Background(), imageMessages, nil, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *capturedAuth != "Bearer glm-secret" {
+		t.Errorf("expected GLM key for vision request when VisionBaseURL matches GLMBaseURL, got %q", *capturedAuth)
+	}
+	model, _ := (*capturedBody)["model"].(string)
+	if model != "glm-5" {
+		t.Errorf("expected vision model glm-5, got %q", model)
+	}
+}
+
 func TestMessageMarshalContentParts(t *testing.T) {
 	msg := llm.Message{
 		Role: "user",

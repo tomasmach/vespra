@@ -70,14 +70,18 @@ type ChannelAgent struct {
 	logger     *slog.Logger
 
 	soulText          string
-	history           []llm.Message // capped to cfg.Agent.HistoryLimit
-	turnCount         int           // incremented each completed turn; triggers background extraction
-	lastActive        atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
-	extractionRunning atomic.Bool   // prevents concurrent extraction goroutines from piling up
+	history           []llm.Message  // capped to cfg.Agent.HistoryLimit
+	turnCount         int            // incremented each completed turn; triggers background extraction
+	lastActive        atomic.Int64   // UnixNano; written by agent goroutine, read by Status()
+	extractionRunning atomic.Bool    // prevents concurrent extraction goroutines from piling up
 	extractionWg      sync.WaitGroup // tracks in-flight memory extraction goroutines
+	searchRunning     atomic.Bool    // prevents concurrent web searches
+	searchWg          sync.WaitGroup // tracks in-flight web search goroutines
 
-	msgCh  chan *discordgo.MessageCreate // buffered 100
-	cancel context.CancelFunc           // cancels this agent's context
+	ctx        context.Context    // agent's own context; set at the start of run()
+	msgCh      chan *discordgo.MessageCreate // buffered 100
+	internalCh chan string                   // buffered; receives system messages (e.g., web search results)
+	cancel     context.CancelFunc           // cancels this agent's context
 }
 
 // hasImageAttachments reports whether the message has at least one image attachment.
@@ -295,16 +299,19 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 		llm:        llmClient,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		resources:  resources,
-		soulText: soul.Load(cfgStore.Get(), serverID),
-		msgCh:    make(chan *discordgo.MessageCreate, 100),
+		soulText:   soul.Load(cfgStore.Get(), serverID),
+		msgCh:      make(chan *discordgo.MessageCreate, 100),
+		internalCh: make(chan string, 10),
 		logger:     slog.With("server_id", serverID, "channel_id", channelID),
 	}
 }
 
 func (a *ChannelAgent) run(ctx context.Context) {
-	// Wait for all in-flight memory extraction goroutines before returning,
-	// so that SQLite connections are not closed while extractions are still writing.
+	a.ctx = ctx
+	// Wait for all in-flight background goroutines before returning,
+	// so that SQLite connections are not closed while they are still running.
 	defer a.extractionWg.Wait()
+	defer a.searchWg.Wait()
 
 	idleTimeout := time.Duration(a.cfgStore.Get().Agent.IdleTimeoutMinutes) * time.Minute
 	idleTimer := time.NewTimer(idleTimeout)
@@ -371,6 +378,11 @@ func (a *ChannelAgent) run(ctx context.Context) {
 					deadlineTimer = time.NewTimer(time.Duration(cfg.Agent.CoalesceMaxWaitMs) * time.Millisecond)
 				}
 			}
+
+		case intMsg := <-a.internalCh:
+			flush(ctx)
+			resetIdleTimer()
+			a.handleInternalMessage(ctx, intMsg)
 
 		case <-timerC(debounceTimer):
 			flush(ctx)
@@ -456,6 +468,7 @@ type turnParams struct {
 	reg          *tools.Registry
 	llmMsgs      []llm.Message
 	userMsgText  string // human-readable user input for conversation logging
+	internal     bool   // true for system-generated turns (e.g., web search results); skips LogConversation
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
@@ -504,7 +517,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, a.webSearchDeps())
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
@@ -603,7 +616,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, a.webSearchDeps())
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 
@@ -624,6 +637,60 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		llmMsgs:      llmMsgs,
 		userMsgText:  strings.Join(userLogLines, "\n"),
 	})
+}
+
+// handleInternalMessage processes a system-generated message (e.g., web search results)
+// through the normal agent turn loop. Web search is NOT registered to prevent loops.
+// The search result turn is not persisted in history after processTurn returns.
+func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string) {
+	a.lastActive.Store(time.Now().UnixNano())
+
+	cfg := a.cfgStore.Get()
+	mode := cfg.ResolveResponseMode(a.serverID, a.channelID)
+	stopTyping := a.startTyping(ctx)
+	defer stopTyping()
+
+	// Build a focused system prompt — no soul/personality/memories to avoid
+	// the LLM re-generating its earlier conversational response.
+	var sb strings.Builder
+	botName := a.resources.Session.State.User.Username
+	if botName != "" {
+		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
+	}
+	sb.WriteString("You are receiving web search results. If the results contain URLs with specific data you need, you may call web_fetch to read a page for more precise information. Then summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Focus on presenting the new information clearly, with relevant sources and links.")
+	if lang := cfg.ResolveLanguage(a.serverID, a.channelID); lang != "" {
+		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
+	}
+
+	sendFn := func(text string) error {
+		_, err := a.resources.Session.ChannelMessageSend(a.channelID, text)
+		return err
+	}
+	reactFn := func(emoji string) error { return nil }
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, nil)
+
+	userMsg := llm.Message{Role: "user", Content: content}
+	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
+	copy(llmMsgs, a.history)
+	llmMsgs = append(llmMsgs, userMsg)
+
+	// Save history length before the turn so we can restore it after. The search
+	// result is a transient system turn and must not pollute the persistent history.
+	historyLen := len(a.history)
+	a.processTurn(ctx, cfg, turnParams{
+		mode:         mode,
+		systemPrompt: sb.String(),
+		sendFn:       sendFn,
+		reg:          reg,
+		llmMsgs:      llmMsgs,
+		userMsgText:  content,
+		internal:     true,
+	})
+	// Trim back to the pre-turn history length, preserving any assistant reply that
+	// processTurn appended, but dropping the injected system message entry.
+	if len(a.history) > historyLen {
+		a.history = a.history[:historyLen]
+	}
 }
 
 // buildSystemPrompt assembles the system prompt from the soul text, memories,
@@ -715,11 +782,46 @@ func (a *ChannelAgent) chatOptions() *llm.ChatOptions {
 	return &llm.ChatOptions{Provider: cfg.Provider, Model: cfg.Model}
 }
 
+// webSearchDeps returns the dependency bundle for the async web search tool,
+// or nil if web search is not configured (no GLM key).
+func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
+	cfg := a.cfgStore.Get()
+	if cfg.LLM.GLMKey == "" {
+		slog.Warn("web_search tool disabled: llm.glm_key is not configured", "server_id", a.serverID)
+		return nil
+	}
+
+	// Resolve the model: use the agent's configured model when available.
+	model := cfg.LLM.Model
+	if a.resources.Config != nil && a.resources.Config.Model != "" {
+		model = a.resources.Config.Model
+	}
+
+	return &tools.WebSearchDeps{
+		DeliverResult: func(result string) {
+			select {
+			case a.internalCh <- result:
+			default:
+				a.logger.Warn("internal channel full, dropping web search result")
+			}
+		},
+		LLM:           a.llm,
+		Model:         model,
+		Ctx:           a.ctx,
+		SearchWg:      &a.searchWg,
+		SearchRunning: &a.searchRunning,
+	}
+}
+
 // processTurn runs the tool-call loop, applies content suppression, logs the
 // conversation, sends the reply, and updates history. Both handleMessage and
 // handleMessages delegate here after preparing their inputs.
 func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp turnParams) {
 	chatOpts := a.chatOptions()
+
+	// Capture visionResponse before the tool-call loop so that tool-call messages
+	// appended to tp.llmMsgs don't corrupt the check.
+	visionResponse := len(tp.llmMsgs) > 0 && len(tp.llmMsgs[len(tp.llmMsgs)-1].ContentParts) > 0
 
 	var toolCalls []toolCallRecord
 	var assistantContent string
@@ -786,7 +888,8 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	// In smart mode the model should only communicate via reply/react tools.
 	// Suppress any leftover plain-text content that was not sent through a tool.
-	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied {
+	// Exception: vision model responses are always plain text (tools are omitted for GLM vision).
+	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
 		assistantContent = ""
 	}
@@ -798,7 +901,8 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	}
 
 	// Log conversation on success -- either plain-text reply or reply-tool response.
-	if assistantContent != "" || tp.reg.Replied {
+	// Internal turns (e.g., web search result delivery) are skipped to avoid polluting logs.
+	if !tp.internal && (assistantContent != "" || tp.reg.Replied) {
 		var toolCallsJSON string
 		if len(toolCalls) > 0 {
 			if b, err := json.Marshal(toolCalls); err == nil {

@@ -52,10 +52,6 @@ func main() {
 	slog.Info("config loaded", "path", cfgPath)
 	slog.Info("log store opened", "path", logsDBPath)
 
-	if cfg.Tools.WebSearchKey == "" {
-		slog.Warn("tools.web_search_key not set, web_search tool disabled")
-	}
-
 	llmClient := llm.New(cfgStore)
 
 	// Build per-agent resources
