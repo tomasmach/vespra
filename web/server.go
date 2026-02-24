@@ -373,7 +373,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id is required", http.StatusBadRequest)
 		return
 	}
-	if strings.ContainsAny(input.ID, "/\\\x00") || input.ID == "." || input.ID == ".." || len([]rune(input.ID)) > 128 {
+	if !validAgentID(input.ID) {
 		http.Error(w, "invalid agent id: must not contain slashes or null bytes", http.StatusBadRequest)
 		return
 	}
@@ -750,6 +750,18 @@ func (s *Server) handlePutGlobalSoul(w http.ResponseWriter, r *http.Request) {
 }
 
 var safeNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+// validAgentID reports whether id is a safe agent identifier.
+// Allows Unicode and spaces but rejects slashes, null bytes, ".", "..", and IDs over 128 runes.
+func validAgentID(id string) bool {
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	if strings.ContainsAny(id, "/\\\x00") {
+		return false
+	}
+	return len([]rune(id)) <= 128
+}
 
 // validSoulName reports whether name is a safe soul file stem.
 func validSoulName(name string) bool {

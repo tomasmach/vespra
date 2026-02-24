@@ -18,19 +18,7 @@ import (
 
 func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(cfgPath, []byte("[bot]\ntoken=\"x\"\n[llm]\nopenrouter_key=\"test\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	store, err := config.NewStore(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := web.New(":0", store, cfgPath, &agent.Router{}, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-	return ts, dir
+	return newTestServerWithAgents(t, "")
 }
 
 // newTestServerWithAgents creates a test server with pre-seeded agents written
