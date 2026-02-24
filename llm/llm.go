@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"strings"
@@ -272,6 +273,7 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
+	slog.Debug("llm request", "url", url, "body", string(data))
 
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -310,6 +312,12 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			resp.Body.Close()
 			attemptCancel()
+			slog.Error("llm request failed",
+				"url", url,
+				"status", resp.StatusCode,
+				"request_body", string(data),
+				"response_body", strings.TrimSpace(string(respBody)),
+			)
 			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		}
 
