@@ -194,7 +194,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		if cfg.VisionBaseURL != "" {
 			apiBase = cfg.VisionBaseURL
 		}
-	case cfg.VisionModel == "" && messagesHaveImages(messages):
+	case messagesHaveImages(messages):
 		messages = stripImages(messages)
 	}
 	body := map[string]any{
