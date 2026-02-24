@@ -66,6 +66,11 @@ Run all tests:
 go test ./...
 ```
 
+## Z.AI (GLM) API
+
+- The correct base URL for `glm-5` is `https://api.z.ai/api/coding/paas/v4` — this is the coding/agentic endpoint. Do NOT use `https://api.z.ai/api/paas/v4` (the standard endpoint) for `glm-5`.
+- Vision models (`glm-4.6v`, `glm-4.6v-flash`) live at the standard endpoint `https://api.z.ai/api/paas/v4`, but currently vision is routed through OpenRouter instead.
+
 ## Key Design Decisions
 
 - One goroutine per active Discord channel; idle timeout after `IdleTimeoutMinutes`

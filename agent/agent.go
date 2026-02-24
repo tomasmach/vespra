@@ -667,13 +667,17 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	stopTyping := a.startTyping(ctx)
 	defer stopTyping()
 
-	memories, err := a.resources.Memory.Recall(ctx, content, a.serverID, 5)
-	if err != nil {
-		a.logger.Warn("memory recall error (internal msg)", "error", err)
-	}
-
+	// Build a focused system prompt — no soul/personality/memories to avoid
+	// the LLM re-generating its earlier conversational response.
+	var sb strings.Builder
 	botName := a.resources.Session.State.User.Username
-	systemPrompt := a.buildSystemPrompt(cfg, "all", a.channelID, memories, botName)
+	if botName != "" {
+		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
+	}
+	sb.WriteString("You are receiving web search results. Summarize ONLY the search findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Focus on presenting the new information clearly, with relevant sources and links.")
+	if lang := cfg.ResolveLanguage(a.serverID, a.channelID); lang != "" {
+		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
+	}
 
 	sendFn := func(text string) error {
 		_, err := a.resources.Session.ChannelMessageSend(a.channelID, text)
@@ -689,7 +693,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 
 	a.processTurn(ctx, cfg, turnParams{
 		mode:         "all",
-		systemPrompt: systemPrompt,
+		systemPrompt: sb.String(),
 		sendFn:       sendFn,
 		reg:          reg,
 		llmMsgs:      llmMsgs,
@@ -717,7 +721,6 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	if mode == "smart" {
 		sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
 	}
-	sb.WriteString("\n\nWhen you receive a message starting with [SYSTEM:web_search_results], these are results from a web search you previously requested. Summarize the findings and reply to the user naturally. Include relevant sources and links when available. Do not call web_search again for these results.")
 	return sb.String()
 }
 
@@ -795,6 +798,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	var toolCalls []toolCallRecord
 	var assistantContent string
+	var visionResponse bool // set when the response came from the vision model
 	for iter := 0; ; iter++ {
 		if iter >= cfg.Agent.MaxToolIterations {
 			if err := tp.sendFn("I got stuck in a loop. Please try again."); err != nil {
@@ -818,6 +822,11 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 		if len(choice.Message.ToolCalls) == 0 {
 			assistantContent = choice.Message.Content
+			// Track if this came from a vision model so we skip smart-mode suppression.
+			lastIdx := len(tp.llmMsgs) - 1
+			if lastIdx >= 0 && len(tp.llmMsgs[lastIdx].ContentParts) > 0 {
+				visionResponse = true
+			}
 			break
 		}
 
@@ -858,7 +867,8 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	// In smart mode the model should only communicate via reply/react tools.
 	// Suppress any leftover plain-text content that was not sent through a tool.
-	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied {
+	// Exception: vision model responses are always plain text (tools are omitted for GLM vision).
+	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
 		assistantContent = ""
 	}

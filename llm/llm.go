@@ -210,11 +210,27 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	case messagesHaveImages(messages):
 		messages = stripImages(messages)
 	}
+
+	// GLM doesn't support the OpenAI multimodal content format for
+	// non-vision models. Strip images that would otherwise be sent to
+	// a GLM endpoint with a model that isn't the configured vision model.
+	if cfg.GLMBaseURL != "" && apiBase == cfg.GLMBaseURL &&
+		model != cfg.VisionModel && messagesHaveImages(messages) {
+		messages = stripImages(messages)
+	}
+
 	body := map[string]any{
 		"model":    model,
 		"messages": messages,
 	}
-	if opts != nil && len(opts.ExtraTools) > 0 {
+
+	// GLM vision models don't support function-calling tools alongside
+	// multimodal content. Omit tools when the request goes to GLM with images.
+	glmVision := cfg.GLMBaseURL != "" && apiBase == cfg.GLMBaseURL && messagesHaveImages(messages)
+
+	if glmVision {
+		// no tools
+	} else if opts != nil && len(opts.ExtraTools) > 0 {
 		combined := make([]json.RawMessage, 0, len(tools)+len(opts.ExtraTools))
 		for _, t := range tools {
 			b, err := json.Marshal(t)
@@ -229,6 +245,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		body["tools"] = tools
 	}
 
+	slog.Debug("llm chat dispatch", "model", model, "base_url", apiBase)
 	respBody, err := c.post(ctx, apiBase+"/chat/completions", apiKey, body)
 	if err != nil {
 		return Choice{}, err

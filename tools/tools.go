@@ -360,10 +360,10 @@ func (t *webSearchTool) runSearch(query string) {
 	}
 
 	messages := []llm.Message{
-		{Role: "user", Content: fmt.Sprintf("Search the web for: %s\n\nReturn the results with titles, URLs, and brief descriptions.", query)},
+		{Role: "user", Content: fmt.Sprintf("Search the web for: %s\n\nReturn comprehensive results with titles, URLs, and detailed content summaries.", query)},
 	}
 
-	webSearchTool := json.RawMessage(`{"type":"web_search","web_search":{"enable":true,"search_result":true}}`)
+	webSearchTool := json.RawMessage(`{"type":"web_search","web_search":{"enable":true,"search_result":true,"search_engine":"search_pro","content_size":"high"}}`)
 	opts := &llm.ChatOptions{
 		Provider:   "glm",
 		Model:      model,
