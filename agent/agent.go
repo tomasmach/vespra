@@ -674,7 +674,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
 	}
-	sb.WriteString("You are receiving web search results. Summarize ONLY the search findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Focus on presenting the new information clearly, with relevant sources and links.")
+	sb.WriteString("You are receiving web search results. If the results contain URLs with specific data you need, you may call web_fetch to read a page for more precise information. Then summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Focus on presenting the new information clearly, with relevant sources and links.")
 	if lang := cfg.ResolveLanguage(a.serverID, a.channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}

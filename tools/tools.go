@@ -393,6 +393,7 @@ func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, rea
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
 	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText})
 	r.Register(&reactTool{react: react})
+	r.Register(&webFetchTool{})
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps})
 	}

@@ -25,7 +25,20 @@ Save a memory whenever the conversation reveals any of the following:
 - Anything the user explicitly asks you to remember
 
 Recall memories proactively when the topic might connect to something you have saved.
-Before saving a new memory, use memory_recall to check whether it already exists to avoid duplicates.`
+Before saving a new memory, use memory_recall to check whether it already exists to avoid duplicates.
+
+## Web Tools
+
+You have two web tools: web_search (async, returns summaries/URLs) and web_fetch (sync, reads a page).
+
+Use web_fetch when:
+- Search results have a URL with the specific data you need (live weather, prices, article body)
+- The user shares a link and asks "what's on this page?"
+- You need precise data from a known page
+
+Do NOT use web_fetch when:
+- The user just wants a link recommendation — provide the URL directly
+- Search results already contain enough information to answer`
 
 // Load returns the soul/system prompt for the given server.
 // Resolution order:
