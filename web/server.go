@@ -373,8 +373,8 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id is required", http.StatusBadRequest)
 		return
 	}
-	if !safeNameRe.MatchString(input.ID) {
-		http.Error(w, "invalid agent id: use letters, digits, - and _ only (max 64 chars)", http.StatusBadRequest)
+	if !validAgentID(input.ID) {
+		http.Error(w, "invalid agent id: must not contain slashes or null bytes", http.StatusBadRequest)
 		return
 	}
 	if input.ServerID == "" {
@@ -751,6 +751,18 @@ func (s *Server) handlePutGlobalSoul(w http.ResponseWriter, r *http.Request) {
 
 var safeNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
+// validAgentID reports whether id is a safe agent identifier.
+// Allows Unicode and spaces but rejects slashes, null bytes, ".", "..", and IDs over 128 runes.
+func validAgentID(id string) bool {
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	if strings.ContainsAny(id, "/\\\x00") {
+		return false
+	}
+	return len([]rune(id)) <= 128
+}
+
 // validSoulName reports whether name is a safe soul file stem.
 func validSoulName(name string) bool {
 	return safeNameRe.MatchString(name)
@@ -759,10 +771,18 @@ func validSoulName(name string) bool {
 // agentSoulDir returns the directory where an agent's named souls are stored.
 // Returns an empty string if agentID fails validation; callers must check for this.
 func (s *Server) agentSoulDir(agentID string) string {
-	if !safeNameRe.MatchString(agentID) {
+	if agentID == "" {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(s.cfgPath), "souls", agentID)
+	base := filepath.Join(filepath.Dir(s.cfgPath), "souls")
+	dir := filepath.Join(base, agentID)
+	// Prevent path traversal: clean dir must start with base/
+	cleanDir := filepath.Clean(dir)
+	cleanBase := filepath.Clean(base)
+	if cleanDir == cleanBase || !strings.HasPrefix(cleanDir, cleanBase+string(filepath.Separator)) {
+		return ""
+	}
+	return dir
 }
 
 // requireAgentSoulDir returns the soul directory for the agent and true,

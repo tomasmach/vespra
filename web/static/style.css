@@ -146,6 +146,21 @@ body { font-family: "IBM Plex Sans", system-ui, sans-serif; }
   border-color: rgba(239, 68, 68, 0.4);
 }
 
+.btn-danger-sm {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-danger-sm:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
 .btn-edit {
   background: rgba(52, 211, 153, 0.1);
   color: #34d399;
