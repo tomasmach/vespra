@@ -75,6 +75,8 @@ type ChannelAgent struct {
 	lastActive        atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
 	extractionRunning atomic.Bool   // prevents concurrent extraction goroutines from piling up
 	extractionWg      sync.WaitGroup // tracks in-flight memory extraction goroutines
+	searchRunning     atomic.Bool   // prevents concurrent web searches
+	internalCh        chan string    // buffered; receives system messages (e.g., web search results)
 
 	msgCh  chan *discordgo.MessageCreate // buffered 100
 	cancel context.CancelFunc           // cancels this agent's context
@@ -295,8 +297,9 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 		llm:        llmClient,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		resources:  resources,
-		soulText: soul.Load(cfgStore.Get(), serverID),
-		msgCh:    make(chan *discordgo.MessageCreate, 100),
+		soulText:   soul.Load(cfgStore.Get(), serverID),
+		msgCh:      make(chan *discordgo.MessageCreate, 100),
+		internalCh: make(chan string, 10),
 		logger:     slog.With("server_id", serverID, "channel_id", channelID),
 	}
 }
@@ -371,6 +374,11 @@ func (a *ChannelAgent) run(ctx context.Context) {
 					deadlineTimer = time.NewTimer(time.Duration(cfg.Agent.CoalesceMaxWaitMs) * time.Millisecond)
 				}
 			}
+
+		case intMsg := <-a.internalCh:
+			flush(ctx)
+			resetIdleTimer()
+			a.handleInternalMessage(ctx, intMsg)
 
 		case <-timerC(debounceTimer):
 			flush(ctx)
@@ -504,7 +512,19 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
+	searchDeps := &tools.WebSearchDeps{
+		DeliverResult: func(result string) {
+			select {
+			case a.internalCh <- result:
+			default:
+				a.logger.Warn("internal channel full, dropping web search result")
+			}
+		},
+		LLM:           a.llm,
+		CfgStore:      a.cfgStore,
+		SearchRunning: &a.searchRunning,
+	}
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, searchDeps)
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
@@ -603,7 +623,19 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
+	searchDeps := &tools.WebSearchDeps{
+		DeliverResult: func(result string) {
+			select {
+			case a.internalCh <- result:
+			default:
+				a.logger.Warn("internal channel full, dropping web search result")
+			}
+		},
+		LLM:           a.llm,
+		CfgStore:      a.cfgStore,
+		SearchRunning: &a.searchRunning,
+	}
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, searchDeps)
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 
@@ -623,6 +655,45 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		reg:          reg,
 		llmMsgs:      llmMsgs,
 		userMsgText:  strings.Join(userLogLines, "\n"),
+	})
+}
+
+// handleInternalMessage processes a system-generated message (e.g., web search results)
+// through the normal agent turn loop. Web search is NOT registered to prevent loops.
+func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string) {
+	a.lastActive.Store(time.Now().UnixNano())
+
+	cfg := a.cfgStore.Get()
+	stopTyping := a.startTyping(ctx)
+	defer stopTyping()
+
+	memories, err := a.resources.Memory.Recall(ctx, content, a.serverID, 5)
+	if err != nil {
+		a.logger.Warn("memory recall error (internal msg)", "error", err)
+	}
+
+	botName := a.resources.Session.State.User.Username
+	systemPrompt := a.buildSystemPrompt(cfg, "all", a.channelID, memories, botName)
+
+	sendFn := func(text string) error {
+		_, err := a.resources.Session.ChannelMessageSend(a.channelID, text)
+		return err
+	}
+	reactFn := func(emoji string) error { return nil }
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, nil)
+
+	userMsg := llm.Message{Role: "user", Content: content}
+	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
+	copy(llmMsgs, a.history)
+	llmMsgs = append(llmMsgs, userMsg)
+
+	a.processTurn(ctx, cfg, turnParams{
+		mode:         "all",
+		systemPrompt: systemPrompt,
+		sendFn:       sendFn,
+		reg:          reg,
+		llmMsgs:      llmMsgs,
+		userMsgText:  content,
 	})
 }
 

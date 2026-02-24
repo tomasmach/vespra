@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
+	"log/slog"
 	"strings"
+	"sync/atomic"
+	"time"
 
+	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
 	"github.com/tomasmach/vespra/memory"
 )
@@ -296,13 +297,24 @@ func (t *reactTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	return "Reacted.", t.react(p.Emoji)
 }
 
+// WebSearchDeps groups dependencies for the async web search tool.
+// Pass nil to NewDefaultRegistry to omit web search from the registry.
+type WebSearchDeps struct {
+	DeliverResult func(result string) // injects results back into agent
+	LLM           *llm.Client
+	CfgStore      *config.Store
+	SearchRunning *atomic.Bool
+}
+
 type webSearchTool struct {
-	apiKey string
+	deps *WebSearchDeps
 }
 
 func (t *webSearchTool) Name() string { return "web_search" }
 func (t *webSearchTool) Description() string {
-	return "Search the web for current information using Brave Search."
+	return "Search the web for current information. This is an async operation — " +
+		"results will be delivered in a follow-up message. After calling this tool, " +
+		"acknowledge to the user that you are searching (in their language)."
 }
 func (t *webSearchTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -320,69 +332,58 @@ func (t *webSearchTool) Call(ctx context.Context, args json.RawMessage) (string,
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
 	}
+	if p.Query == "" {
+		return "Error: query is required", nil
+	}
+	if !t.deps.SearchRunning.CompareAndSwap(false, true) {
+		return "A web search is already running, please wait for results.", nil
+	}
 
-	endpoint := "https://api.search.brave.com/res/v1/web/search"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	go t.runSearch(p.Query)
+	return fmt.Sprintf("Web search started for: %q — results will arrive shortly.", p.Query), nil
+}
+
+func (t *webSearchTool) runSearch(query string) {
+	defer t.deps.SearchRunning.Store(false)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	messages := []llm.Message{
+		{Role: "user", Content: fmt.Sprintf("Search the web for: %s\n\nReturn the results with titles, URLs, and brief descriptions.", query)},
+	}
+
+	webSearchTool := json.RawMessage(`{"type":"web_search","web_search":{"enable":true,"search_result":true}}`)
+	opts := &llm.ChatOptions{
+		Provider:   "glm",
+		ExtraTools: []json.RawMessage{webSearchTool},
+	}
+
+	choice, err := t.deps.LLM.Chat(ctx, messages, nil, opts)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
-	}
-	q := url.Values{}
-	q.Set("q", p.Query)
-	q.Set("count", "5")
-	req.URL.RawQuery = q.Encode()
-	req.Header.Set("X-Subscription-Token", t.apiKey)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("search request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("search HTTP %d", resp.StatusCode)
+		slog.Error("web search background call failed", "error", err, "query", query)
+		t.deps.DeliverResult(fmt.Sprintf("[SYSTEM:web_search_results]\nWeb search for %q failed: %s", query, err))
+		return
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
+	result := choice.Message.Content
+	if result == "" {
+		result = "No results found."
 	}
-
-	var result struct {
-		Web struct {
-			Results []struct {
-				Title       string `json:"title"`
-				URL         string `json:"url"`
-				Description string `json:"description"`
-			} `json:"results"`
-		} `json:"web"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
-	}
-
-	if len(result.Web.Results) == 0 {
-		return "No results found.", nil
-	}
-
-	var sb strings.Builder
-	for _, r := range result.Web.Results {
-		fmt.Fprintf(&sb, "%s\n%s\n%s\n\n", r.Title, r.URL, r.Description)
-	}
-	return strings.TrimSpace(sb.String()), nil
+	t.deps.DeliverResult(fmt.Sprintf("[SYSTEM:web_search_results]\nSearch results for %q:\n\n%s", query, result))
 }
 
 // NewDefaultRegistry creates a registry with standard tools.
-// If webSearchKey is non-empty, the web_search tool is also registered.
-func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, react ReactFunc, webSearchKey string) *Registry {
+// If searchDeps is non-nil, the async web_search tool is also registered.
+func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID})
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
 	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText})
 	r.Register(&reactTool{react: react})
-	if webSearchKey != "" {
-		r.Register(&webSearchTool{apiKey: webSearchKey})
+	if searchDeps != nil {
+		r.Register(&webSearchTool{deps: searchDeps})
 	}
 	return r
 }
