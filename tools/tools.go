@@ -346,8 +346,18 @@ func (t *webSearchTool) Call(ctx context.Context, args json.RawMessage) (string,
 func (t *webSearchTool) runSearch(query string) {
 	defer t.deps.SearchRunning.Store(false)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+
+	cfg := t.deps.CfgStore.Get()
+	model := cfg.LLM.Model
+	// Use the agent's configured model if available; otherwise keep the global default.
+	for _, agent := range cfg.Agents {
+		if agent.Provider == "glm" && agent.Model != "" {
+			model = agent.Model
+			break
+		}
+	}
 
 	messages := []llm.Message{
 		{Role: "user", Content: fmt.Sprintf("Search the web for: %s\n\nReturn the results with titles, URLs, and brief descriptions.", query)},
@@ -356,6 +366,7 @@ func (t *webSearchTool) runSearch(query string) {
 	webSearchTool := json.RawMessage(`{"type":"web_search","web_search":{"enable":true,"search_result":true}}`)
 	opts := &llm.ChatOptions{
 		Provider:   "glm",
+		Model:      model,
 		ExtraTools: []json.RawMessage{webSearchTool},
 	}
 
