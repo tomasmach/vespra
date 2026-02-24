@@ -717,6 +717,7 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	if mode == "smart" {
 		sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
 	}
+	sb.WriteString("\n\nWhen you receive a message starting with [SYSTEM:web_search_results], these are results from a web search you previously requested. Summarize the findings and reply to the user naturally. Include relevant sources and links when available. Do not call web_search again for these results.")
 	return sb.String()
 }
 
