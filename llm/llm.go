@@ -194,6 +194,13 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		if cfg.VisionBaseURL != "" {
 			apiBase = cfg.VisionBaseURL
 		}
+		// Strip stale media from older history messages — only the current
+		// message needs its content parts; re-sending old base64 blobs wastes
+		// tokens and may confuse the vision model.
+		if last > 0 && messagesHaveImages(messages[:last]) {
+			stripped := stripImages(messages[:last])
+			messages = append(stripped, messages[last])
+		}
 	case messagesHaveImages(messages):
 		messages = stripImages(messages)
 	}
