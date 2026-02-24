@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,113 @@ func newTestServer(t *testing.T) (*httptest.Server, string) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, dir
+}
+
+// newTestServerWithAgents creates a test server with pre-seeded agents written
+// directly to the config TOML, bypassing handleCreateAgent validation.
+func newTestServerWithAgents(t *testing.T, agentsTOML string) (*httptest.Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	base := "[bot]\ntoken=\"x\"\n[llm]\nopenrouter_key=\"test\"\n"
+	if err := os.WriteFile(cfgPath, []byte(base+agentsTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := config.NewStore(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := web.New(":0", store, cfgPath, &agent.Router{}, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return ts, dir
+}
+
+func TestAgentSoulDirTraversal(t *testing.T) {
+	// Inject an agent whose ID is "../evil" directly in TOML, bypassing
+	// handleCreateAgent's HTTP-layer validation.
+	agentsTOML := "\n[[agents]]\nid = \"../evil\"\nserver_id = \"999\"\n"
+	ts, _ := newTestServerWithAgents(t, agentsTOML)
+
+	// GET /api/agents/..%2Fevil/souls — agentSoulDir must return "" and the
+	// handler must respond with 400 rather than listing or creating files.
+	resp, err := http.Get(ts.URL + "/api/agents/..%2Fevil/souls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("traversal id: expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestAgentSoulDirUnicode(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	// Create an agent with a Unicode + space ID via the HTTP API.
+	// handleCreateAgent now accepts Unicode IDs up to 128 runes.
+	body := `{"id":"Čeština agent","server_id":"777888999"}`
+	resp, err := http.Post(ts.URL+"/api/agents", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create unicode agent: expected 201, got %d", resp.StatusCode)
+	}
+
+	// GET /api/agents/<percent-encoded id>/souls — agentSoulDir must return a
+	// non-empty path, so the handler responds with 200.
+	resp, err = http.Get(ts.URL + "/api/agents/" + url.PathEscape("Čeština agent") + "/souls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unicode agent souls list: expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleCreateAgentIDValidation(t *testing.T) {
+	// 129-rune ID (one over the 128-rune limit).
+	longID := strings.Repeat("x", 129)
+	// Exactly 128 runes — must be accepted.
+	maxID := strings.Repeat("x", 128)
+
+	tests := []struct {
+		name     string
+		id       string
+		serverID string
+		want     int
+	}{
+		{"dot rejected", ".", "100000001", http.StatusBadRequest},
+		{"dotdot rejected", "..", "100000002", http.StatusBadRequest},
+		{"slash in id rejected", "foo/bar", "100000003", http.StatusBadRequest},
+		{"unicode id accepted", "Čeština agent", "100000004", http.StatusCreated},
+		{"exactly 128 runes accepted", maxID, "100000005", http.StatusCreated},
+		{"129 runes rejected", longID, "100000006", http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newTestServer(t)
+			body := `{"id":` + jsonString(tc.id) + `,"server_id":"` + tc.serverID + `"}`
+			resp, err := http.Post(ts.URL+"/api/agents", "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				t.Fatalf("id=%q: expected %d, got %d", tc.id, tc.want, resp.StatusCode)
+			}
+		})
+	}
+}
+
+// jsonString encodes s as a JSON string literal.
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func TestAgentSoulLibrary(t *testing.T) {

@@ -373,7 +373,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id is required", http.StatusBadRequest)
 		return
 	}
-	if strings.ContainsAny(input.ID, "/\\\x00") || len([]rune(input.ID)) > 128 {
+	if strings.ContainsAny(input.ID, "/\\\x00") || input.ID == "." || input.ID == ".." || len([]rune(input.ID)) > 128 {
 		http.Error(w, "invalid agent id: must not contain slashes or null bytes", http.StatusBadRequest)
 		return
 	}

@@ -248,6 +248,7 @@ function addChannel() {
   const modeInput = document.getElementById('new-channel-mode');
   const id = idInput.value.trim();
   if (!id) return;
+  if (currentChannels.some(ch => ch.id === id)) { idInput.value = ''; return; }
   currentChannels.push({ id: id, response_mode: modeInput.value });
   idInput.value = '';
   renderChannels();
