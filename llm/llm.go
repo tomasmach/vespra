@@ -195,6 +195,10 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		apiKey = c.chatKey()
 		if cfg.VisionBaseURL != "" {
 			apiBase = cfg.VisionBaseURL
+			// If vision routes through the same endpoint as GLM, use the GLM key.
+			if cfg.VisionBaseURL == cfg.GLMBaseURL {
+				apiKey = cfg.GLMKey
+			}
 		}
 		// Strip stale media from older history messages — only the current
 		// message needs its content parts; re-sending old base64 blobs wastes
