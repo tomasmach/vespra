@@ -133,6 +133,7 @@ function populateAgentPanel(agent) {
   currentIgnoreUsers = agent.ignore_users ? agent.ignore_users.slice() : [];
   currentChannels = agent.channels ? agent.channels.slice() : [];
   renderIgnoredUsers();
+  renderChannels();
 }
 
 function renderDetailTab(tab) {
@@ -223,6 +224,38 @@ function addIgnoredUser() {
 function removeIgnoredUser(i) {
   currentIgnoreUsers.splice(i, 1);
   renderIgnoredUsers();
+}
+
+// --- Channels ---
+
+function renderChannels() {
+  const el = document.getElementById('channels-list');
+  if (!currentChannels.length) {
+    el.innerHTML = '<span class="text-gray-400 text-sm">No per-channel overrides</span>';
+    return;
+  }
+  el.innerHTML = currentChannels.map((ch, i) =>
+    '<div class="flex gap-2 items-center">' +
+      '<span class="font-mono text-sm">' + esc(ch.id) + '</span>' +
+      '<span class="text-xs text-zinc-500">' + esc(ch.response_mode) + '</span>' +
+      '<button class="btn-danger-sm" onclick="removeChannel(' + i + ')">Remove</button>' +
+    '</div>'
+  ).join('');
+}
+
+function addChannel() {
+  const idInput = document.getElementById('new-channel-id');
+  const modeInput = document.getElementById('new-channel-mode');
+  const id = idInput.value.trim();
+  if (!id) return;
+  currentChannels.push({ id: id, response_mode: modeInput.value });
+  idInput.value = '';
+  renderChannels();
+}
+
+function removeChannel(i) {
+  currentChannels.splice(i, 1);
+  renderChannels();
 }
 
 // --- Soul tab ---
