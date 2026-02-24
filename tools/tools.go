@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
 	"github.com/tomasmach/vespra/memory"
 )
@@ -302,7 +302,9 @@ func (t *reactTool) Call(ctx context.Context, args json.RawMessage) (string, err
 type WebSearchDeps struct {
 	DeliverResult func(result string) // injects results back into agent
 	LLM           *llm.Client
-	CfgStore      *config.Store
+	Model         string
+	Ctx           context.Context
+	SearchWg      *sync.WaitGroup
 	SearchRunning *atomic.Bool
 }
 
@@ -339,25 +341,17 @@ func (t *webSearchTool) Call(ctx context.Context, args json.RawMessage) (string,
 		return "A web search is already running, please wait for results.", nil
 	}
 
+	t.deps.SearchWg.Add(1)
 	go t.runSearch(p.Query)
 	return fmt.Sprintf("Web search started for: %q — results will arrive shortly.", p.Query), nil
 }
 
 func (t *webSearchTool) runSearch(query string) {
+	defer t.deps.SearchWg.Done()
 	defer t.deps.SearchRunning.Store(false)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.deps.Ctx, 60*time.Second)
 	defer cancel()
-
-	cfg := t.deps.CfgStore.Get()
-	model := cfg.LLM.Model
-	// Use the agent's configured model if available; otherwise keep the global default.
-	for _, agent := range cfg.Agents {
-		if agent.Provider == "glm" && agent.Model != "" {
-			model = agent.Model
-			break
-		}
-	}
 
 	messages := []llm.Message{
 		{Role: "user", Content: fmt.Sprintf("Search the web for: %s\n\nReturn comprehensive results with titles, URLs, and detailed content summaries.", query)},
@@ -366,7 +360,7 @@ func (t *webSearchTool) runSearch(query string) {
 	glmSearchSpec := json.RawMessage(`{"type":"web_search","web_search":{"enable":true,"search_result":true,"search_engine":"search_pro","content_size":"high"}}`)
 	opts := &llm.ChatOptions{
 		Provider:   "glm",
-		Model:      model,
+		Model:      t.deps.Model,
 		ExtraTools: []json.RawMessage{glmSearchSpec},
 	}
 
@@ -385,7 +379,7 @@ func (t *webSearchTool) runSearch(query string) {
 }
 
 // NewDefaultRegistry creates a registry with standard tools.
-// If searchDeps is non-nil, the async web_search tool is also registered.
+// If searchDeps is non-nil, the async web_search and web_fetch tools are also registered.
 func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID})
@@ -393,9 +387,9 @@ func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, rea
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
 	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText})
 	r.Register(&reactTool{react: react})
-	r.Register(&webFetchTool{})
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps})
+		r.Register(&webFetchTool{})
 	}
 	return r
 }

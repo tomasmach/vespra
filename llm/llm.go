@@ -188,8 +188,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	last := len(messages) - 1
 	switch {
 	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "":
-		// Vision model always takes priority over per-agent provider; reset to
-		// default endpoint and key so GLM (or another chat provider) is not used.
+		// Vision model takes priority over per-agent provider. Default to the
+		// OpenRouter endpoint/key, but if VisionBaseURL matches the GLM base, use
+		// the GLM key instead.
 		model = cfg.VisionModel
 		apiBase = c.apiBase()
 		apiKey = c.chatKey()

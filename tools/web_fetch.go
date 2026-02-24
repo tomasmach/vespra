@@ -98,7 +98,7 @@ func (t *webFetchTool) Call(ctx context.Context, args json.RawMessage) (string, 
 func extractText(htmlContent string) string {
 	tokenizer := html.NewTokenizer(strings.NewReader(htmlContent))
 	var sb strings.Builder
-	var skipDepth int
+	var skipStack []string
 
 	for {
 		tt := tokenizer.Next()
@@ -110,22 +110,32 @@ func extractText(htmlContent string) string {
 			tn, _ := tokenizer.TagName()
 			tag := string(tn)
 			if skipTags[tag] {
-				skipDepth++
+				skipStack = append(skipStack, tag)
 			}
+
+		case html.SelfClosingTagToken:
+			// Self-closing skip tags (e.g. <svg/>) open and close immediately,
+			// so we do not push them onto the stack.
 
 		case html.EndTagToken:
 			tn, _ := tokenizer.TagName()
 			tag := string(tn)
-			if skipTags[tag] && skipDepth > 0 {
-				skipDepth--
+			if skipTags[tag] && len(skipStack) > 0 {
+				// Pop the last matching entry from the stack.
+				for i := len(skipStack) - 1; i >= 0; i-- {
+					if skipStack[i] == tag {
+						skipStack = append(skipStack[:i], skipStack[i+1:]...)
+						break
+					}
+				}
 			}
 			// Insert newline after block-level elements for readability.
-			if isBlockTag(tag) && skipDepth == 0 {
+			if isBlockTag(tag) && len(skipStack) == 0 {
 				sb.WriteByte('\n')
 			}
 
 		case html.TextToken:
-			if skipDepth == 0 {
+			if len(skipStack) == 0 {
 				text := strings.TrimSpace(tokenizer.Token().Data)
 				if text != "" {
 					sb.WriteString(text)

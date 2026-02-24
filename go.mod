@@ -9,7 +9,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.34
 )
 
-require golang.org/x/net v0.49.0
+require golang.org/x/net v0.50.0
 
 require (
 	github.com/gorilla/websocket v1.4.2 // indirect

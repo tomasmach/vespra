@@ -53,6 +53,39 @@ func TestExtractText(t *testing.T) {
 	}
 }
 
+func TestExtractTextNestedSkipTags(t *testing.T) {
+	// <aside> is nested inside <nav>; closing </aside> must not prematurely end
+	// the skip region — "nav content" should still be suppressed.
+	htmlInput := `<html><body><nav><aside>ad content</aside>nav content</nav>visible text</body></html>`
+
+	text := extractText(htmlInput)
+
+	if strings.Contains(text, "ad content") {
+		t.Errorf("expected nested aside content to be stripped, got: %s", text)
+	}
+	if strings.Contains(text, "nav content") {
+		t.Errorf("expected content inside outer nav to be stripped after inner aside closes, got: %s", text)
+	}
+	if !strings.Contains(text, "visible text") {
+		t.Errorf("expected 'visible text' after closing nav, got: %s", text)
+	}
+}
+
+func TestExtractTextSelfClosingSkipTag(t *testing.T) {
+	// A self-closing skip tag like <svg/> must not increment the skip depth,
+	// so text that follows it should still be visible.
+	htmlInput := `<html><body><p>before</p><svg/><p>after</p></body></html>`
+
+	text := extractText(htmlInput)
+
+	if !strings.Contains(text, "before") {
+		t.Errorf("expected 'before' in output, got: %s", text)
+	}
+	if !strings.Contains(text, "after") {
+		t.Errorf("expected 'after' in output after self-closing svg, got: %s", text)
+	}
+}
+
 func TestWebFetchToolHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
