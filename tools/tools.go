@@ -363,11 +363,11 @@ func (t *webSearchTool) runSearch(query string) {
 		{Role: "user", Content: fmt.Sprintf("Search the web for: %s\n\nReturn comprehensive results with titles, URLs, and detailed content summaries.", query)},
 	}
 
-	webSearchTool := json.RawMessage(`{"type":"web_search","web_search":{"enable":true,"search_result":true,"search_engine":"search_pro","content_size":"high"}}`)
+	glmSearchSpec := json.RawMessage(`{"type":"web_search","web_search":{"enable":true,"search_result":true,"search_engine":"search_pro","content_size":"high"}}`)
 	opts := &llm.ChatOptions{
 		Provider:   "glm",
 		Model:      model,
-		ExtraTools: []json.RawMessage{webSearchTool},
+		ExtraTools: []json.RawMessage{glmSearchSpec},
 	}
 
 	choice, err := t.deps.LLM.Chat(ctx, messages, nil, opts)

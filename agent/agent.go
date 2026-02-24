@@ -512,19 +512,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	searchDeps := &tools.WebSearchDeps{
-		DeliverResult: func(result string) {
-			select {
-			case a.internalCh <- result:
-			default:
-				a.logger.Warn("internal channel full, dropping web search result")
-			}
-		},
-		LLM:           a.llm,
-		CfgStore:      a.cfgStore,
-		SearchRunning: &a.searchRunning,
-	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, searchDeps)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, a.webSearchDeps())
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
@@ -623,19 +611,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	searchDeps := &tools.WebSearchDeps{
-		DeliverResult: func(result string) {
-			select {
-			case a.internalCh <- result:
-			default:
-				a.logger.Warn("internal channel full, dropping web search result")
-			}
-		},
-		LLM:           a.llm,
-		CfgStore:      a.cfgStore,
-		SearchRunning: &a.searchRunning,
-	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, searchDeps)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, a.webSearchDeps())
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 
@@ -788,6 +764,22 @@ func (a *ChannelAgent) chatOptions() *llm.ChatOptions {
 		return nil
 	}
 	return &llm.ChatOptions{Provider: cfg.Provider, Model: cfg.Model}
+}
+
+// webSearchDeps returns the dependency bundle for the async web search tool.
+func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
+	return &tools.WebSearchDeps{
+		DeliverResult: func(result string) {
+			select {
+			case a.internalCh <- result:
+			default:
+				a.logger.Warn("internal channel full, dropping web search result")
+			}
+		},
+		LLM:           a.llm,
+		CfgStore:      a.cfgStore,
+		SearchRunning: &a.searchRunning,
+	}
 }
 
 // processTurn runs the tool-call loop, applies content suppression, logs the

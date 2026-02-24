@@ -228,21 +228,21 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	// multimodal content. Omit tools when the request goes to GLM with images.
 	glmVision := cfg.GLMBaseURL != "" && apiBase == cfg.GLMBaseURL && messagesHaveImages(messages)
 
-	if glmVision {
-		// no tools
-	} else if opts != nil && len(opts.ExtraTools) > 0 {
-		combined := make([]json.RawMessage, 0, len(tools)+len(opts.ExtraTools))
-		for _, t := range tools {
-			b, err := json.Marshal(t)
-			if err != nil {
-				return Choice{}, fmt.Errorf("marshal tool definition: %w", err)
+	if !glmVision {
+		if opts != nil && len(opts.ExtraTools) > 0 {
+			combined := make([]json.RawMessage, 0, len(tools)+len(opts.ExtraTools))
+			for _, t := range tools {
+				b, err := json.Marshal(t)
+				if err != nil {
+					return Choice{}, fmt.Errorf("marshal tool definition: %w", err)
+				}
+				combined = append(combined, b)
 			}
-			combined = append(combined, b)
+			combined = append(combined, opts.ExtraTools...)
+			body["tools"] = combined
+		} else if len(tools) > 0 {
+			body["tools"] = tools
 		}
-		combined = append(combined, opts.ExtraTools...)
-		body["tools"] = combined
-	} else if len(tools) > 0 {
-		body["tools"] = tools
 	}
 
 	slog.Debug("llm chat dispatch", "model", model, "base_url", apiBase)
