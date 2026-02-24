@@ -124,8 +124,9 @@ type Choice struct {
 // ChatOptions allows per-request provider and model overrides.
 // A nil pointer or zero value means "use global defaults".
 type ChatOptions struct {
-	Provider string // "openrouter" | "glm" | "" (use global)
-	Model    string // override model name; "" = use global
+	Provider   string             // "openrouter" | "glm" | "" (use global)
+	Model      string             // override model name; "" = use global
+	ExtraTools []json.RawMessage  // raw tool objects appended to the tools array (e.g. GLM native tools)
 }
 
 type Client struct {
@@ -209,7 +210,18 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		"model":    model,
 		"messages": messages,
 	}
-	if len(tools) > 0 {
+	if opts != nil && len(opts.ExtraTools) > 0 {
+		combined := make([]json.RawMessage, 0, len(tools)+len(opts.ExtraTools))
+		for _, t := range tools {
+			b, err := json.Marshal(t)
+			if err != nil {
+				return Choice{}, fmt.Errorf("marshal tool definition: %w", err)
+			}
+			combined = append(combined, b)
+		}
+		combined = append(combined, opts.ExtraTools...)
+		body["tools"] = combined
+	} else if len(tools) > 0 {
 		body["tools"] = tools
 	}
 
