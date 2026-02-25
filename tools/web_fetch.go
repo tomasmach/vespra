@@ -29,7 +29,9 @@ var skipTags = map[string]bool{
 	"iframe":   true,
 }
 
-type webFetchTool struct{}
+type webFetchTool struct {
+	timeoutSeconds int
+}
 
 func (t *webFetchTool) Name() string { return "web_fetch" }
 func (t *webFetchTool) Description() string {
@@ -59,7 +61,7 @@ func (t *webFetchTool) Call(ctx context.Context, args json.RawMessage) (string, 
 		return "Error: url is required", nil
 	}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, time.Duration(t.timeoutSeconds)*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, p.URL, nil)

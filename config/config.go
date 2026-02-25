@@ -65,6 +65,7 @@ type ResponseConfig struct {
 }
 
 type ToolsConfig struct {
+	WebTimeoutSeconds int `toml:"web_timeout_seconds"`
 }
 
 type AgentConfig struct {
@@ -159,6 +160,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Agent.CoalesceMaxWaitMs == 0 {
 		cfg.Agent.CoalesceMaxWaitMs = 5000
+	}
+	if cfg.Tools.WebTimeoutSeconds <= 0 {
+		cfg.Tools.WebTimeoutSeconds = 120
 	}
 	if cfg.Response.DefaultMode == "" {
 		cfg.Response.DefaultMode = "smart"

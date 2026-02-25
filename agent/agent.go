@@ -805,11 +805,12 @@ func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
 				a.logger.Warn("internal channel full, dropping web search result")
 			}
 		},
-		LLM:           a.llm,
-		Model:         model,
-		Ctx:           a.ctx,
-		SearchWg:      &a.searchWg,
-		SearchRunning: &a.searchRunning,
+		LLM:            a.llm,
+		Model:          model,
+		Ctx:            a.ctx,
+		SearchWg:       &a.searchWg,
+		SearchRunning:  &a.searchRunning,
+		TimeoutSeconds: cfg.Tools.WebTimeoutSeconds,
 	}
 }
 

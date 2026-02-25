@@ -300,12 +300,13 @@ func (t *reactTool) Call(ctx context.Context, args json.RawMessage) (string, err
 // WebSearchDeps groups dependencies for the async web search tool.
 // Pass nil to NewDefaultRegistry to omit web search from the registry.
 type WebSearchDeps struct {
-	DeliverResult func(result string) // injects results back into agent
-	LLM           *llm.Client
-	Model         string
-	Ctx           context.Context
-	SearchWg      *sync.WaitGroup
-	SearchRunning *atomic.Bool
+	DeliverResult  func(result string) // injects results back into agent
+	LLM            *llm.Client
+	Model          string
+	Ctx            context.Context
+	SearchWg       *sync.WaitGroup
+	SearchRunning  *atomic.Bool
+	TimeoutSeconds int
 }
 
 type webSearchTool struct {
@@ -350,7 +351,7 @@ func (t *webSearchTool) runSearch(query string) {
 	defer t.deps.SearchWg.Done()
 	defer t.deps.SearchRunning.Store(false)
 
-	ctx, cancel := context.WithTimeout(t.deps.Ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.deps.Ctx, time.Duration(t.deps.TimeoutSeconds)*time.Second)
 	defer cancel()
 
 	messages := []llm.Message{
@@ -389,7 +390,7 @@ func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, rea
 	r.Register(&reactTool{react: react})
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps})
-		r.Register(&webFetchTool{})
+		r.Register(&webFetchTool{timeoutSeconds: searchDeps.TimeoutSeconds})
 	}
 	return r
 }
