@@ -61,7 +61,11 @@ func (t *webFetchTool) Call(ctx context.Context, args json.RawMessage) (string, 
 		return "Error: url is required", nil
 	}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, time.Duration(t.timeoutSeconds)*time.Second)
+	timeout := t.timeoutSeconds
+	if timeout <= 0 {
+		timeout = 15
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, p.URL, nil)
