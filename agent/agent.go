@@ -714,6 +714,7 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
 	}
+	fmt.Fprintf(&sb, "Today's date is %s.\n\n", time.Now().Format("Monday, January 2, 2006"))
 	sb.WriteString(a.soulText)
 	if len(memories) > 0 {
 		sb.WriteString("\n\n## Relevant Memories\n")
