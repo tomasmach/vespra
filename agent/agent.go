@@ -458,6 +458,12 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 	return history
 }
 
+// botRecentlySpoke reports whether the last message in history is from the
+// assistant, indicating the user is likely continuing a conversation with the bot.
+func botRecentlySpoke(history []llm.Message) bool {
+	return len(history) > 0 && history[len(history)-1].Role == "assistant"
+}
+
 // isAddressedToBot reports whether a Discord message is directly addressed to
 // the bot via DM, @mention, reply, or plain-text name mention.
 func isAddressedToBot(m *discordgo.MessageCreate, botID, botName string) bool {
@@ -510,12 +516,6 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 	}
 
-	stopTyping := func() {}
-	if mode != "smart" || addressed {
-		stopTyping = a.startTyping(ctx)
-	}
-	defer stopTyping()
-
 	if len(a.history) == 0 {
 		a.history = a.backfillHistory(ctx, msg.ID)
 		if len(a.history) > cfg.Agent.HistoryLimit {
@@ -523,6 +523,18 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 		a.history = sanitizeHistory(a.history)
 	}
+
+	// In smart mode, if the bot most recently spoke in this channel, the user
+	// is continuing the conversation — treat as directly addressed.
+	if mode == "smart" && !addressed && botRecentlySpoke(a.history) {
+		addressed = true
+	}
+
+	stopTyping := func() {}
+	if mode != "smart" || addressed {
+		stopTyping = a.startTyping(ctx)
+	}
+	defer stopTyping()
 
 	memories, err := a.resources.Memory.Recall(ctx, msg.Content, a.serverID, 10)
 	if err != nil {
@@ -604,18 +616,25 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		}
 	}
 
-	stopTyping := func() {}
-	if mode != "smart" || anyAddressed {
-		stopTyping = a.startTyping(ctx)
-	}
-	defer stopTyping()
-
 	if len(a.history) == 0 {
 		a.history = a.backfillHistory(ctx, msgs[0].ID)
 		if len(a.history) > cfg.Agent.HistoryLimit {
 			a.history = a.history[len(a.history)-cfg.Agent.HistoryLimit:]
 		}
+		a.history = sanitizeHistory(a.history)
 	}
+
+	// In smart mode, if the bot most recently spoke in this channel, the user
+	// is continuing the conversation — treat as directly addressed.
+	if mode == "smart" && !anyAddressed && botRecentlySpoke(a.history) {
+		anyAddressed = true
+	}
+
+	stopTyping := func() {}
+	if mode != "smart" || anyAddressed {
+		stopTyping = a.startTyping(ctx)
+	}
+	defer stopTyping()
 
 	recallParts := make([]string, 0, len(msgs))
 	for _, m := range msgs {

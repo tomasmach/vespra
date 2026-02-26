@@ -769,6 +769,32 @@ func TestIsAddressedToBot(t *testing.T) {
 	}
 }
 
+func TestBotRecentlySpoke(t *testing.T) {
+	user := llm.Message{Role: "user", Content: "hello"}
+	assistant := llm.Message{Role: "assistant", Content: "hi"}
+	tool := llm.Message{Role: "tool", Content: "result"}
+
+	tests := []struct {
+		name    string
+		history []llm.Message
+		want    bool
+	}{
+		{"empty history", []llm.Message{}, false},
+		{"last is user", []llm.Message{assistant, user}, false},
+		{"last is assistant", []llm.Message{user, assistant}, true},
+		{"only assistant", []llm.Message{assistant}, true},
+		{"last is tool", []llm.Message{user, assistant, tool}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := botRecentlySpoke(tt.history)
+			if got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSanitizeHistory(t *testing.T) {
 	user := llm.Message{Role: "user", Content: "hello"}
 	assistant := llm.Message{Role: "assistant", Content: "hi"}
