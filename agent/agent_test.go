@@ -653,6 +653,122 @@ func TestFormatMessageContent(t *testing.T) {
 	}
 }
 
+func guildMsg(guildID, content string, ref *discordgo.Message) *discordgo.MessageCreate {
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			GuildID: guildID,
+			Content: content,
+			Author:  &discordgo.User{Username: "alice"},
+		},
+	}
+	if ref != nil {
+		m.MessageReference = &discordgo.MessageReference{MessageID: "ref"}
+		m.ReferencedMessage = ref
+	}
+	return m
+}
+
+func TestIsAddressedToBot(t *testing.T) {
+	botID := "123"
+	botName := "Vespra"
+
+	botAuthor := &discordgo.User{ID: botID, Username: "Vespra"}
+
+	tests := []struct {
+		name    string
+		m       *discordgo.MessageCreate
+		botName string
+		want    bool
+	}{
+		{
+			name:    "DM always addressed",
+			m:       guildMsg("", "just chatting", nil),
+			botName: botName,
+			want:    true,
+		},
+		{
+			name: "mention via <@botID>",
+			m: &discordgo.MessageCreate{
+				Message: &discordgo.Message{
+					GuildID: "guild1",
+					Content: "hello <@123> how are you",
+					Author:  &discordgo.User{Username: "alice"},
+				},
+			},
+			botName: botName,
+			want:    true,
+		},
+		{
+			name: "mention via <@!botID>",
+			m: &discordgo.MessageCreate{
+				Message: &discordgo.Message{
+					GuildID: "guild1",
+					Content: "hello <@!123> how are you",
+					Author:  &discordgo.User{Username: "alice"},
+				},
+			},
+			botName: botName,
+			want:    true,
+		},
+		{
+			name:    "reply to bot message",
+			m:       guildMsg("guild1", "yes I agree", &discordgo.Message{Author: botAuthor}),
+			botName: botName,
+			want:    true,
+		},
+		{
+			name:    "name exact match",
+			m:       guildMsg("guild1", "Vespra can you help me?", nil),
+			botName: botName,
+			want:    true,
+		},
+		{
+			name:    "name lowercase",
+			m:       guildMsg("guild1", "hey vespra, what time is it", nil),
+			botName: botName,
+			want:    true,
+		},
+		{
+			name:    "name uppercase",
+			m:       guildMsg("guild1", "VESPRA please help", nil),
+			botName: botName,
+			want:    true,
+		},
+		{
+			name:    "name mixed case",
+			m:       guildMsg("guild1", "VeSpRa are you there?", nil),
+			botName: botName,
+			want:    true,
+		},
+		{
+			name:    "unrelated message",
+			m:       guildMsg("guild1", "just chatting here", nil),
+			botName: botName,
+			want:    false,
+		},
+		{
+			name:    "empty botName with matching text",
+			m:       guildMsg("guild1", "vespra hello", nil),
+			botName: "",
+			want:    false,
+		},
+		{
+			name:    "guild message not addressed baseline",
+			m:       guildMsg("guild1", "random stuff", nil),
+			botName: botName,
+			want:    false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isAddressedToBot(tt.m, botID, tt.botName)
+			if got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSanitizeHistory(t *testing.T) {
 	user := llm.Message{Role: "user", Content: "hello"}
 	assistant := llm.Message{Role: "assistant", Content: "hi"}
