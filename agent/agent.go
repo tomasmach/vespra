@@ -459,18 +459,24 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 }
 
 // isAddressedToBot reports whether a Discord message is directly addressed to
-// the bot via DM, @mention, or reply.
-func isAddressedToBot(m *discordgo.MessageCreate, botID string) bool {
+// the bot via DM, @mention, reply, or plain-text name mention.
+func isAddressedToBot(m *discordgo.MessageCreate, botID, botName string) bool {
 	if m.GuildID == "" {
 		return true // DMs are always addressed
 	}
 	if strings.Contains(m.Content, "<@"+botID+">") || strings.Contains(m.Content, "<@!"+botID+">") {
 		return true
 	}
-	return m.MessageReference != nil &&
+	if m.MessageReference != nil &&
 		m.ReferencedMessage != nil &&
 		m.ReferencedMessage.Author != nil &&
-		m.ReferencedMessage.Author.ID == botID
+		m.ReferencedMessage.Author.ID == botID {
+		return true
+	}
+	if botName != "" && strings.Contains(strings.ToLower(m.Content), strings.ToLower(botName)) {
+		return true
+	}
+	return false
 }
 
 // turnParams holds the inputs needed by processTurn, allowing handleMessage and
@@ -491,7 +497,8 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	cfg := a.cfgStore.Get()
 	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
 	botID := a.resources.Session.State.User.ID
-	addressed := isAddressedToBot(msg, botID)
+	botName := a.resources.Session.State.User.Username
+	addressed := isAddressedToBot(msg, botID, botName)
 
 	switch mode {
 	case "none":
@@ -520,8 +527,6 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if err != nil {
 		a.logger.Warn("memory recall error", "error", err)
 	}
-
-	botName := a.resources.Session.State.User.Username
 	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName)
 
 	sendFn := func(content string) error {
@@ -576,12 +581,13 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	cfg := a.cfgStore.Get()
 	botID := a.resources.Session.State.User.ID
+	botName := a.resources.Session.State.User.Username
 	lastMsg := msgs[len(msgs)-1]
 	mode := cfg.ResolveResponseMode(a.serverID, lastMsg.ChannelID)
 
 	var anyAddressed bool
 	for _, m := range msgs {
-		if isAddressedToBot(m, botID) {
+		if isAddressedToBot(m, botID, botName) {
 			anyAddressed = true
 			break
 		}
@@ -620,7 +626,6 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		a.logger.Warn("memory recall error", "error", err)
 	}
 
-	botName := a.resources.Session.State.User.Username
 	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName)
 
 	sendFn := func(content string) error {
