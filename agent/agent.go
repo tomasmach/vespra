@@ -489,6 +489,7 @@ type turnParams struct {
 	llmMsgs      []llm.Message
 	userMsgText  string // human-readable user input for conversation logging
 	internal     bool   // true for system-generated turns (e.g., web search results); skips LogConversation
+	addressed    bool   // true when the user directly addressed the bot (@mention, DM, reply, name-in-text)
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
@@ -550,6 +551,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		reg:          reg,
 		llmMsgs:      llmMsgs,
 		userMsgText:  historyUserContent(msg.Message, botID, botName),
+		addressed:    addressed,
 	})
 }
 
@@ -655,6 +657,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		reg:          reg,
 		llmMsgs:      llmMsgs,
 		userMsgText:  strings.Join(userLogLines, "\n"),
+		addressed:    anyAddressed,
 	})
 }
 
