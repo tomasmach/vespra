@@ -527,7 +527,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if err != nil {
 		a.logger.Warn("memory recall error", "error", err)
 	}
-	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
@@ -626,7 +626,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		a.logger.Warn("memory recall error", "error", err)
 	}
 
-	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
@@ -714,7 +714,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 
 // buildSystemPrompt assembles the system prompt from the soul text, memories,
 // language override, and response mode.
-func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string) string {
+func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string, addressed bool) string {
 	var sb strings.Builder
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
@@ -731,7 +731,11 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 	if mode == "smart" {
-		sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
+		if addressed {
+			sb.WriteString("\n\nYou are in smart mode. This message is directly addressed to you (DM, @mention, reply, or your name). You MUST respond — call the `reply` tool with your response. Do NOT stay silent when directly addressed.")
+		} else {
+			sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
+		}
 	}
 	return sb.String()
 }
