@@ -29,6 +29,30 @@ type toolCallRecord struct {
 	Result string `json:"result"`
 }
 
+const smartModeAddressedPrompt = "\n\nYou are in smart mode. This message is directly addressed to you (DM, @mention, reply, or your name). You MUST respond — call the `reply` tool with your response. Do NOT stay silent when directly addressed."
+
+const smartModeFollowUpPrompt = "\n\nYou are in smart mode. The user appears to be continuing a conversation with you — you recently spoke and they are following up. You should engage and respond. Call the `reply` tool with your response."
+
+const smartModeDefaultPrompt = `
+
+You are in smart mode. You are a participant in this channel, not just an on-demand assistant. Most messages do not need a reply from you — aim to respond to roughly 1 in 5 messages when you are not directly addressed.
+
+Reply (via the ` + "`reply`" + ` tool) when:
+- The message is an interesting question or opinion where your perspective adds something
+- Someone shares news, a link, or a topic the group is actively discussing and you have a relevant thought
+- There is an obvious conversational hook (e.g. "anyone else think...?", "what do you all reckon?")
+- Humour or banter is flowing and a short reaction would land well
+- Someone is following up on something you said — if the conversation is directed at you, engage
+
+Stay quiet when:
+- The message is purely logistical or administrative (e.g. "dinner at 7", "meeting moved")
+- Two people are having a private-feeling back-and-forth and you would be interrupting
+- You have nothing meaningful to add — silence is always fine
+
+Use ` + "`react`" + ` (emoji reaction) instead of ` + "`reply`" + ` for low-key acknowledgement when a reaction is enough.
+
+IMPORTANT: When you decide to respond, you MUST use the ` + "`reply`" + ` tool — never output plain text directly. If you decide not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.`
+
 const extractionPrompt = `You are a memory extraction assistant. Your only job is to analyze the conversation and save important information to long-term memory.
 
 Save a memory for each of the following you find:
@@ -750,11 +774,11 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	if mode == "smart" {
 		switch {
 		case addressed:
-			sb.WriteString("\n\nYou are in smart mode. This message is directly addressed to you (DM, @mention, reply, or your name). You MUST respond — call the `reply` tool with your response. Do NOT stay silent when directly addressed.")
+			sb.WriteString(smartModeAddressedPrompt)
 		case followUp:
-			sb.WriteString("\n\nYou are in smart mode. The user appears to be continuing a conversation with you — you recently spoke and they are following up. You should engage and respond. Call the `reply` tool with your response.")
+			sb.WriteString(smartModeFollowUpPrompt)
 		default:
-			sb.WriteString("\n\nYou are in smart mode. You are a participant in this channel, not just an on-demand assistant. Most messages do not need a reply from you — aim to respond to roughly 1 in 5 messages when you are not directly addressed.\n\nReply (via the `reply` tool) when:\n- The message is an interesting question or opinion where your perspective adds something\n- Someone shares news, a link, or a topic the group is actively discussing and you have a relevant thought\n- There is an obvious conversational hook (e.g. \"anyone else think...?\", \"what do you all reckon?\")\n- Humour or banter is flowing and a short reaction would land well\n- Someone is following up on something you said — if the conversation is directed at you, engage\n\nStay quiet when:\n- The message is purely logistical or administrative (e.g. \"dinner at 7\", \"meeting moved\")\n- Two people are having a private-feeling back-and-forth and you would be interrupting\n- You have nothing meaningful to add — silence is always fine\n\nUse `react` (emoji reaction) instead of `reply` for low-key acknowledgement when a reaction is enough.\n\nIMPORTANT: When you decide to respond, you MUST use the `reply` tool — never output plain text directly. If you decide not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
+			sb.WriteString(smartModeDefaultPrompt)
 		}
 	}
 	return sb.String()
