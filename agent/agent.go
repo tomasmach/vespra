@@ -528,7 +528,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	followUp := mode == "smart" && !addressed && botRecentlySpoke(a.history)
 
 	stopTyping := func() {}
-	if mode != "smart" || addressed {
+	if mode != "smart" || addressed || followUp {
 		stopTyping = a.startTyping(ctx)
 	}
 	defer stopTyping()
@@ -537,7 +537,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if err != nil {
 		a.logger.Warn("memory recall error", "error", err)
 	}
-	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed, followUp)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
@@ -625,7 +625,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	followUp := mode == "smart" && !anyAddressed && botRecentlySpoke(a.history)
 
 	stopTyping := func() {}
-	if mode != "smart" || anyAddressed {
+	if mode != "smart" || anyAddressed || followUp {
 		stopTyping = a.startTyping(ctx)
 	}
 	defer stopTyping()
@@ -641,7 +641,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		a.logger.Warn("memory recall error", "error", err)
 	}
 
-	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed, followUp)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
@@ -731,7 +731,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 
 // buildSystemPrompt assembles the system prompt from the soul text, memories,
 // language override, and response mode.
-func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string, addressed bool) string {
+func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string, addressed, followUp bool) string {
 	var sb strings.Builder
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
@@ -748,9 +748,12 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 	if mode == "smart" {
-		if addressed {
+		switch {
+		case addressed:
 			sb.WriteString("\n\nYou are in smart mode. This message is directly addressed to you (DM, @mention, reply, or your name). You MUST respond — call the `reply` tool with your response. Do NOT stay silent when directly addressed.")
-		} else {
+		case followUp:
+			sb.WriteString("\n\nYou are in smart mode. The user appears to be continuing a conversation with you — you recently spoke and they are following up. You should engage and respond. Call the `reply` tool with your response.")
+		default:
 			sb.WriteString("\n\nYou are in smart mode. You are a participant in this channel, not just an on-demand assistant. Most messages do not need a reply from you — aim to respond to roughly 1 in 5 messages when you are not directly addressed.\n\nReply (via the `reply` tool) when:\n- The message is an interesting question or opinion where your perspective adds something\n- Someone shares news, a link, or a topic the group is actively discussing and you have a relevant thought\n- There is an obvious conversational hook (e.g. \"anyone else think...?\", \"what do you all reckon?\")\n- Humour or banter is flowing and a short reaction would land well\n- Someone is following up on something you said — if the conversation is directed at you, engage\n\nStay quiet when:\n- The message is purely logistical or administrative (e.g. \"dinner at 7\", \"meeting moved\")\n- Two people are having a private-feeling back-and-forth and you would be interrupting\n- You have nothing meaningful to add — silence is always fine\n\nUse `react` (emoji reaction) instead of `reply` for low-key acknowledgement when a reaction is enough.\n\nIMPORTANT: When you decide to respond, you MUST use the `reply` tool — never output plain text directly. If you decide not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
 		}
 	}
