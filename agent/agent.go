@@ -902,6 +902,9 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			tp.llmMsgs = append(tp.llmMsgs, llm.Message{Role: "assistant", Content: tp.reg.ReplyText})
 			tp.reg.ReplyText = ""
 		}
+		if tp.reg.Replied {
+			break
+		}
 	}
 
 	if assistantContent != "" && looksLikeToolCall(assistantContent, tp.reg.Definitions()) {
@@ -917,7 +920,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	// In smart mode the model should only communicate via reply/react tools.
 	// Suppress any leftover plain-text content that was not sent through a tool.
 	// Exception: vision model responses are always plain text (tools are omitted for GLM vision).
-	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse {
+	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse && !tp.addressed {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
 		assistantContent = ""
 	}
