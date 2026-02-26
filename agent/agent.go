@@ -496,6 +496,7 @@ type turnParams struct {
 	userMsgText  string // human-readable user input for conversation logging
 	internal     bool   // true for system-generated turns (e.g., web search results); skips LogConversation
 	addressed    bool   // true when the user directly addressed the bot (@mention, DM, reply, name-in-text)
+	followUp     bool   // true when the bot recently spoke and the user may be continuing the conversation
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
@@ -524,11 +525,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		a.history = sanitizeHistory(a.history)
 	}
 
-	// In smart mode, if the bot most recently spoke in this channel, the user
-	// is continuing the conversation — treat as directly addressed.
-	if mode == "smart" && !addressed && botRecentlySpoke(a.history) {
-		addressed = true
-	}
+	followUp := mode == "smart" && !addressed && botRecentlySpoke(a.history)
 
 	stopTyping := func() {}
 	if mode != "smart" || addressed {
@@ -564,6 +561,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		llmMsgs:      llmMsgs,
 		userMsgText:  historyUserContent(msg.Message, botID, botName),
 		addressed:    addressed,
+		followUp:     followUp,
 	})
 }
 
@@ -624,11 +622,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		a.history = sanitizeHistory(a.history)
 	}
 
-	// In smart mode, if the bot most recently spoke in this channel, the user
-	// is continuing the conversation — treat as directly addressed.
-	if mode == "smart" && !anyAddressed && botRecentlySpoke(a.history) {
-		anyAddressed = true
-	}
+	followUp := mode == "smart" && !anyAddressed && botRecentlySpoke(a.history)
 
 	stopTyping := func() {}
 	if mode != "smart" || anyAddressed {
@@ -677,6 +671,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		llmMsgs:      llmMsgs,
 		userMsgText:  strings.Join(userLogLines, "\n"),
 		addressed:    anyAddressed,
+		followUp:     followUp,
 	})
 }
 
@@ -756,7 +751,7 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 		if addressed {
 			sb.WriteString("\n\nYou are in smart mode. This message is directly addressed to you (DM, @mention, reply, or your name). You MUST respond — call the `reply` tool with your response. Do NOT stay silent when directly addressed.")
 		} else {
-			sb.WriteString("\n\nYou are in smart mode. You are a participant in this channel, not just an on-demand assistant. Most messages do not need a reply from you — aim to respond to roughly 1 in 5 messages when you are not directly addressed.\n\nReply (via the `reply` tool) when:\n- The message is an interesting question or opinion where your perspective adds something\n- Someone shares news, a link, or a topic the group is actively discussing and you have a relevant thought\n- There is an obvious conversational hook (e.g. \"anyone else think...?\", \"what do you all reckon?\")\n- Humour or banter is flowing and a short reaction would land well\n\nStay quiet when:\n- The message is purely logistical or administrative (e.g. \"dinner at 7\", \"meeting moved\")\n- Two people are having a private-feeling back-and-forth and you would be interrupting\n- You have nothing meaningful to add — silence is always fine\n\nUse `react` (emoji reaction) instead of `reply` for low-key acknowledgement when a reaction is enough.\n\nIf you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
+			sb.WriteString("\n\nYou are in smart mode. You are a participant in this channel, not just an on-demand assistant. Most messages do not need a reply from you — aim to respond to roughly 1 in 5 messages when you are not directly addressed.\n\nReply (via the `reply` tool) when:\n- The message is an interesting question or opinion where your perspective adds something\n- Someone shares news, a link, or a topic the group is actively discussing and you have a relevant thought\n- There is an obvious conversational hook (e.g. \"anyone else think...?\", \"what do you all reckon?\")\n- Humour or banter is flowing and a short reaction would land well\n- Someone is following up on something you said — if the conversation is directed at you, engage\n\nStay quiet when:\n- The message is purely logistical or administrative (e.g. \"dinner at 7\", \"meeting moved\")\n- Two people are having a private-feeling back-and-forth and you would be interrupting\n- You have nothing meaningful to add — silence is always fine\n\nUse `react` (emoji reaction) instead of `reply` for low-key acknowledgement when a reaction is enough.\n\nIMPORTANT: When you decide to respond, you MUST use the `reply` tool — never output plain text directly. If you decide not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
 		}
 	}
 	return sb.String()
@@ -938,8 +933,9 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	// In smart mode the model should only communicate via reply/react tools.
 	// Suppress any leftover plain-text content that was not sent through a tool.
-	// Exception: vision model responses are always plain text (tools are omitted for GLM vision).
-	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse && !tp.addressed {
+	// Exceptions: vision model responses (always plain text), addressed turns,
+	// and conversational follow-ups (user continuing after the bot spoke).
+	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse && !tp.addressed && !tp.followUp {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
 		assistantContent = ""
 	}
