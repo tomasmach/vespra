@@ -317,9 +317,9 @@ type webSearchTool struct {
 
 func (t *webSearchTool) Name() string { return "web_search" }
 func (t *webSearchTool) Description() string {
-	return "Search the web for current information. This is an async operation — " +
-		"results will be delivered in a follow-up message. After calling this tool, " +
-		"acknowledge to the user that you are searching (in their language)."
+	return "Search the web for current information. You MUST call this tool to trigger a search — " +
+		"results will not appear unless you explicitly invoke it. " +
+		"After calling this tool, use the reply tool to tell the user you are searching (in their language)."
 }
 func (t *webSearchTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
