@@ -682,6 +682,13 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	}
 	reactFn := func(emoji string) error { return nil }
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, nil)
+	// Register web_fetch so the LLM can follow up on URLs from search results,
+	// but do NOT register web_search to prevent infinite search loops.
+	timeout := cfg.Tools.WebTimeoutSeconds
+	if cfg.Tools.Search.Timeout > 0 {
+		timeout = cfg.Tools.Search.Timeout
+	}
+	reg.RegisterWebFetch(timeout)
 
 	userMsg := llm.Message{Role: "user", Content: content}
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)

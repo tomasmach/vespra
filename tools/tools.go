@@ -411,6 +411,13 @@ func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, rea
 	return r
 }
 
+// RegisterWebFetch adds web_fetch to the registry without web_search.
+// Used in internal search-result turns where the LLM can follow up on URLs
+// but must not trigger new searches (which would cause infinite loops).
+func (r *Registry) RegisterWebFetch(timeoutSeconds int) {
+	r.Register(&webFetchTool{timeoutSeconds: timeoutSeconds})
+}
+
 // NewMemoryOnlyRegistry creates a registry with only memory_save and memory_recall.
 // Used by the background memory extraction pass.
 func NewMemoryOnlyRegistry(store *memory.Store, serverID string) *Registry {
