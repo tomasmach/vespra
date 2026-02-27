@@ -307,6 +307,8 @@ type WebSearchDeps struct {
 	SearchWg       *sync.WaitGroup
 	SearchRunning  *atomic.Bool
 	TimeoutSeconds int
+	SearchProvider string // "brave" | "glm"
+	SearchAPIKey   string // Brave API key
 }
 
 type webSearchTool struct {
@@ -315,9 +317,9 @@ type webSearchTool struct {
 
 func (t *webSearchTool) Name() string { return "web_search" }
 func (t *webSearchTool) Description() string {
-	return "Search the web for current information. This is an async operation — " +
-		"results will be delivered in a follow-up message. After calling this tool, " +
-		"acknowledge to the user that you are searching (in their language)."
+	return "Search the web for current information. You MUST call this tool to trigger a search — " +
+		"results will not appear unless you explicitly invoke it. " +
+		"After calling this tool, use the reply tool to tell the user you are searching (in their language)."
 }
 func (t *webSearchTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -354,6 +356,20 @@ func (t *webSearchTool) runSearch(query string) {
 	ctx, cancel := context.WithTimeout(t.deps.Ctx, time.Duration(t.deps.TimeoutSeconds)*time.Second)
 	defer cancel()
 
+	// Use Brave Search if configured
+	if t.deps.SearchProvider == "brave" && t.deps.SearchAPIKey != "" {
+		client := newBraveClient(t.deps.SearchAPIKey)
+		result, err := client.searchToMarkdown(ctx, query, 10)
+		if err != nil {
+			slog.Error("brave search failed", "error", err, "query", query)
+			t.deps.DeliverResult(fmt.Sprintf("[SYSTEM:web_search_results]\nWeb search for %q failed: %s", query, err))
+			return
+		}
+		t.deps.DeliverResult(fmt.Sprintf("[SYSTEM:web_search_results]\nSearch results for %q:\n\n%s", query, result))
+		return
+	}
+
+	// Fall back to GLM built-in web search
 	messages := []llm.Message{
 		{Role: "user", Content: fmt.Sprintf("Search the web for: %s\n\nReturn comprehensive results with titles, URLs, and detailed content summaries.", query)},
 	}
