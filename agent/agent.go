@@ -1087,8 +1087,8 @@ func looksLikeToolCall(s string, defs []llm.ToolDefinition) bool {
 	return false
 }
 
-// isStageDirection reports whether s is a stage direction like "(staying silent)"
-// or "[MLČÍM]" that the model sometimes emits as a non-reply.
+// isStageDirection reports whether s is a stage direction like "(staying silent)",
+// "[MLČÍM]", or "<IDLE/>" that the model sometimes emits as a non-reply.
 // Multi-line strings are never stage directions.
 func isStageDirection(s string) bool {
 	s = strings.TrimSpace(s)
@@ -1096,7 +1096,8 @@ func isStageDirection(s string) bool {
 		return false
 	}
 	return (strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")")) ||
-		(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]"))
+		(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) ||
+		(strings.HasPrefix(s, "<") && strings.HasSuffix(s, ">"))
 }
 
 // buildMessages constructs the message slice for the LLM with system prompt prepended.
