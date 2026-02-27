@@ -179,8 +179,17 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 			// GLM uses its own model namespace; reset to GLM default so the global
 			// OpenRouter model (if any) is not sent to the GLM API by mistake.
 			model = "glm-4.7"
+		case "kimi":
+			apiBase = cfg.KimiBaseURL
+			apiKey = cfg.KimiKey
+			// Kimi uses OpenAI-compatible API but needs proper model name
+			if opts.Model != "" {
+				model = opts.Model
+			} else if model == "" {
+				model = "kimi-k2.5"
+			}
 		}
-		if opts.Model != "" {
+		if opts.Model != "" && opts.Provider != "kimi" {
 			model = opts.Model
 		}
 	}

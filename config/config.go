@@ -36,6 +36,8 @@ type LLMConfig struct {
 	OpenRouterKey         string `toml:"openrouter_key" json:"-"`
 	GLMKey                string `toml:"glm_key" json:"-"`
 	GLMBaseURL            string `toml:"glm_base_url" json:"-"`
+	KimiKey               string `toml:"kimi_key" json:"-"`
+	KimiBaseURL           string `toml:"kimi_base_url" json:"-"`
 	Model                 string `toml:"model"`
 	VisionModel           string `toml:"vision_model"`
 	VisionBaseURL         string `toml:"vision_base_url" json:"-"`
@@ -129,6 +131,10 @@ func Load(path string) (*Config, error) {
 		cfg.Memory.DBPath = v
 		slog.Info("db path overridden by env var", "VESPRA_DB_PATH", v)
 	}
+	if v := os.Getenv("KIMI_API_KEY"); v != "" {
+		cfg.LLM.KimiKey = v
+		slog.Info("kimi api key overridden by env var", "KIMI_API_KEY", "***")
+	}
 
 	// Apply defaults
 	if cfg.Web.Addr == "" {
@@ -136,6 +142,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.LLM.GLMBaseURL == "" {
 		cfg.LLM.GLMBaseURL = "https://open.bigmodel.cn/api/paas/v4"
+	}
+	if cfg.LLM.KimiBaseURL == "" {
+		cfg.LLM.KimiBaseURL = "https://api.moonshot.cn/v1"
 	}
 	if cfg.LLM.RequestTimeoutSeconds == 0 {
 		cfg.LLM.RequestTimeoutSeconds = 60
@@ -172,8 +181,8 @@ func Load(path string) (*Config, error) {
 	if cfg.Bot.Token == "" {
 		return nil, fmt.Errorf("bot.token is required")
 	}
-	if cfg.LLM.OpenRouterKey == "" && cfg.LLM.GLMKey == "" {
-		return nil, fmt.Errorf("llm.openrouter_key or llm.glm_key is required")
+	if cfg.LLM.OpenRouterKey == "" && cfg.LLM.GLMKey == "" && cfg.LLM.KimiKey == "" {
+		return nil, fmt.Errorf("llm.openrouter_key, llm.glm_key, or llm.kimi_key is required")
 	}
 
 	// Validate response mode values
@@ -181,7 +190,7 @@ func Load(path string) (*Config, error) {
 	if !validModes[cfg.Response.DefaultMode] {
 		return nil, fmt.Errorf("response.default_mode %q is invalid (must be smart, mention, all, or none)", cfg.Response.DefaultMode)
 	}
-	validProviders := map[string]bool{"openrouter": true, "glm": true}
+	validProviders := map[string]bool{"openrouter": true, "glm": true, "kimi": true}
 	for _, agent := range cfg.Agents {
 		if agent.ServerID == "" {
 			return nil, fmt.Errorf("agent %q: server_id is required", agent.ID)
@@ -194,6 +203,9 @@ func Load(path string) (*Config, error) {
 		}
 		if agent.Provider == "glm" && cfg.LLM.GLMKey == "" {
 			return nil, fmt.Errorf("agent %s uses provider %q but llm.glm_key is not configured", agent.ID, agent.Provider)
+		}
+		if agent.Provider == "kimi" && cfg.LLM.KimiKey == "" {
+			return nil, fmt.Errorf("agent %s uses provider %q but llm.kimi_key is not configured", agent.ID, agent.Provider)
 		}
 		for _, ch := range agent.Channels {
 			if ch.ResponseMode != "" && !validModes[ch.ResponseMode] {
