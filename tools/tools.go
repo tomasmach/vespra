@@ -221,6 +221,10 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
 	}
+	// Suppress stage directions passed through the reply tool (e.g. <IDLE/>, (silence)).
+	if isStageDirection(p.Content) {
+		return "Replied.", nil
+	}
 	parts := SplitMessage(p.Content, 2000)
 	for _, part := range parts {
 		if err := t.send(part); err != nil {
@@ -230,6 +234,18 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	*t.replied = true
 	*t.replyText = p.Content
 	return "Replied.", nil
+}
+
+// isStageDirection reports whether s is a stage direction that the model emits
+// instead of a real reply, e.g. "(staying silent)", "[MLČÍM]", "<IDLE/>".
+func isStageDirection(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.Contains(s, "\n") {
+		return false
+	}
+	return (strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")")) ||
+		(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) ||
+		(strings.HasPrefix(s, "<") && strings.HasSuffix(s, ">"))
 }
 
 // utf16Len returns the number of UTF-16 code units for a rune.
