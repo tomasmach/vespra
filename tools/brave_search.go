@@ -7,53 +7,52 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"time"
+	"strings"
 )
 
 const braveSearchAPIBase = "https://api.search.brave.com/res/v1/web/search"
 
-// BraveSearchResult represents a single search result from Brave API.
-type BraveSearchResult struct {
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Desc    string `json:"description"`
-	Favicon string `json:"favicon,omitempty"`
+// braveSearchResult represents a single search result from Brave API.
+type braveSearchResult struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+	Desc  string `json:"description"`
 }
 
-// BraveSearchResponse represents the full response from Brave API.
-type BraveSearchResponse struct {
-	Query       string              `json:"query"`
-	WebResults  []BraveWebResult    `json:"web"`
+// braveWebBlock is the wrapper object under the "web" key in the Brave API response.
+type braveWebBlock struct {
+	Results []braveWebResult `json:"results"`
 }
 
-type BraveWebResult struct {
+// braveWebResult is a single item within the web results block.
+type braveWebResult struct {
 	Title       string `json:"title"`
 	URL         string `json:"url"`
 	Description string `json:"description"`
 }
 
-// BraveClient handles Brave Search API requests.
-type BraveClient struct {
-	APIKey     string
-	HTTPClient *http.Client
+// braveSearchResponse represents the full response from Brave API.
+type braveSearchResponse struct {
+	Web braveWebBlock `json:"web"`
 }
 
-// NewBraveClient creates a new Brave search client.
-func NewBraveClient(apiKey string, timeoutSeconds int) *BraveClient {
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 30
-	}
-	return &BraveClient{
-		APIKey: apiKey,
-		HTTPClient: &http.Client{
-			Timeout: time.Duration(timeoutSeconds) * time.Second,
-		},
+// braveClient handles Brave Search API requests.
+type braveClient struct {
+	apiKey     string
+	httpClient *http.Client
+}
+
+// newBraveClient creates a new Brave search client.
+func newBraveClient(apiKey string) *braveClient {
+	return &braveClient{
+		apiKey:     apiKey,
+		httpClient: &http.Client{},
 	}
 }
 
-// Search performs a web search using Brave API.
-func (c *BraveClient) Search(ctx context.Context, query string, count int) ([]BraveSearchResult, error) {
-	if c.APIKey == "" {
+// search performs a web search using Brave API.
+func (c *braveClient) search(ctx context.Context, query string, count int) ([]braveSearchResult, error) {
+	if c.apiKey == "" {
 		return nil, fmt.Errorf("brave API key not configured")
 	}
 	if count <= 0 {
@@ -80,9 +79,9 @@ func (c *BraveClient) Search(ctx context.Context, query string, count int) ([]Br
 	}
 
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-Subscription-Token", c.APIKey)
+	req.Header.Set("X-Subscription-Token", c.apiKey)
 
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("brave API request failed: %w", err)
 	}
@@ -92,14 +91,14 @@ func (c *BraveClient) Search(ctx context.Context, query string, count int) ([]Br
 		return nil, fmt.Errorf("brave API returned %s", resp.Status)
 	}
 
-	var braveResp BraveSearchResponse
+	var braveResp braveSearchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&braveResp); err != nil {
 		return nil, fmt.Errorf("decode brave response: %w", err)
 	}
 
-	results := make([]BraveSearchResult, 0, len(braveResp.WebResults))
-	for _, r := range braveResp.WebResults {
-		results = append(results, BraveSearchResult{
+	results := make([]braveSearchResult, 0, len(braveResp.Web.Results))
+	for _, r := range braveResp.Web.Results {
+		results = append(results, braveSearchResult{
 			Title: r.Title,
 			URL:   r.URL,
 			Desc:  r.Description,
@@ -110,9 +109,9 @@ func (c *BraveClient) Search(ctx context.Context, query string, count int) ([]Br
 	return results, nil
 }
 
-// SearchToMarkdown performs a search and returns results as markdown text.
-func (c *BraveClient) SearchToMarkdown(ctx context.Context, query string, count int) (string, error) {
-	results, err := c.Search(ctx, query, count)
+// searchToMarkdown performs a search and returns results as markdown text.
+func (c *braveClient) searchToMarkdown(ctx context.Context, query string, count int) (string, error) {
+	results, err := c.search(ctx, query, count)
 	if err != nil {
 		return "", err
 	}
@@ -121,10 +120,9 @@ func (c *BraveClient) SearchToMarkdown(ctx context.Context, query string, count 
 		return "No results found.", nil
 	}
 
-	var md string
+	var sb strings.Builder
 	for i, r := range results {
-		md += fmt.Sprintf("**%d. %s**\n\n%s\n\n%s\n\n", i+1, r.Title, r.Desc, r.URL)
+		fmt.Fprintf(&sb, "**%d. %s**\n\n%s\n\n%s\n\n", i+1, r.Title, r.Desc, r.URL)
 	}
-
-	return md, nil
+	return sb.String(), nil
 }

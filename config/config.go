@@ -139,6 +139,9 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("BRAVE_API_KEY"); v != "" {
 		cfg.Tools.Search.APIKey = v
 		slog.Info("brave api key overridden by env var", "BRAVE_API_KEY", "***")
+		if cfg.Tools.Search.Provider == "" || cfg.Tools.Search.Provider == "glm" {
+			cfg.Tools.Search.Provider = "brave"
+		}
 	}
 
 	// Apply defaults
@@ -174,9 +177,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Tools.WebTimeoutSeconds <= 0 {
 		cfg.Tools.WebTimeoutSeconds = 120
-	}
-	if cfg.Tools.Search.Timeout <= 0 {
-		cfg.Tools.Search.Timeout = 30
 	}
 	if cfg.Tools.Search.Provider == "" {
 		cfg.Tools.Search.Provider = "glm"

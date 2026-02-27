@@ -358,8 +358,8 @@ func (t *webSearchTool) runSearch(query string) {
 
 	// Use Brave Search if configured
 	if t.deps.SearchProvider == "brave" && t.deps.SearchAPIKey != "" {
-		client := NewBraveClient(t.deps.SearchAPIKey, t.deps.TimeoutSeconds)
-		result, err := client.SearchToMarkdown(ctx, query, 10)
+		client := newBraveClient(t.deps.SearchAPIKey)
+		result, err := client.searchToMarkdown(ctx, query, 10)
 		if err != nil {
 			slog.Error("brave search failed", "error", err, "query", query)
 			t.deps.DeliverResult(fmt.Sprintf("[SYSTEM:web_search_results]\nWeb search for %q failed: %s", query, err))
