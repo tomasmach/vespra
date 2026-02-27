@@ -65,7 +65,14 @@ type ResponseConfig struct {
 }
 
 type ToolsConfig struct {
-	WebTimeoutSeconds int `toml:"web_timeout_seconds"`
+	WebTimeoutSeconds int         `toml:"web_timeout_seconds"`
+	Search            SearchConfig `toml:"search"`
+}
+
+type SearchConfig struct {
+	Provider string `toml:"provider"` // "brave" | "glm" (default)
+	APIKey   string `toml:"api_key" json:"-"`
+	Timeout  int    `toml:"timeout_seconds"` // default 30
 }
 
 type AgentConfig struct {
@@ -129,6 +136,10 @@ func Load(path string) (*Config, error) {
 		cfg.Memory.DBPath = v
 		slog.Info("db path overridden by env var", "VESPRA_DB_PATH", v)
 	}
+	if v := os.Getenv("BRAVE_API_KEY"); v != "" {
+		cfg.Tools.Search.APIKey = v
+		slog.Info("brave api key overridden by env var", "BRAVE_API_KEY", "***")
+	}
 
 	// Apply defaults
 	if cfg.Web.Addr == "" {
@@ -163,6 +174,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Tools.WebTimeoutSeconds <= 0 {
 		cfg.Tools.WebTimeoutSeconds = 120
+	}
+	if cfg.Tools.Search.Timeout <= 0 {
+		cfg.Tools.Search.Timeout = 30
+	}
+	if cfg.Tools.Search.Provider == "" {
+		cfg.Tools.Search.Provider = "glm"
 	}
 	if cfg.Response.DefaultMode == "" {
 		cfg.Response.DefaultMode = "smart"

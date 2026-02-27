@@ -798,11 +798,16 @@ func (a *ChannelAgent) chatOptions() *llm.ChatOptions {
 }
 
 // webSearchDeps returns the dependency bundle for the async web search tool,
-// or nil if web search is not configured (no GLM key).
+// or nil if web search is not configured (no GLM key or Brave key).
 func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
 	cfg := a.cfgStore.Get()
-	if cfg.LLM.GLMKey == "" {
-		slog.Warn("web_search tool disabled: llm.glm_key is not configured", "server_id", a.serverID)
+
+	// Check if search is configured at all
+	hasGLM := cfg.LLM.GLMKey != ""
+	hasBrave := cfg.Tools.Search.Provider == "brave" && cfg.Tools.Search.APIKey != ""
+
+	if !hasGLM && !hasBrave {
+		slog.Warn("web_search tool disabled: no search provider configured", "server_id", a.serverID)
 		return nil
 	}
 
@@ -810,6 +815,12 @@ func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
 	model := cfg.LLM.Model
 	if a.resources.Config != nil && a.resources.Config.Model != "" {
 		model = a.resources.Config.Model
+	}
+
+	// Use Brave timeout if configured, otherwise use web timeout
+	timeout := cfg.Tools.WebTimeoutSeconds
+	if cfg.Tools.Search.Timeout > 0 {
+		timeout = cfg.Tools.Search.Timeout
 	}
 
 	return &tools.WebSearchDeps{
@@ -825,7 +836,9 @@ func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
 		Ctx:            a.ctx,
 		SearchWg:       &a.searchWg,
 		SearchRunning:  &a.searchRunning,
-		TimeoutSeconds: cfg.Tools.WebTimeoutSeconds,
+		TimeoutSeconds: timeout,
+		SearchProvider: cfg.Tools.Search.Provider,
+		SearchAPIKey:   cfg.Tools.Search.APIKey,
 	}
 }
 
