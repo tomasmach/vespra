@@ -61,6 +61,10 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, msg *discordgo.MessageCreate
 	if msg.Author.ID == s.State.User.ID || msg.Author.Bot {
 		return
 	}
+	// Skip Discord system messages (pins, joins, boosts, etc.); only handle actual user messages.
+	if msg.Type != discordgo.MessageTypeDefault && msg.Type != discordgo.MessageTypeReply {
+		return
+	}
 	if b.router == nil {
 		slog.Warn("message received but router not set, dropping", "channel_id", msg.ChannelID)
 		return
