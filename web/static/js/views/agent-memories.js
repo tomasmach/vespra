@@ -73,11 +73,18 @@ export async function render(container, params) {
       for (const mem of memories) {
         const card = el('div', { className: 'card memory-card' });
 
+        // Normalize API PascalCase → local camelCase
+        const content = mem.Content || mem.content || '';
+        const userId = mem.UserID || mem.user_id || '';
+        const createdAt = mem.CreatedAt || mem.created_at || '';
+        const importance = mem.Importance ?? mem.importance ?? null;
+        const memId = mem.ID || mem.id || '';
+
         // Content (expandable)
-        const lines = (mem.content || '').split('\n');
-        const isLong = lines.length > 3;
+        const lines = content.split('\n');
+        const isLong = lines.length > 3 || content.length > 200;
         const contentDiv = el('div', { className: 'memory-content expandable' + (isLong ? ' collapsed' : '') });
-        contentDiv.textContent = mem.content || '';
+        contentDiv.textContent = content;
         card.appendChild(contentDiv);
 
         if (isLong) {
@@ -90,29 +97,32 @@ export async function render(container, params) {
 
         // Meta row
         const meta = el('div', { className: 'memory-meta' });
-        if (mem.user_id) {
-          meta.appendChild(el('span', {}, 'user: ' + mem.user_id));
+        if (userId) {
+          meta.appendChild(el('span', {}, 'user: ' + userId));
         }
-        if (mem.created_at) {
-          meta.appendChild(el('span', {}, timeAgo(mem.created_at)));
+        if (createdAt) {
+          const fullDate = new Date(createdAt).toLocaleString();
+          meta.appendChild(el('span', { title: fullDate }, timeAgo(createdAt)));
         }
-        if (mem.importance != null) {
-          const importanceClass = mem.importance >= 0.7 ? 'badge-amber' : mem.importance >= 0.4 ? 'badge-warning' : 'badge-muted';
-          meta.appendChild(el('span', { className: 'badge ' + importanceClass }, 'imp: ' + mem.importance));
+        if (importance != null) {
+          const pct = Math.round(importance * 100);
+          const importanceClass = importance >= 0.7 ? 'badge-amber' : importance >= 0.4 ? 'badge-warning' : 'badge-muted';
+          meta.appendChild(el('span', { className: 'badge ' + importanceClass }, pct + '% importance'));
         }
         card.appendChild(meta);
 
         // Actions
         const actions = el('div', { className: 'memory-actions' });
 
+        const memRef = { id: memId, content, importance, userId, createdAt };
         const editBtn = el('button', {
           className: 'btn btn-ghost btn-sm',
-          onClick: () => openEditDialog(mem),
+          onClick: () => openEditDialog(memRef),
         }, 'Edit');
 
         const deleteBtn = el('button', {
           className: 'btn btn-ghost btn-sm btn-danger',
-          onClick: () => handleDelete(mem),
+          onClick: () => handleDelete(memRef),
         }, 'Delete');
 
         actions.append(editBtn, deleteBtn);
