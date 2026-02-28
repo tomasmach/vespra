@@ -34,7 +34,9 @@ export async function render(container, params) {
 
   const picker = modePicker(agent.response_mode, '', async (mode) => {
     try {
-      await API.updateAgent(agent.id, { response_mode: mode });
+      const all = await API.listAgents();
+      const current = all.find(a => a.id === agent.id) || agent;
+      await API.updateAgent(agent.id, { ...current, response_mode: mode });
       toast('Response mode updated', 'success');
     } catch (err) {
       toast('Failed to update mode: ' + err.message, 'error');

@@ -210,6 +210,7 @@ export async function render(container, params) {
       try {
         const data = {
           server_id: agent.server_id,
+          soul_file: agent.soul_file || '',
           response_mode: state.response_mode,
           language: languageInput.value.trim(),
           provider: state.provider,

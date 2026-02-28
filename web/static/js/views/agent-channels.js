@@ -130,7 +130,9 @@ export async function render(container, params) {
 
   async function saveChannels(channels) {
     try {
-      await API.updateAgent(agentId, { channels });
+      const all = await API.listAgents();
+      const current = all.find(a => a.id === agentId || a.server_id === agentId) || agent;
+      await API.updateAgent(agentId, { ...current, channels });
       agent.channels = channels;
       toast('Channels updated', 'success');
     } catch (err) {

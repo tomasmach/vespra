@@ -1,6 +1,7 @@
 import { API } from '../api.js';
 import { el, esc, toast, emptyState, loading } from '../components.js';
 import { navigate } from '../router.js';
+import { sseConnected } from '../app.js';
 
 export async function render(container, params) {
   const wrap = el('div', { className: 'fade-in' });
@@ -26,14 +27,11 @@ export async function render(container, params) {
   wrap.innerHTML = '';
 
   // ── Hero ──
-  const sseConnected = status && status.sse !== undefined ? status.sse : null;
   let sseBadge;
-  if (sseConnected === true) {
+  if (sseConnected) {
     sseBadge = el('span', { className: 'badge badge-success' }, 'connected');
-  } else if (sseConnected === false) {
-    sseBadge = el('span', { className: 'badge badge-danger' }, 'disconnected');
   } else {
-    sseBadge = el('span', { className: 'badge badge-muted' }, 'unknown');
+    sseBadge = el('span', { className: 'badge badge-danger' }, 'disconnected');
   }
 
   const hero = el('div', { className: 'dashboard-hero' },

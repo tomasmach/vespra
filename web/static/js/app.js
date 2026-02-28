@@ -7,6 +7,7 @@ import { initMonitor } from './views/monitor.js';
 let agents = [];
 let sseSource = null;
 let monitorCleanup = null;
+export let sseConnected = false;
 
 // ── Agent sidebar ──
 async function loadAgents() {
@@ -54,8 +55,8 @@ function connectSSE() {
     toast('Config reloaded', 'info');
   });
 
-  sseSource.onopen = () => { if (dot) dot.className = 'status-dot-sm online'; };
-  sseSource.onerror = () => { if (dot) dot.className = 'status-dot-sm error'; };
+  sseSource.onopen = () => { sseConnected = true; if (dot) dot.className = 'status-dot-sm online'; };
+  sseSource.onerror = () => { sseConnected = false; if (dot) dot.className = 'status-dot-sm error'; };
 }
 
 function updateSidebarStatus(statuses) {

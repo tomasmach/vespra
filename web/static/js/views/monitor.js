@@ -10,7 +10,7 @@ export function initMonitor(container) {
       className: 'btn btn-ghost btn-sm',
       type: 'button',
       onClick: () => {
-        container.classList.remove('open');
+        document.getElementById('monitor-overlay').classList.remove('open');
       },
     }, 'Close'),
   );

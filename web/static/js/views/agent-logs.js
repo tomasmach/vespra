@@ -21,7 +21,7 @@ export async function render(container, params) {
   let currentOffset = 0;
   let liveTail = false;
   let pollTimer = null;
-  let seenIds = new Set();
+  let lastSeenAt = null;
 
   // ── Controls ──
   const controls = el('div', { className: 'log-controls' });
@@ -137,7 +137,7 @@ export async function render(container, params) {
         return;
       }
 
-      seenIds = new Set(logs.map(l => l.id));
+      lastSeenAt = logs.reduce((max, l) => (l.created_at > max ? l.created_at : max), '');
       tableWrap.appendChild(buildTable(logs));
 
       // Pagination (only when not in live tail mode)
@@ -179,17 +179,18 @@ export async function render(container, params) {
       const data = await API.getLogs(agentId, apiParams);
       const logs = data.logs || [];
 
-      const newLogs = logs.filter(l => !seenIds.has(l.id));
+      const newLogs = logs.filter(l => !lastSeenAt || l.created_at > lastSeenAt);
       if (!newLogs.length) return;
 
-      for (const l of newLogs) seenIds.add(l.id);
+      const maxNewAt = newLogs.reduce((max, l) => (l.created_at > max ? l.created_at : max), lastSeenAt || '');
+      lastSeenAt = maxNewAt;
 
       // Prepend new rows to existing table
       const tbody = tableWrap.querySelector('tbody');
       if (!tbody) {
         // Table did not exist yet, full re-render
         tableWrap.innerHTML = '';
-        seenIds = new Set(logs.map(l => l.id));
+        lastSeenAt = logs.reduce((max, l) => (l.created_at > max ? l.created_at : max), '');
         tableWrap.appendChild(buildTable(logs));
         return;
       }

@@ -78,18 +78,25 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	sub, _ := fs.Sub(staticFiles, "static")
 	fileServer := http.FileServer(http.FS(sub))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// SPA fallback: serve static file if exists, else index.html
+		// SPA fallback: serve static file if it exists and is a regular file, else index.html.
+		// We must check IsDir() because embed.FS.Open succeeds for directories too,
+		// which would cause directory requests like /css or /js to bypass the SPA fallback.
 		path := r.URL.Path
 		if path != "/" {
 			if f, err := sub.Open(path[1:]); err == nil {
+				stat, statErr := f.Stat()
 				f.Close()
-				fileServer.ServeHTTP(w, r)
-				return
+				if statErr == nil && !stat.IsDir() {
+					fileServer.ServeHTTP(w, r)
+					return
+				}
 			}
 		}
-		// Serve index.html for SPA routes
-		r.URL.Path = "/"
-		fileServer.ServeHTTP(w, r)
+		// Serve index.html for SPA routes. Clone the request to avoid mutating
+		// the shared URL object, which could affect other middleware or logging.
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/"
+		fileServer.ServeHTTP(w, r2)
 	})
 
 	s.httpServer = &http.Server{
