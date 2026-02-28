@@ -137,11 +137,17 @@
 }
 
 /* ── Memories ── */
+.memory-card {
+  display: flex;
+  flex-direction: column;
+}
+
 .memory-card .memory-content {
   font-size: var(--text-sm);
   line-height: 1.6;
   color: var(--cream);
   margin-bottom: var(--sp-3);
+  flex: 1;
 }
 
 .memory-card .memory-meta {
@@ -155,7 +161,7 @@
 .memory-card .memory-actions {
   display: flex;
   gap: var(--sp-2);
-  margin-top: var(--sp-3);
+  margin-top: auto;
   padding-top: var(--sp-3);
   border-top: 1px solid var(--night-border);
 }

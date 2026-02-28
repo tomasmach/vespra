@@ -119,26 +119,28 @@ export async function render(container, params) {
       }, timeAgo(log.created_at)));
 
       // Level badge
-      const badgeClass = LEVEL_BADGES[log.level] || 'badge badge-muted';
+      const lvl = (log.level || '').toLowerCase();
+      const badgeClass = LEVEL_BADGES[lvl] || 'badge badge-muted';
       row.appendChild(el('td', { style: { padding: 'var(--sp-2)' } },
-        el('span', { className: badgeClass }, log.level),
+        el('span', { className: badgeClass }, lvl),
       ));
 
       // Message (with optional expandable attrs)
       const msgCell = el('td', { style: { padding: 'var(--sp-2)', maxWidth: '400px' } });
       const msgText = el('div', {
         style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '400px', fontSize: 'var(--text-sm)' },
-        title: log.message || '',
-      }, esc(log.message || ''));
+        title: log.msg || log.message || '',
+      }, log.msg || log.message || '');
       msgCell.appendChild(msgText);
 
-      if (log.attrs && Object.keys(log.attrs).length > 0) {
+      const parsedAttrs = typeof log.attrs === 'string' ? (() => { try { return JSON.parse(log.attrs); } catch { return null; } })() : log.attrs;
+      if (parsedAttrs && Object.keys(parsedAttrs).length > 0) {
         const attrsToggle = el('div', {
           style: { fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)', cursor: 'pointer', marginTop: 'var(--sp-1)' },
         }, '+ attrs');
         const attrsContent = el('pre', {
           style: { display: 'none', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)', marginTop: 'var(--sp-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
-        }, JSON.stringify(log.attrs, null, 2));
+        }, JSON.stringify(parsedAttrs, null, 2));
 
         attrsToggle.addEventListener('click', () => {
           const visible = attrsContent.style.display !== 'none';
@@ -154,7 +156,7 @@ export async function render(container, params) {
       // Channel ID
       row.appendChild(el('td', {
         style: { padding: 'var(--sp-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)' },
-      }, esc(log.channel_id || '')));
+      }, log.channel_id || ''));
 
       tbody.appendChild(row);
     }
@@ -257,8 +259,8 @@ export async function render(container, params) {
 
     row.appendChild(el('td', {
       style: { padding: 'var(--sp-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' },
-      title: log.created_at || '',
-    }, timeAgo(log.created_at)));
+      title: log.ts || '',
+    }, timeAgo(log.ts)));
 
     const badgeClass = LEVEL_BADGES[log.level] || 'badge badge-muted';
     row.appendChild(el('td', { style: { padding: 'var(--sp-2)' } },
@@ -268,8 +270,8 @@ export async function render(container, params) {
     const msgCell = el('td', { style: { padding: 'var(--sp-2)', maxWidth: '400px' } });
     msgCell.appendChild(el('div', {
       style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '400px', fontSize: 'var(--text-sm)' },
-      title: log.message || '',
-    }, esc(log.message || '')));
+      title: log.msg || log.message || '',
+    }, esc(log.msg || log.message || '')));
 
     if (log.attrs && Object.keys(log.attrs).length > 0) {
       const attrsToggle = el('div', {
@@ -277,7 +279,7 @@ export async function render(container, params) {
       }, '+ attrs');
       const attrsContent = el('pre', {
         style: { display: 'none', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)', marginTop: 'var(--sp-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
-      }, JSON.stringify(log.attrs, null, 2));
+      }, JSON.stringify(parsedAttrs, null, 2));
 
       attrsToggle.addEventListener('click', () => {
         const visible = attrsContent.style.display !== 'none';
@@ -292,7 +294,7 @@ export async function render(container, params) {
 
     row.appendChild(el('td', {
       style: { padding: 'var(--sp-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)' },
-    }, esc(log.channel_id || '')));
+    }, log.channel_id || ''));
 
     return row;
   }

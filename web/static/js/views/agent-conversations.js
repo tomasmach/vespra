@@ -55,14 +55,22 @@ export async function render(container, params) {
     const card = el('div', { className: 'card conv-card' });
 
     // Header: channel badge + timestamp
+    // Normalize field names (API uses user_msg, response, ts)
+    const channelId = conv.channel_id || '';
+    const userMessage = conv.user_msg || conv.user_message || '';
+    const botResponse = conv.response || conv.bot_response || '';
+    const timestamp = conv.ts || conv.created_at || '';
+    const toolCalls = conv.tool_calls || '';
+
+    const fullDate = timestamp ? new Date(timestamp).toLocaleString() : '';
     const header = el('div', {
       style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginBottom: 'var(--sp-3)' },
     },
-      el('span', { className: 'badge badge-lavender' }, esc(conv.channel_id || 'unknown')),
+      el('span', { className: 'badge badge-lavender' }, channelId || 'unknown'),
       el('span', {
         style: { fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)' },
-        title: conv.created_at || '',
-      }, timeAgo(conv.created_at)),
+        title: fullDate,
+      }, timeAgo(timestamp)),
     );
     card.appendChild(header);
 
@@ -70,28 +78,24 @@ export async function render(container, params) {
     const userMsg = el('div', { className: 'conv-msg user' },
       el('div', { className: 'conv-msg-label' }, 'User'),
       el('div', { style: { fontSize: 'var(--text-sm)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } },
-        esc(conv.user_message || ''),
+        userMessage,
       ),
     );
     card.appendChild(userMsg);
 
-    // Tool calls (collapsible)
-    if (conv.tool_calls && conv.tool_calls.length > 0) {
+    // Tool calls (collapsible) — API sends as string
+    if (toolCalls && toolCalls.length > 0) {
       const toolsDiv = el('div', { className: 'conv-tools' });
-
-      const toolsSummary = el('div', {},
-        'Tool calls (' + conv.tool_calls.length + ') - click to expand',
-      );
+      const toolsSummary = el('div', {}, 'Tool calls - click to expand');
+      const formatted = typeof toolCalls === 'string' ? toolCalls : JSON.stringify(toolCalls, null, 2);
       const toolsContent = el('pre', {
         style: { display: 'none', marginTop: 'var(--sp-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
-      }, JSON.stringify(conv.tool_calls, null, 2));
+      }, formatted);
 
       toolsDiv.addEventListener('click', () => {
         const visible = toolsContent.style.display !== 'none';
         toolsContent.style.display = visible ? 'none' : 'block';
-        toolsSummary.textContent = visible
-          ? 'Tool calls (' + conv.tool_calls.length + ') - click to expand'
-          : 'Tool calls (' + conv.tool_calls.length + ') - click to collapse';
+        toolsSummary.textContent = visible ? 'Tool calls - click to expand' : 'Tool calls - click to collapse';
       });
 
       toolsDiv.appendChild(toolsSummary);
@@ -103,7 +107,7 @@ export async function render(container, params) {
     const botMsg = el('div', { className: 'conv-msg bot' },
       el('div', { className: 'conv-msg-label' }, 'Vespra'),
       el('div', { style: { fontSize: 'var(--text-sm)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } },
-        esc(conv.bot_response || ''),
+        botResponse,
       ),
     );
     card.appendChild(botMsg);
