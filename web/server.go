@@ -76,7 +76,21 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("GET /api/soul", s.handleGetGlobalSoul)
 	mux.HandleFunc("PUT /api/soul", s.handlePutGlobalSoul)
 	sub, _ := fs.Sub(staticFiles, "static")
-	mux.HandleFunc("/", http.FileServer(http.FS(sub)).ServeHTTP)
+	fileServer := http.FileServer(http.FS(sub))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// SPA fallback: serve static file if exists, else index.html
+		path := r.URL.Path
+		if path != "/" {
+			if f, err := sub.Open(path[1:]); err == nil {
+				f.Close()
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+		}
+		// Serve index.html for SPA routes
+		r.URL.Path = "/"
+		fileServer.ServeHTTP(w, r)
+	})
 
 	s.httpServer = &http.Server{
 		Addr:    addr,
@@ -341,6 +355,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		Provider     string                 `json:"provider,omitempty"`
 		Model        string                 `json:"model,omitempty"`
 		Channels     []config.ChannelConfig `json:"channels,omitempty"`
+		IgnoreUsers  []string               `json:"ignore_users,omitempty"`
 	}
 	views := make([]agentView, len(cfg.Agents))
 	for i, a := range cfg.Agents {
@@ -355,6 +370,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			Provider:     a.Provider,
 			Model:        a.Model,
 			Channels:     a.Channels,
+			IgnoreUsers:  a.IgnoreUsers,
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

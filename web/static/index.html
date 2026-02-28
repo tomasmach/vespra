@@ -1,307 +1,69 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Vespra Dashboard</title>
+
+  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            mono: ['"IBM Plex Mono"', 'monospace'],
-            sans: ['"IBM Plex Sans"', 'system-ui', 'sans-serif'],
-          },
-        }
-      }
-    }
-  </script>
-  <link rel="stylesheet" href="/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="/css/tokens.css">
+  <link rel="stylesheet" href="/css/base.css">
+  <link rel="stylesheet" href="/css/layout.css">
+  <link rel="stylesheet" href="/css/components.css">
+  <link rel="stylesheet" href="/css/views.css">
 </head>
-<body class="h-full flex flex-col font-sans dashboard-body overflow-hidden">
-
-  <header class="topbar h-14 flex-shrink-0 flex items-center justify-between px-6">
-    <div class="flex items-center gap-3">
-      <span class="text-lg">🧠</span>
-      <div>
-        <span class="font-semibold tracking-wide text-sm text-cream">Vespra Dashboard</span>
-        <p class="text-[11px] text-cream-muted font-mono">agents · memory · soul · logs</p>
+<body>
+  <div id="app">
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">Vespra</div>
+        <div class="sidebar-logo-sub">Dashboard</div>
       </div>
-    </div>
-    <div class="flex items-center gap-4">
-      <span id="sse-dot" class="sse-dot"></span>
-      <span id="sse-label" class="text-xs text-cream-muted font-mono">Connecting…</span>
-      <button onclick="toggleMonitor()" class="btn-secondary">Live monitor</button>
-    </div>
-  </header>
-
-  <div class="flex-1 flex overflow-hidden">
-    <aside class="sidebar w-64 flex-shrink-0 flex flex-col overflow-hidden">
-      <div class="px-4 pt-4 pb-2 text-[10px] font-semibold tracking-widest text-cream-muted uppercase flex-shrink-0">Agents</div>
-      <div id="agent-sidebar-list" class="flex-1 overflow-y-auto px-2 py-1"></div>
-      <div class="p-3 border-t border-white/5 flex-shrink-0 flex flex-col gap-2">
-        <button id="btn-settings" class="btn-ghost w-full text-left">⚙ Settings</button>
-        <button id="btn-new-agent" class="btn-ghost-dashed w-full text-left">+ New Agent</button>
+      <div class="sidebar-agents">
+        <div class="sidebar-section-label">
+          <span class="mono-label">Agents</span>
+        </div>
+        <div id="agent-list"></div>
+      </div>
+      <div class="sidebar-footer">
+        <a href="/agents/new" class="btn btn-secondary" style="width:100%;justify-content:center;">+ New Agent</a>
+        <a href="/settings" class="btn btn-ghost" style="width:100%;justify-content:center;">Settings</a>
       </div>
     </aside>
 
-    <main class="flex-1 flex flex-col overflow-hidden">
-      <div id="panel-empty" class="flex-1 overflow-y-auto p-6">
-        <section class="hero-card">
-          <div class="mb-5">
-            <p class="mono-label">workspace overview</p>
-            <h1 class="text-3xl font-semibold text-cream mt-2">Control Vespra without fighting the UI</h1>
-            <p class="text-sm text-cream-muted mt-2 max-w-2xl">
-              Pick an agent on the left to edit config, manage souls, inspect memory, and debug logs.
-            </p>
+    <!-- Main area -->
+    <div id="main">
+      <div id="topbar">
+        <div class="topbar-left">
+          <div class="topbar-breadcrumb" id="breadcrumb">
+            <a href="/">Dashboard</a>
           </div>
-          <div class="stats-grid">
-            <div class="stat-card"><p>Agents</p><strong id="overview-agents">—</strong></div>
-            <div class="stat-card"><p>SSE</p><strong id="overview-sse">waiting</strong></div>
-            <div class="stat-card"><p>Focus</p><strong>health + fixes</strong></div>
-            <div class="stat-card"><p>Mode</p><strong>operator</strong></div>
-          </div>
-        </section>
-      </div>
-
-      <div id="panel-config" class="flex flex-col h-full overflow-hidden" hidden>
-        <div class="flex-shrink-0 px-6 pt-5 pb-0">
-          <h2 class="section-title">Global Config</h2>
         </div>
-        <div id="global-config" class="flex flex-col flex-1 overflow-hidden px-6 py-5">
-          <div id="config-path-info" class="path-info mb-3 flex-shrink-0"></div>
-          <textarea id="config-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
-          <div class="flex gap-2 mt-3 flex-shrink-0">
-            <button class="btn-primary" onclick="saveConfig()">Save Config</button>
-          </div>
-          <span id="config-status" class="status-msg"></span>
+        <div class="topbar-right">
+          <span id="sse-status" class="status-dot-sm offline"></span>
+          <button class="btn btn-ghost btn-sm" id="monitor-btn">Live Monitor</button>
         </div>
       </div>
-
-      <div id="panel-new-agent" class="flex flex-col h-full overflow-hidden" hidden>
-        <div class="flex-shrink-0 px-6 pt-5 pb-0">
-          <h2 class="section-title">New Agent</h2>
-        </div>
-        <div class="flex-1 overflow-y-auto px-6 py-5">
-          <div class="form-grid">
-            <label>ID (unique name)</label>
-            <input id="na-id" type="text" placeholder="my-server">
-            <label>Server ID (Discord guild ID)</label>
-            <input id="na-server-id" type="text" placeholder="123456789">
-            <label>Token (optional)</label>
-            <input id="na-token" type="password" placeholder="Leave blank to use default bot token">
-            <label>Soul File (optional)</label>
-            <input id="na-soul-file" type="text" placeholder="~/.config/vespra/soul.md">
-            <label>DB Path (optional)</label>
-            <input id="na-db-path" type="text" placeholder="auto">
-            <label>Response Mode</label>
-            <select id="na-response-mode">
-              <option value="">inherit from global</option>
-              <option value="smart">smart</option>
-              <option value="mention">mention</option>
-              <option value="all">all</option>
-              <option value="none">none</option>
-            </select>
-            <label>Language (optional)</label>
-            <input id="na-language" type="text" placeholder="e.g. Czech, Spanish">
-            <label>LLM Provider</label>
-            <select id="na-provider">
-              <option value="">inherit global</option>
-              <option value="openrouter">OpenRouter</option>
-              <option value="glm">GLM (智谱AI)</option>
-              <option value="kimi">Kimi</option>
-            </select>
-            <label>Model (optional)</label>
-            <input id="na-model" type="text" placeholder="e.g. gpt-4o, glm-4.7, kimi-k2.5">
-          </div>
-          <div class="flex gap-2">
-            <button class="btn-secondary" onclick="cancelNewAgent()">Cancel</button>
-            <button class="btn-primary" onclick="createAgent()">Create Agent</button>
-          </div>
-          <span id="new-agent-status" class="status-msg"></span>
-        </div>
-      </div>
-
-      <div id="panel-agent" class="flex flex-col h-full overflow-hidden" hidden>
-        <div class="flex-shrink-0 flex items-center justify-between px-6 pt-5 pb-0">
-          <h2 id="agent-detail-name" class="section-title"></h2>
-          <div class="flex items-center gap-2">
-            <button class="btn-secondary text-xs" onclick="restartSelectedAgent()">Restart</button>
-            <button class="btn-danger text-xs" onclick="deleteSelectedAgent()">Delete</button>
-          </div>
-        </div>
-        <div class="flex px-6 mt-4 border-b border-white/5 flex-shrink-0 gap-1">
-          <button class="detail-tab active" id="dtab-config" onclick="navigateTab('config')">Config</button>
-          <button class="detail-tab" id="dtab-soul" onclick="navigateTab('soul')">Soul</button>
-          <button class="detail-tab" id="dtab-memories" onclick="navigateTab('memories')">Memories</button>
-          <button class="detail-tab" id="dtab-logs" onclick="navigateTab('logs')">Logs</button>
-          <button class="detail-tab" id="dtab-conversations" onclick="navigateTab('conversations')">Conversations</button>
-        </div>
-
-        <div id="detail-config" class="flex-1 overflow-y-auto px-6 py-5">
-          <div class="form-grid">
-            <label>Server ID (Discord guild ID)</label>
-            <input id="cfg-server-id" type="text">
-            <label>Token (optional)</label>
-            <input id="cfg-token" type="password" placeholder="Leave blank to keep existing token">
-            <label>Soul File (optional)</label>
-            <input id="cfg-soul-file" type="text" placeholder="~/.config/vespra/soul.md">
-            <label>DB Path (optional)</label>
-            <input id="cfg-db-path" type="text" placeholder="auto">
-            <label>Response Mode</label>
-            <select id="cfg-response-mode">
-              <option value="">inherit from global</option>
-              <option value="smart">smart</option>
-              <option value="mention">mention</option>
-              <option value="all">all</option>
-              <option value="none">none</option>
-            </select>
-            <label>Language (optional)</label>
-            <input id="cfg-language" type="text" placeholder="e.g. Czech, Spanish">
-            <label>LLM Provider</label>
-            <select id="cfg-provider">
-              <option value="">inherit global</option>
-              <option value="openrouter">OpenRouter</option>
-              <option value="glm">GLM (智谱AI)</option>
-              <option value="kimi">Kimi</option>
-            </select>
-            <label>Model (optional)</label>
-            <input id="cfg-model" type="text" placeholder="e.g. gpt-4o, glm-4.7, kimi-k2.5">
-            <label class="col-span-2">Ignored Users</label>
-            <div class="col-span-2" id="ignored-users-list"></div>
-            <div class="col-span-2 flex gap-2">
-              <input id="new-ignore-user" type="text" placeholder="Discord User ID">
-              <button class="btn-secondary" onclick="addIgnoredUser()">Add</button>
-            </div>
-            <label class="col-span-2">Per-Channel Response Mode</label>
-            <div class="col-span-2" id="channels-list"></div>
-            <div class="col-span-2 flex gap-2">
-              <input type="text" id="new-channel-id" placeholder="Channel ID">
-              <select id="new-channel-mode">
-                <option value="smart">smart</option>
-                <option value="mention">mention</option>
-                <option value="all">all</option>
-                <option value="none">none</option>
-              </select>
-              <button onclick="addChannel()" class="btn-secondary">Add</button>
-            </div>
-          </div>
-          <div class="flex gap-2">
-            <button class="btn-primary" onclick="saveAgentConfig()">Save Config</button>
-          </div>
-          <span id="cfg-status" class="status-msg"></span>
-        </div>
-
-        <div id="detail-soul" class="flex flex-col flex-1 overflow-hidden" hidden>
-          <div class="flex-shrink-0 px-6 pt-5 pb-4 border-b border-white/5">
-            <div class="flex items-center gap-2 mb-3">
-              <select id="soul-select" class="flex-1" onchange="onSoulSelectChange()">
-                <option value="">— select a soul —</option>
-              </select>
-              <button class="btn-secondary text-xs flex-shrink-0" onclick="showNewSoulForm()">+ New</button>
-              <button id="btn-activate-soul" class="btn-secondary text-xs flex-shrink-0" onclick="activateEditingSoul()" hidden>Activate</button>
-              <button id="btn-delete-soul" class="btn-danger-sm flex-shrink-0" onclick="deleteSelectedSoul()" hidden>Delete</button>
-            </div>
-            <div id="soul-new-form" hidden class="flex gap-2 items-center mb-2">
-              <input id="new-soul-name" type="text" class="flex-1" placeholder="soul-name (letters, digits, -, _)">
-              <button class="btn-primary text-xs" onclick="createAgentSoul()">Create</button>
-              <button class="btn-secondary text-xs" onclick="hideNewSoulForm()">Cancel</button>
-            </div>
-            <span id="soul-lib-status" class="status-msg"></span>
-          </div>
-          <div class="flex flex-col flex-1 overflow-hidden px-6 py-4">
-            <div id="soul-path-info" class="path-info mb-3 flex-shrink-0"></div>
-            <textarea id="soul-editor" class="code-editor flex-1 min-h-0" spellcheck="false"></textarea>
-            <div class="flex gap-2 mt-3 flex-shrink-0">
-              <button class="btn-primary" onclick="saveSoul()">Save</button>
-            </div>
-            <span id="soul-status" class="status-msg"></span>
-          </div>
-        </div>
-
-        <div id="detail-memories" class="flex-1 overflow-y-auto px-6 py-5" hidden>
-          <div class="search-row">
-            <input id="mem-user" type="text" placeholder="User ID (optional)">
-            <input id="mem-query" type="text" placeholder="Search (optional)">
-            <button class="btn-primary" onclick="searchMemories()">Search</button>
-          </div>
-          <span id="mem-status" class="status-msg"></span>
-          <span id="mem-count" class="result-count" hidden></span>
-          <div id="mem-grid" class="card-grid"></div>
-        </div>
-
-        <div id="detail-logs" class="flex-1 overflow-y-auto px-6 py-5" hidden>
-          <div class="search-row">
-            <select id="log-level-filter">
-              <option value="">All levels</option>
-              <option value="debug">Debug</option>
-              <option value="info">Info</option>
-              <option value="warn">Warn</option>
-              <option value="error">Error</option>
-            </select>
-            <button class="btn-primary" onclick="loadLogs()">Refresh</button>
-          </div>
-          <span id="logs-status" class="status-msg"></span>
-          <span id="logs-count" class="result-count" hidden></span>
-          <div id="logs-table"></div>
-          <div id="logs-pagination" class="pagination-row"></div>
-        </div>
-
-        <div id="detail-conversations" class="flex-1 overflow-y-auto px-6 py-5" hidden>
-          <div class="search-row">
-            <input id="conv-channel" type="text" placeholder="Channel ID (optional)">
-            <button class="btn-primary" onclick="loadConversations()">Refresh</button>
-          </div>
-          <span id="conv-status" class="status-msg"></span>
-          <span id="conv-count" class="result-count" hidden></span>
-          <div id="conv-list"></div>
-          <div id="conv-pagination" class="pagination-row"></div>
-        </div>
-      </div>
-    </main>
-  </div>
-
-  <div id="monitor-overlay" class="monitor-overlay" hidden>
-    <div class="monitor-panel">
-      <div class="monitor-panel-header">
-        <div class="monitor-panel-title">
-          <span id="agent-count-dot" class="status-dot"></span>
-          <span id="monitor-status">Waiting for data…</span>
-        </div>
-        <button class="btn-icon" onclick="toggleMonitor()">✕</button>
-      </div>
-      <div class="monitor-panel-content">
-        <div id="agent-grid" class="card-grid"></div>
-      </div>
+      <div id="tab-nav-container"></div>
+      <div id="content"></div>
     </div>
   </div>
 
-  <dialog id="delete-modal">
-    <div class="modal-content">
-      <h3>Delete Memory</h3>
-      <p class="modal-description">This memory will be permanently removed.</p>
-      <div class="modal-actions">
-        <button class="btn-secondary" onclick="closeDeleteModal()">Cancel</button>
-        <button class="btn-danger" onclick="confirmDelete()">Delete</button>
-      </div>
-    </div>
-  </dialog>
+  <!-- Monitor overlay -->
+  <div id="monitor-overlay">
+    <div id="monitor-content"></div>
+  </div>
 
-  <dialog id="edit-modal">
-    <div class="modal-content">
-      <h3>Edit Memory</h3>
-      <textarea id="edit-textarea"></textarea>
-      <div class="modal-actions">
-        <button class="btn-secondary" onclick="closeEditModal()">Cancel</button>
-        <button class="btn-primary" onclick="confirmEdit()">Save</button>
-      </div>
-    </div>
-  </dialog>
+  <!-- Toasts -->
+  <div id="toasts"></div>
 
-  <script src="/app.js"></script>
+  <!-- App -->
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>
