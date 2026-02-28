@@ -1,5 +1,5 @@
 import { API } from '../api.js';
-import { el, esc, toast, confirmDialog, loading, emptyState } from '../components.js';
+import { el, toast, confirmDialog, loading, emptyState } from '../components.js';
 
 export async function render(container, params) {
   const agentId = params.id;

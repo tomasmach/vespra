@@ -1,6 +1,5 @@
 import { API } from '../api.js';
-import { el, esc, toast, modePicker, section, loading, emptyState } from '../components.js';
-import { navigate } from '../router.js';
+import { el, esc, toast, modePicker, loading, emptyState } from '../components.js';
 
 export async function render(container, params) {
   const wrap = el('div', { className: 'fade-in' });

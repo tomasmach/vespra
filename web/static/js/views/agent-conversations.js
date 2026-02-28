@@ -1,5 +1,5 @@
 import { API } from '../api.js';
-import { el, esc, toast, loading, emptyState, pagination, timeAgo } from '../components.js';
+import { el, toast, loading, emptyState, pagination, timeAgo } from '../components.js';
 
 const PAGE_LIMIT = 20;
 

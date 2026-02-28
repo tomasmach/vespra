@@ -147,6 +147,32 @@ export function emptyState(icon, title, subtitle) {
   );
 }
 
+/** Provider picker (inherit / openrouter / glm / kimi) */
+export function providerPicker(current, onChange) {
+  const providers = ['', 'openrouter', 'glm', 'kimi'];
+  const labels = { '': 'inherit', openrouter: 'openrouter', glm: 'glm', kimi: 'kimi' };
+  const wrap = el('div', { className: 'mode-picker' });
+
+  function render() {
+    wrap.innerHTML = '';
+    for (const p of providers) {
+      const isActive = current === p;
+      let cls = 'mode-picker-btn';
+      if (isActive) cls += ' active';
+      const btn = el('button', { className: cls, type: 'button' }, labels[p]);
+      btn.addEventListener('click', () => {
+        current = p;
+        onChange(p);
+        render();
+      });
+      wrap.appendChild(btn);
+    }
+  }
+
+  render();
+  return wrap;
+}
+
 /** Relative time */
 export function timeAgo(dateStr) {
   if (!dateStr) return '';

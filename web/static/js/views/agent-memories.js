@@ -1,5 +1,5 @@
 import { API } from '../api.js';
-import { el, esc, toast, confirmDialog, loading, emptyState, pagination, timeAgo } from '../components.js';
+import { el, toast, confirmDialog, loading, emptyState, pagination, timeAgo } from '../components.js';
 
 const LIMIT = 25;
 
@@ -37,26 +37,26 @@ export async function render(container, params) {
     // Search bar
     const searchBar = el('div', { style: { display: 'flex', gap: 'var(--sp-3)', marginBottom: 'var(--sp-6)', alignItems: 'flex-end', flexWrap: 'wrap' } });
 
+    const userInput = el('input', {
+      className: 'input',
+      placeholder: 'Filter by user',
+      type: 'text',
+      value: searchUserId,
+    });
     const userGroup = el('div', { className: 'input-group' },
       el('label', { className: 'input-label' }, 'User ID'),
-      el('input', {
-        className: 'input',
-        placeholder: 'Filter by user',
-        type: 'text',
-        id: 'mem-user-id',
-        value: searchUserId,
-      }),
+      userInput,
     );
 
+    const queryInput = el('input', {
+      className: 'input',
+      placeholder: 'Search memories...',
+      type: 'text',
+      value: searchQuery,
+    });
     const queryGroup = el('div', { className: 'input-group', style: { flex: '1', minWidth: '200px' } },
       el('label', { className: 'input-label' }, 'Search'),
-      el('input', {
-        className: 'input',
-        placeholder: 'Search memories...',
-        type: 'text',
-        id: 'mem-query',
-        value: searchQuery,
-      }),
+      queryInput,
     );
 
     const searchBtn = el('button', { className: 'btn btn-primary', onClick: () => handleSearch() }, 'Search');
@@ -106,7 +106,10 @@ export async function render(container, params) {
         }
         if (importance != null) {
           const pct = Math.round(importance * 100);
-          const importanceClass = importance >= 0.7 ? 'badge-amber' : importance >= 0.4 ? 'badge-warning' : 'badge-muted';
+          let importanceClass;
+          if (importance >= 0.7) importanceClass = 'badge-amber';
+          else if (importance >= 0.4) importanceClass = 'badge-warning';
+          else importanceClass = 'badge-muted';
           meta.appendChild(el('span', { className: 'badge ' + importanceClass }, pct + '% importance'));
         }
         card.appendChild(meta);
@@ -145,20 +148,15 @@ export async function render(container, params) {
     container.appendChild(wrap);
 
     // Wire up Enter key on search inputs
-    const queryInput = document.getElementById('mem-query');
-    const userInput = document.getElementById('mem-user-id');
-    if (queryInput) queryInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSearch(); });
-    if (userInput) userInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSearch(); });
-  }
+    queryInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSearch(); });
+    userInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSearch(); });
 
-  async function handleSearch() {
-    const queryInput = document.getElementById('mem-query');
-    const userInput = document.getElementById('mem-user-id');
-    searchQuery = queryInput ? queryInput.value.trim() : '';
-    searchUserId = userInput ? userInput.value.trim() : '';
-    offset = 0;
-    await fetchMemories();
-    renderView();
+    function handleSearch() {
+      searchQuery = queryInput.value.trim();
+      searchUserId = userInput.value.trim();
+      offset = 0;
+      fetchMemories().then(() => renderView());
+    }
   }
 
   async function fetchMemories() {
@@ -178,42 +176,40 @@ export async function render(container, params) {
   }
 
   function openEditDialog(mem) {
-    const dialog = document.createElement('dialog');
-    dialog.innerHTML = `
-      <div class="dialog-title">Edit Memory</div>
-      <div style="margin-bottom: var(--sp-4);">
-        <textarea class="textarea" id="edit-mem-content" rows="6" style="min-height: 120px;">${esc(mem.content || '')}</textarea>
-      </div>
-      <div class="dialog-actions">
-        <button class="btn btn-secondary" data-action="cancel">Cancel</button>
-        <button class="btn btn-primary" data-action="save">Save</button>
-      </div>
-    `;
+    const textarea = el('textarea', {
+      className: 'textarea',
+      style: { minHeight: '120px' },
+    });
+    textarea.value = mem.content || '';
+
+    const dialog = el('dialog', {},
+      el('div', { className: 'dialog-title' }, 'Edit Memory'),
+      el('div', { style: { marginBottom: 'var(--sp-4)' } }, textarea),
+      el('div', { className: 'dialog-actions' },
+        el('button', {
+          className: 'btn btn-secondary',
+          onClick: () => { dialog.close(); dialog.remove(); },
+        }, 'Cancel'),
+        el('button', {
+          className: 'btn btn-primary',
+          onClick: async () => {
+            try {
+              await API.patchMemory(mem.id, serverId, { content: textarea.value });
+              toast('Memory updated', 'success');
+              dialog.close();
+              dialog.remove();
+              await fetchMemories();
+              renderView();
+            } catch (err) {
+              toast('Failed to update memory: ' + err.message, 'error');
+            }
+          },
+        }, 'Save'),
+      ),
+    );
+
     document.body.appendChild(dialog);
     dialog.showModal();
-
-    dialog.addEventListener('click', async (e) => {
-      const action = e.target.dataset.action;
-      if (action === 'cancel') {
-        dialog.close();
-        dialog.remove();
-      }
-      if (action === 'save') {
-        const textarea = document.getElementById('edit-mem-content');
-        const content = textarea ? textarea.value : '';
-        try {
-          await API.patchMemory(mem.id, serverId, { content });
-          toast('Memory updated', 'success');
-          dialog.close();
-          dialog.remove();
-          await fetchMemories();
-          renderView();
-        } catch (err) {
-          toast('Failed to update memory: ' + err.message, 'error');
-        }
-      }
-    });
-
     dialog.addEventListener('close', () => dialog.remove());
   }
 

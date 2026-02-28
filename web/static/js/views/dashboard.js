@@ -27,11 +27,14 @@ export async function render(container, params) {
 
   // ── Hero ──
   const sseConnected = status && status.sse !== undefined ? status.sse : null;
-  const sseBadge = sseConnected === true
-    ? el('span', { className: 'badge badge-success' }, 'connected')
-    : sseConnected === false
-      ? el('span', { className: 'badge badge-danger' }, 'disconnected')
-      : el('span', { className: 'badge badge-muted' }, 'unknown');
+  let sseBadge;
+  if (sseConnected === true) {
+    sseBadge = el('span', { className: 'badge badge-success' }, 'connected');
+  } else if (sseConnected === false) {
+    sseBadge = el('span', { className: 'badge badge-danger' }, 'disconnected');
+  } else {
+    sseBadge = el('span', { className: 'badge badge-muted' }, 'unknown');
+  }
 
   const hero = el('div', { className: 'dashboard-hero' },
     el('h1', {}, 'Vespra'),

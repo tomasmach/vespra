@@ -1,5 +1,5 @@
 import { API } from '../api.js';
-import { el, esc, toast, modePicker, confirmDialog, section, loading, emptyState } from '../components.js';
+import { el, esc, toast, modePicker, providerPicker, confirmDialog, section, loading, emptyState } from '../components.js';
 import { navigate } from '../router.js';
 
 export async function render(container, params) {
@@ -66,7 +66,7 @@ export async function render(container, params) {
   wrap.appendChild(connectionSection);
 
   // ── LLM PROVIDER section ──
-  const providerPicker = buildProviderPicker(state.provider, (val) => { state.provider = val; });
+  const providerPickerEl = providerPicker(state.provider, (val) => { state.provider = val; });
   const modelInput = el('input', {
     className: 'input',
     type: 'text',
@@ -78,7 +78,7 @@ export async function render(container, params) {
     el('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
       el('div', { className: 'input-group' },
         el('label', { className: 'input-label' }, 'Provider'),
-        providerPicker,
+        providerPickerEl,
       ),
       el('div', { className: 'input-group' },
         el('label', { className: 'input-label' }, 'Model'),
@@ -89,9 +89,7 @@ export async function render(container, params) {
   wrap.appendChild(llmSection);
 
   // ── BEHAVIOR section ──
-  let selectedMode = state.response_mode;
   const modePickerEl = modePicker(state.response_mode, '', (mode) => {
-    selectedMode = mode;
     state.response_mode = mode;
   });
 
@@ -263,30 +261,4 @@ export async function render(container, params) {
   }, saveBtn, deleteBtn);
 
   wrap.appendChild(actions);
-}
-
-/** Build a provider toggle that looks like a mode picker. */
-function buildProviderPicker(current, onChange) {
-  const providers = ['', 'openrouter', 'glm', 'kimi'];
-  const labels = { '': 'inherit', openrouter: 'openrouter', glm: 'glm', kimi: 'kimi' };
-  const wrap = el('div', { className: 'mode-picker' });
-
-  function render() {
-    wrap.innerHTML = '';
-    for (const p of providers) {
-      const isActive = current === p;
-      let cls = 'mode-picker-btn';
-      if (isActive) cls += ' active';
-      const btn = el('button', { className: cls, type: 'button' }, labels[p]);
-      btn.addEventListener('click', () => {
-        current = p;
-        onChange(p);
-        render();
-      });
-      wrap.appendChild(btn);
-    }
-  }
-
-  render();
-  return wrap;
 }

@@ -1,5 +1,5 @@
 import { API } from '../api.js';
-import { el, esc, toast, modePicker, loading, emptyState } from '../components.js';
+import { el, toast, modePicker, loading, emptyState } from '../components.js';
 
 export async function render(container, params) {
   const agentId = params.id;
@@ -88,9 +88,10 @@ export async function render(container, params) {
 
     const formRow = el('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 'var(--sp-3)', flexWrap: 'wrap' } });
 
+    const channelIdInput = el('input', { className: 'input', placeholder: 'e.g. 123456789', type: 'text' });
     const idGroup = el('div', { className: 'input-group' },
       el('label', { className: 'input-label' }, 'Channel ID'),
-      el('input', { className: 'input', placeholder: 'e.g. 123456789', type: 'text', id: 'new-channel-id' }),
+      channelIdInput,
     );
 
     let newMode = 'smart';
@@ -108,8 +109,7 @@ export async function render(container, params) {
     container.appendChild(wrap);
 
     async function handleAdd() {
-      const input = document.getElementById('new-channel-id');
-      const channelId = (input ? input.value : '').trim();
+      const channelId = channelIdInput.value.trim();
       if (!channelId) {
         toast('Channel ID is required', 'error');
         return;

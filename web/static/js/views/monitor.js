@@ -62,11 +62,10 @@ export function initMonitor(container) {
             const depth = ch.queue_depth || 0;
             const maxDepth = 5;
             const fillPct = Math.min(100, (depth / maxDepth) * 100);
-            const barColor = depth === 0
-              ? 'var(--success)'
-              : depth <= 2
-                ? 'var(--warning)'
-                : 'var(--danger)';
+            let barColor;
+            if (depth === 0) barColor = 'var(--success)';
+            else if (depth <= 2) barColor = 'var(--warning)';
+            else barColor = 'var(--danger)';
 
             const channelRow = el('div', { className: 'monitor-channel' },
               el('span', {

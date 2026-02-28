@@ -1,5 +1,5 @@
 import { API } from '../api.js';
-import { el, esc, toast, loading, emptyState, pagination, timeAgo } from '../components.js';
+import { el, toast, loading, emptyState, pagination, timeAgo } from '../components.js';
 
 const LEVELS = ['all', 'debug', 'info', 'warn', 'error'];
 const LEVEL_BADGES = {
@@ -100,67 +100,18 @@ export async function render(container, params) {
 
     const thead = el('thead', {},
       el('tr', {},
-        el('th', { style: { textAlign: 'left', padding: 'var(--sp-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)' } }, 'Time'),
-        el('th', { style: { textAlign: 'left', padding: 'var(--sp-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)' } }, 'Level'),
-        el('th', { style: { textAlign: 'left', padding: 'var(--sp-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)' } }, 'Message'),
-        el('th', { style: { textAlign: 'left', padding: 'var(--sp-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)' } }, 'Channel'),
+        el('th', {}, 'Time'),
+        el('th', {}, 'Level'),
+        el('th', {}, 'Message'),
+        el('th', {}, 'Channel'),
       ),
     );
     table.appendChild(thead);
 
     const tbody = el('tbody');
     for (const log of logs) {
-      const row = el('tr', { style: { borderBottom: '1px solid var(--night-border)' } });
-
-      // Time
-      row.appendChild(el('td', {
-        style: { padding: 'var(--sp-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' },
-        title: log.created_at || '',
-      }, timeAgo(log.created_at)));
-
-      // Level badge
-      const lvl = (log.level || '').toLowerCase();
-      const badgeClass = LEVEL_BADGES[lvl] || 'badge badge-muted';
-      row.appendChild(el('td', { style: { padding: 'var(--sp-2)' } },
-        el('span', { className: badgeClass }, lvl),
-      ));
-
-      // Message (with optional expandable attrs)
-      const msgCell = el('td', { style: { padding: 'var(--sp-2)', maxWidth: '400px' } });
-      const msgText = el('div', {
-        style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '400px', fontSize: 'var(--text-sm)' },
-        title: log.msg || log.message || '',
-      }, log.msg || log.message || '');
-      msgCell.appendChild(msgText);
-
-      const parsedAttrs = typeof log.attrs === 'string' ? (() => { try { return JSON.parse(log.attrs); } catch { return null; } })() : log.attrs;
-      if (parsedAttrs && Object.keys(parsedAttrs).length > 0) {
-        const attrsToggle = el('div', {
-          style: { fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)', cursor: 'pointer', marginTop: 'var(--sp-1)' },
-        }, '+ attrs');
-        const attrsContent = el('pre', {
-          style: { display: 'none', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)', marginTop: 'var(--sp-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
-        }, JSON.stringify(parsedAttrs, null, 2));
-
-        attrsToggle.addEventListener('click', () => {
-          const visible = attrsContent.style.display !== 'none';
-          attrsContent.style.display = visible ? 'none' : 'block';
-          attrsToggle.textContent = visible ? '+ attrs' : '- attrs';
-        });
-
-        msgCell.appendChild(attrsToggle);
-        msgCell.appendChild(attrsContent);
-      }
-      row.appendChild(msgCell);
-
-      // Channel ID
-      row.appendChild(el('td', {
-        style: { padding: 'var(--sp-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)' },
-      }, log.channel_id || ''));
-
-      tbody.appendChild(row);
+      tbody.appendChild(buildLogRow(log));
     }
-
     table.appendChild(tbody);
     return table;
   }
@@ -255,31 +206,41 @@ export async function render(container, params) {
   }
 
   function buildLogRow(log) {
+    const timestamp = log.created_at || log.ts || '';
+    const lvl = (log.level || '').toLowerCase();
+    const msg = log.msg || log.message || '';
+    const badgeClass = LEVEL_BADGES[lvl] || 'badge badge-muted';
+
+    // Parse attrs whether string or object
+    let attrs = log.attrs;
+    if (typeof attrs === 'string') {
+      try { attrs = JSON.parse(attrs); } catch { attrs = null; }
+    }
+
     const row = el('tr', { style: { borderBottom: '1px solid var(--night-border)' } });
 
     row.appendChild(el('td', {
       style: { padding: 'var(--sp-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' },
-      title: log.ts || '',
-    }, timeAgo(log.ts)));
+      title: timestamp,
+    }, timeAgo(timestamp)));
 
-    const badgeClass = LEVEL_BADGES[log.level] || 'badge badge-muted';
     row.appendChild(el('td', { style: { padding: 'var(--sp-2)' } },
-      el('span', { className: badgeClass }, log.level),
+      el('span', { className: badgeClass }, lvl),
     ));
 
     const msgCell = el('td', { style: { padding: 'var(--sp-2)', maxWidth: '400px' } });
     msgCell.appendChild(el('div', {
       style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '400px', fontSize: 'var(--text-sm)' },
-      title: log.msg || log.message || '',
-    }, esc(log.msg || log.message || '')));
+      title: msg,
+    }, msg));
 
-    if (log.attrs && Object.keys(log.attrs).length > 0) {
+    if (attrs && Object.keys(attrs).length > 0) {
       const attrsToggle = el('div', {
         style: { fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)', cursor: 'pointer', marginTop: 'var(--sp-1)' },
       }, '+ attrs');
       const attrsContent = el('pre', {
         style: { display: 'none', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--cream-muted)', marginTop: 'var(--sp-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
-      }, JSON.stringify(parsedAttrs, null, 2));
+      }, JSON.stringify(attrs, null, 2));
 
       attrsToggle.addEventListener('click', () => {
         const visible = attrsContent.style.display !== 'none';
