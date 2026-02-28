@@ -85,6 +85,7 @@ function loadAgents() {
     .then(data => {
       agents = data || [];
       renderAgentSidebar();
+      renderOverview();
     })
     .catch(() => console.error('Failed to load agents'));
 }
@@ -901,6 +902,7 @@ function setSseStatus(connected) {
     dot.className = 'sse-dot error';
     label.textContent = 'Reconnecting…';
   }
+  renderOverview();
 }
 
 function renderMonitorAgents(agentStatuses) {
@@ -965,6 +967,16 @@ function esc(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function renderOverview() {
+  const agentsEl = document.getElementById('overview-agents');
+  const sseEl = document.getElementById('overview-sse');
+  if (agentsEl) agentsEl.textContent = String(agents.length);
+  if (sseEl) {
+    const live = document.getElementById('sse-dot')?.classList.contains('connected');
+    sseEl.textContent = live ? 'live' : 'reconnecting';
+  }
 }
 
 // --- Boot ---
