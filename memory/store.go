@@ -56,13 +56,12 @@ CREATE TABLE IF NOT EXISTS conversations (
     ts         DATETIME NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conv_channel ON conversations(channel_id);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(memory_id UNINDEXED, content);
 `
 
 type Store struct {
-	db  *sql.DB
-	llm *llm.Client
+	db          *sql.DB
+	llm         *llm.Client
+	fts5Enabled bool // true when the SQLite build includes FTS5 support
 }
 
 func New(cfg *config.MemoryConfig, llmClient *llm.Client) (*Store, error) {
@@ -80,25 +79,40 @@ func New(cfg *config.MemoryConfig, llmClient *llm.Client) (*Store, error) {
 		return nil, fmt.Errorf("run migration: %w", err)
 	}
 
-	// Backfill FTS index for existing memories that predate FTS5 migration.
-	var missing int
-	if err := db.QueryRowContext(context.Background(),
-		`SELECT COUNT(*) FROM memories WHERE forgotten = 0 AND id NOT IN (SELECT memory_id FROM memories_fts)`,
-	).Scan(&missing); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("count missing fts entries: %w", err)
+	// Attempt to create the FTS5 virtual table. FTS5 requires the SQLite binary
+	// to be compiled with SQLITE_ENABLE_FTS5 (via -tags sqlite_fts5 at build time).
+	// If FTS5 is not available, we fall back to LIKE-based keyword search transparently.
+	fts5Enabled := true
+	if _, err := db.ExecContext(context.Background(),
+		`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(memory_id UNINDEXED, content)`,
+	); err != nil {
+		slog.Warn("FTS5 not available, falling back to LIKE keyword search (rebuild with -tags sqlite_fts5 for better search)", "error", err)
+		fts5Enabled = false
 	}
-	if missing > 0 {
-		if _, err := db.ExecContext(context.Background(),
-			`INSERT INTO memories_fts(memory_id, content)
-			 SELECT id, content FROM memories WHERE forgotten = 0 AND id NOT IN (SELECT memory_id FROM memories_fts)`,
-		); err != nil {
+
+	s := &Store{db: db, llm: llmClient, fts5Enabled: fts5Enabled}
+
+	if fts5Enabled {
+		// Backfill FTS index for existing memories that predate FTS5 migration.
+		var missing int
+		if err := db.QueryRowContext(context.Background(),
+			`SELECT COUNT(*) FROM memories WHERE forgotten = 0 AND id NOT IN (SELECT memory_id FROM memories_fts)`,
+		).Scan(&missing); err != nil {
 			db.Close()
-			return nil, fmt.Errorf("backfill fts index: %w", err)
+			return nil, fmt.Errorf("count missing fts entries: %w", err)
+		}
+		if missing > 0 {
+			if _, err := db.ExecContext(context.Background(),
+				`INSERT INTO memories_fts(memory_id, content)
+				 SELECT id, content FROM memories WHERE forgotten = 0 AND id NOT IN (SELECT memory_id FROM memories_fts)`,
+			); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("backfill fts index: %w", err)
+			}
 		}
 	}
 
-	return &Store{db: db, llm: llmClient}, nil
+	return s, nil
 }
 
 func newID() (string, error) {
@@ -169,11 +183,13 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 		}
 	}
 
-	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`,
-		id, content,
-	); err != nil {
-		return SaveResult{}, fmt.Errorf("insert fts: %w", err)
+	if s.fts5Enabled {
+		if _, err = tx.ExecContext(ctx,
+			`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`,
+			id, content,
+		); err != nil {
+			return SaveResult{}, fmt.Errorf("insert fts: %w", err)
+		}
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -213,15 +229,17 @@ func (s *Store) updateForDedup(ctx context.Context, id, serverID, content string
 		return fmt.Errorf("upsert embedding: %w", err)
 	}
 
-	if _, err = tx.ExecContext(ctx,
-		`DELETE FROM memories_fts WHERE memory_id = ?`, id,
-	); err != nil {
-		return fmt.Errorf("delete old fts: %w", err)
-	}
-	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`, id, content,
-	); err != nil {
-		return fmt.Errorf("insert new fts: %w", err)
+	if s.fts5Enabled {
+		if _, err = tx.ExecContext(ctx,
+			`DELETE FROM memories_fts WHERE memory_id = ?`, id,
+		); err != nil {
+			return fmt.Errorf("delete old fts: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx,
+			`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`, id, content,
+		); err != nil {
+			return fmt.Errorf("insert new fts: %w", err)
+		}
 	}
 
 	return tx.Commit()
@@ -249,10 +267,12 @@ func (s *Store) Forget(ctx context.Context, serverID, memoryID string) error {
 		return ErrMemoryNotFound
 	}
 
-	if _, err = tx.ExecContext(ctx,
-		`DELETE FROM memories_fts WHERE memory_id = ?`, memoryID,
-	); err != nil {
-		return fmt.Errorf("delete fts: %w", err)
+	if s.fts5Enabled {
+		if _, err = tx.ExecContext(ctx,
+			`DELETE FROM memories_fts WHERE memory_id = ?`, memoryID,
+		); err != nil {
+			return fmt.Errorf("delete fts: %w", err)
+		}
 	}
 
 	return tx.Commit()
@@ -346,15 +366,17 @@ func (s *Store) UpdateContent(ctx context.Context, id, serverID, content string)
 		return fmt.Errorf("upsert embedding: %w", err)
 	}
 
-	if _, err = tx.ExecContext(ctx,
-		`DELETE FROM memories_fts WHERE memory_id = ?`, id,
-	); err != nil {
-		return fmt.Errorf("delete old fts: %w", err)
-	}
-	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`, id, content,
-	); err != nil {
-		return fmt.Errorf("insert new fts: %w", err)
+	if s.fts5Enabled {
+		if _, err = tx.ExecContext(ctx,
+			`DELETE FROM memories_fts WHERE memory_id = ?`, id,
+		); err != nil {
+			return fmt.Errorf("delete old fts: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx,
+			`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`, id, content,
+		); err != nil {
+			return fmt.Errorf("insert new fts: %w", err)
+		}
 	}
 
 	if err = tx.Commit(); err != nil {
