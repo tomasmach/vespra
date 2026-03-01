@@ -358,6 +358,28 @@ func TestSaveDedupDisabledWithZeroThreshold(t *testing.T) {
 	}
 }
 
+func TestRecallByUser(t *testing.T) {
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
+	ctx := context.Background()
+
+	store.Save(ctx, "Tomas likes coffee", "srv1", "user1", "", 0.8, 0)
+	store.Save(ctx, "Tomas works at Acme", "srv1", "user1", "", 0.6, 0)
+	store.Save(ctx, "Alice likes tea", "srv1", "user2", "", 0.5, 0)
+
+	results, err := store.RecallByUser(ctx, "srv1", "user1", 10)
+	if err != nil {
+		t.Fatalf("RecallByUser() error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results for user1, got %d", len(results))
+	}
+	// Should be ordered by importance DESC.
+	if results[0].Importance < results[1].Importance {
+		t.Errorf("expected results ordered by importance DESC")
+	}
+}
+
 func TestRecallRespectsSimThreshold(t *testing.T) {
 	embSrv := fakeEmbeddingServer(t, 4)
 	store := newTestStore(t, embSrv)

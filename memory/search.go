@@ -95,6 +95,33 @@ func (s *Store) Recall(ctx context.Context, query, serverID string, topN int, si
 	return out, nil
 }
 
+// RecallByUser returns memories associated with a specific user, ordered by
+// importance (descending) then recency. Used for user-specific recall pass.
+func (s *Store) RecallByUser(ctx context.Context, serverID, userID string, limit int) ([]MemoryRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, content, importance, COALESCE(user_id, ''), COALESCE(channel_id, ''), created_at
+		 FROM memories
+		 WHERE server_id = ? AND user_id = ? AND forgotten = 0
+		 ORDER BY importance DESC, updated_at DESC
+		 LIMIT ?`,
+		serverID, userID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("recall by user: %w", err)
+	}
+	defer rows.Close()
+
+	var out []MemoryRow
+	for rows.Next() {
+		var row MemoryRow
+		if err := rows.Scan(&row.ID, &row.Content, &row.Importance, &row.UserID, &row.ChannelID, &row.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan memory: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // ftsSearch returns memory IDs matching the query via FTS5 full-text search.
 func (s *Store) ftsSearch(ctx context.Context, query, serverID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
