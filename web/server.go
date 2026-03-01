@@ -404,6 +404,10 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server_id is required", http.StatusBadRequest)
 		return
 	}
+	if input.ResponseMode == "" {
+		// New guilds default to explicit channel allowlisting.
+		input.ResponseMode = "none"
+	}
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
