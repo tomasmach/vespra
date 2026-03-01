@@ -516,7 +516,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		a.history = sanitizeHistory(a.history)
 	}
 
-	memories, err := a.resources.Memory.Recall(ctx, msg.Content, a.serverID, 10)
+	memories, err := a.resources.Memory.Recall(ctx, msg.Content, a.serverID, cfg.Agent.MemoryRecallLimit, cfg.Agent.MemoryRecallThreshold)
 	if err != nil {
 		a.logger.Warn("memory recall error", "error", err)
 	}
@@ -615,7 +615,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 	recallQuery := strings.Join(recallParts, " ")
 
-	memories, err := a.resources.Memory.Recall(ctx, recallQuery, a.serverID, 10)
+	memories, err := a.resources.Memory.Recall(ctx, recallQuery, a.serverID, cfg.Agent.MemoryRecallLimit, cfg.Agent.MemoryRecallThreshold)
 	if err != nil {
 		a.logger.Warn("memory recall error", "error", err)
 	}

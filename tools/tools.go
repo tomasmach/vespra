@@ -155,7 +155,8 @@ func (t *memoryRecallTool) Call(ctx context.Context, args json.RawMessage) (stri
 	if p.TopN == 0 {
 		p.TopN = 10
 	}
-	rows, err := t.store.Recall(ctx, p.Query, t.serverID, p.TopN)
+	// Tool-invoked recall uses threshold 0: the LLM explicitly asked, don't filter.
+	rows, err := t.store.Recall(ctx, p.Query, t.serverID, p.TopN, 0)
 	if err != nil {
 		return "", err
 	}

@@ -69,7 +69,7 @@ func TestSaveAndRecall(t *testing.T) {
 		t.Fatal("Save() returned empty ID")
 	}
 
-	results, err := store.Recall(ctx, "cat mat", "srv1", 5)
+	results, err := store.Recall(ctx, "cat mat", "srv1", 5, 0)
 	if err != nil {
 		t.Fatalf("Recall() error: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestForgetHidesFromRecall(t *testing.T) {
 		t.Fatalf("Forget() error: %v", err)
 	}
 
-	results, err := store.Recall(ctx, "secret memory", "srv1", 5)
+	results, err := store.Recall(ctx, "secret memory", "srv1", 5, 0)
 	if err != nil {
 		t.Fatalf("Recall() error: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestRecallDoesNotLeakCrossServer(t *testing.T) {
 	}
 
 	// Recall for srv2 should return nothing.
-	results, err := store.Recall(ctx, "srv1 private data", "srv2", 10)
+	results, err := store.Recall(ctx, "srv1 private data", "srv2", 10, 0)
 	if err != nil {
 		t.Fatalf("Recall() error: %v", err)
 	}
@@ -355,5 +355,31 @@ func TestSaveDedupDisabledWithZeroThreshold(t *testing.T) {
 	}
 	if r2.ID == r1.ID {
 		t.Errorf("with threshold 0, should create new memory, got same ID")
+	}
+}
+
+func TestRecallRespectsSimThreshold(t *testing.T) {
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
+	ctx := context.Background()
+
+	store.Save(ctx, "Tomas likes coffee", "srv1", "user1", "", 0.5, 0)
+
+	// With threshold 0, should return results.
+	results, err := store.Recall(ctx, "anything", "srv1", 10, 0)
+	if err != nil {
+		t.Fatalf("Recall() error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected results with threshold 0")
+	}
+
+	// Threshold doesn't filter here because fake embeddings are all identical (sim=1.0).
+	results2, err := store.Recall(ctx, "anything", "srv1", 10, 0.35)
+	if err != nil {
+		t.Fatalf("Recall() with threshold error: %v", err)
+	}
+	if len(results2) == 0 {
+		t.Error("expected results with threshold 0.35 (fake embeds have sim=1.0)")
 	}
 }

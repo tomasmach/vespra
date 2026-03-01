@@ -26,7 +26,7 @@ type SaveResult struct {
 	Status string // "saved", "updated", or "exists"
 }
 
-func (s *Store) Recall(ctx context.Context, query, serverID string, topN int) ([]MemoryRow, error) {
+func (s *Store) Recall(ctx context.Context, query, serverID string, topN int, simThreshold float64) ([]MemoryRow, error) {
 	var semanticIDs []string
 
 	vec, err := s.llm.Embed(ctx, query)
@@ -43,9 +43,14 @@ func (s *Store) Recall(ctx context.Context, query, serverID string, topN int) ([
 		}
 		results := make([]scored, 0, len(embeddings))
 		for id, emb := range embeddings {
-			if len(emb) == len(vec) {
-				results = append(results, scored{id, cosine(vec, emb)})
+			if len(emb) != len(vec) {
+				continue
 			}
+			sim := cosine(vec, emb)
+			if simThreshold > 0 && float64(sim) < simThreshold {
+				continue
+			}
+			results = append(results, scored{id, sim})
 		}
 		sort.Slice(results, func(i, j int) bool {
 			return results[i].score > results[j].score
@@ -56,25 +61,14 @@ func (s *Store) Recall(ctx context.Context, query, serverID string, topN int) ([
 		}
 	}
 
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id FROM memories WHERE server_id = ? AND forgotten = 0 AND content LIKE ? ESCAPE '\'`,
-		serverID, "%"+escapeLIKE(query)+"%",
-	)
+	// FTS5 keyword search with fallback to LIKE.
+	keywordIDs, err := s.ftsSearch(ctx, query, serverID)
 	if err != nil {
-		return nil, fmt.Errorf("keyword search: %w", err)
-	}
-	defer rows.Close()
-
-	var keywordIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan keyword result: %w", err)
+		slog.Warn("fts search failed, falling back to LIKE", "error", err)
+		keywordIDs, err = s.likeSearch(ctx, query, serverID)
+		if err != nil {
+			return nil, fmt.Errorf("keyword search: %w", err)
 		}
-		keywordIDs = append(keywordIDs, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 
 	merged := rrfMerge(semanticIDs, keywordIDs)
@@ -99,4 +93,53 @@ func (s *Store) Recall(ctx context.Context, query, serverID string, topN int) ([
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+// ftsSearch returns memory IDs matching the query via FTS5 full-text search.
+func (s *Store) ftsSearch(ctx context.Context, query, serverID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT f.memory_id FROM memories_fts f
+		 JOIN memories m ON m.id = f.memory_id
+		 WHERE m.server_id = ? AND m.forgotten = 0
+		 AND memories_fts MATCH ?
+		 ORDER BY rank`,
+		serverID, query,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan fts result: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// likeSearch returns memory IDs matching the query via SQL LIKE substring search.
+// Used as fallback when FTS5 search fails (e.g., syntax errors in query).
+func (s *Store) likeSearch(ctx context.Context, query, serverID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id FROM memories WHERE server_id = ? AND forgotten = 0 AND content LIKE ? ESCAPE '\'`,
+		serverID, "%"+escapeLIKE(query)+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan keyword result: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
