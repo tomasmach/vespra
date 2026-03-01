@@ -76,7 +76,28 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("GET /api/soul", s.handleGetGlobalSoul)
 	mux.HandleFunc("PUT /api/soul", s.handlePutGlobalSoul)
 	sub, _ := fs.Sub(staticFiles, "static")
-	mux.HandleFunc("/", http.FileServer(http.FS(sub)).ServeHTTP)
+	fileServer := http.FileServer(http.FS(sub))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// SPA fallback: serve static file if it exists and is a regular file, else index.html.
+		// We must check IsDir() because embed.FS.Open succeeds for directories too,
+		// which would cause directory requests like /css or /js to bypass the SPA fallback.
+		path := r.URL.Path
+		if path != "/" {
+			if f, err := sub.Open(path[1:]); err == nil {
+				stat, statErr := f.Stat()
+				f.Close()
+				if statErr == nil && !stat.IsDir() {
+					fileServer.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+		// Serve index.html for SPA routes. Clone the request to avoid mutating
+		// the shared URL object, which could affect other middleware or logging.
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/"
+		fileServer.ServeHTTP(w, r2)
+	})
 
 	s.httpServer = &http.Server{
 		Addr:    addr,
@@ -341,6 +362,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		Provider     string                 `json:"provider,omitempty"`
 		Model        string                 `json:"model,omitempty"`
 		Channels     []config.ChannelConfig `json:"channels,omitempty"`
+		IgnoreUsers  []string               `json:"ignore_users,omitempty"`
 	}
 	views := make([]agentView, len(cfg.Agents))
 	for i, a := range cfg.Agents {
@@ -355,6 +377,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			Provider:     a.Provider,
 			Model:        a.Model,
 			Channels:     a.Channels,
+			IgnoreUsers:  a.IgnoreUsers,
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

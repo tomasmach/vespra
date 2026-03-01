@@ -1,0 +1,64 @@
+:root {
+  /* Colors */
+  --night:             #08070b;
+  --night-light:       #0f0e15;
+  --night-lighter:     #16141f;
+  --night-border:      rgba(237, 233, 227, 0.06);
+  --night-border-hover:rgba(237, 233, 227, 0.12);
+
+  --amber:             #d4a574;
+  --amber-light:       #e8c9a0;
+  --amber-dim:         rgba(212, 165, 116, 0.12);
+  --amber-glow:        rgba(212, 165, 116, 0.25);
+  --lavender:          #8b7ec8;
+  --lavender-dim:      rgba(139, 126, 200, 0.12);
+
+  --cream:             #ede9e3;
+  --cream-muted:       #9e9a94;
+  --cream-faint:       rgba(237, 233, 227, 0.04);
+
+  --success:           #6ee7b7;
+  --success-dim:       rgba(52, 211, 153, 0.12);
+  --danger:            #fca5a5;
+  --danger-dim:        rgba(248, 113, 113, 0.12);
+  --warning:           #fcd34d;
+  --warning-dim:       rgba(251, 191, 36, 0.12);
+
+  /* Typography */
+  --font-display:      'Syne', system-ui, sans-serif;
+  --font-body:         'DM Sans', system-ui, sans-serif;
+  --font-mono:         'JetBrains Mono', ui-monospace, monospace;
+
+  --text-2xs:  10px;
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-base: 15px;
+  --text-lg:   18px;
+  --text-xl:   24px;
+  --text-2xl:  32px;
+
+  /* Spacing */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* Radii */
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  14px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-card:     0 1px 3px rgba(0,0,0,0.3);
+  --shadow-elevated: 0 4px 12px rgba(0,0,0,0.4);
+
+  /* Sidebar */
+  --sidebar-w: 260px;
+  --topbar-h:  56px;
+}
