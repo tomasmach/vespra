@@ -114,9 +114,9 @@ func (t *memorySaveTool) Call(ctx context.Context, args json.RawMessage) (string
 		return "", err
 	}
 	switch result.Status {
-	case "updated":
+	case memory.SaveStatusUpdated:
 		return fmt.Sprintf("Memory updated with new details (id: %s)", result.ID), nil
-	case "exists":
+	case memory.SaveStatusExists:
 		return fmt.Sprintf("Memory already exists (id: %s)", result.ID), nil
 	default:
 		return fmt.Sprintf("Memory saved (id: %s)", result.ID), nil

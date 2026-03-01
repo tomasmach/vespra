@@ -12,7 +12,6 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -147,9 +146,9 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 					if err := s.updateForDedup(ctx, match.id, serverID, content, importance, vec); err != nil {
 						return SaveResult{}, fmt.Errorf("dedup update: %w", err)
 					}
-					return SaveResult{ID: match.id, Status: "updated"}, nil
+					return SaveResult{ID: match.id, Status: SaveStatusUpdated}, nil
 				}
-				return SaveResult{ID: match.id, Status: "exists"}, nil
+				return SaveResult{ID: match.id, Status: SaveStatusExists}, nil
 			}
 		}
 	}
@@ -195,7 +194,7 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 	if err = tx.Commit(); err != nil {
 		return SaveResult{}, fmt.Errorf("commit transaction: %w", err)
 	}
-	return SaveResult{ID: id, Status: "saved"}, nil
+	return SaveResult{ID: id, Status: SaveStatusSaved}, nil
 }
 
 // updateForDedup updates an existing memory's content, importance, embedding, and FTS entry.
@@ -508,26 +507,15 @@ func (s *Store) findSimilar(ctx context.Context, serverID string, vec []float32,
 		return nil, fmt.Errorf("load embeddings: %w", err)
 	}
 
-	type scored struct {
-		id    string
-		score float32
-	}
-	var candidates []scored
+	var best *similarMatch
 	for id, emb := range embeddings {
 		if len(emb) != len(vec) {
 			continue
 		}
 		sim := cosine(vec, emb)
-		if float64(sim) >= threshold {
-			candidates = append(candidates, scored{id, sim})
+		if float64(sim) >= threshold && (best == nil || sim > best.score) {
+			best = &similarMatch{id: id, score: sim}
 		}
 	}
-	if len(candidates) == 0 {
-		return nil, nil
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].score > candidates[j].score
-	})
-	return &similarMatch{id: candidates[0].id, score: candidates[0].score}, nil
+	return best, nil
 }

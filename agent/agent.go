@@ -516,21 +516,11 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		a.history = sanitizeHistory(a.history)
 	}
 
-	// Two-pass recall: user-specific memories + content-relevant memories.
-	recallLimit := cfg.Agent.MemoryRecallLimit
-	var userMemories []memory.MemoryRow
-	if msg.Author != nil && msg.Author.ID != "" {
-		var err error
-		userMemories, err = a.resources.Memory.RecallByUser(ctx, a.serverID, msg.Author.ID, recallLimit/2)
-		if err != nil {
-			a.logger.Warn("user memory recall error", "error", err)
-		}
+	var userID string
+	if msg.Author != nil {
+		userID = msg.Author.ID
 	}
-	contentMemories, err := a.resources.Memory.Recall(ctx, msg.Content, a.serverID, recallLimit, cfg.Agent.MemoryRecallThreshold)
-	if err != nil {
-		a.logger.Warn("content memory recall error", "error", err)
-	}
-	memories := mergeMemories(userMemories, contentMemories, recallLimit)
+	memories := a.recallMemories(ctx, cfg, userID, msg.Content)
 
 	botName := a.resources.Session.State.User.Username
 	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName)
@@ -626,26 +616,11 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 	recallQuery := strings.Join(recallParts, " ")
 
-	// Two-pass recall: user-specific memories + content-relevant memories.
-	// Use the last message author as the user for user-specific recall.
-	recallLimit := cfg.Agent.MemoryRecallLimit
-	lastAuthorID := ""
+	var lastAuthorID string
 	if lastMsg.Author != nil {
 		lastAuthorID = lastMsg.Author.ID
 	}
-	var userMemories []memory.MemoryRow
-	if lastAuthorID != "" {
-		var err error
-		userMemories, err = a.resources.Memory.RecallByUser(ctx, a.serverID, lastAuthorID, recallLimit/2)
-		if err != nil {
-			a.logger.Warn("user memory recall error", "error", err)
-		}
-	}
-	contentMemories, err := a.resources.Memory.Recall(ctx, recallQuery, a.serverID, recallLimit, cfg.Agent.MemoryRecallThreshold)
-	if err != nil {
-		a.logger.Warn("content memory recall error", "error", err)
-	}
-	memories := mergeMemories(userMemories, contentMemories, recallLimit)
+	memories := a.recallMemories(ctx, cfg, lastAuthorID, recallQuery)
 
 	botName := a.resources.Session.State.User.Username
 	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName)
@@ -739,6 +714,25 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	if len(a.history) > historyLen {
 		a.history = a.history[:historyLen]
 	}
+}
+
+// recallMemories runs the two-pass recall: user-specific memories first,
+// then content-relevant memories, merged and capped at the configured limit.
+func (a *ChannelAgent) recallMemories(ctx context.Context, cfg *config.Config, userID, contentQuery string) []memory.MemoryRow {
+	limit := cfg.Agent.MemoryRecallLimit
+	var userMems []memory.MemoryRow
+	if userID != "" {
+		var err error
+		userMems, err = a.resources.Memory.RecallByUser(ctx, a.serverID, userID, limit/2)
+		if err != nil {
+			a.logger.Warn("user memory recall error", "error", err)
+		}
+	}
+	contentMems, err := a.resources.Memory.Recall(ctx, contentQuery, a.serverID, limit, cfg.Agent.MemoryRecallThreshold)
+	if err != nil {
+		a.logger.Warn("content memory recall error", "error", err)
+	}
+	return mergeMemories(userMems, contentMems, limit)
 }
 
 // mergeMemories combines user-specific and content-relevant memories,

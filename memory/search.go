@@ -24,7 +24,20 @@ type MemoryRow struct {
 // SaveResult holds the outcome of a Save operation.
 type SaveResult struct {
 	ID     string // memory ID (new or existing)
-	Status string // "saved", "updated", or "exists"
+	Status string // one of the SaveStatus* constants
+}
+
+// SaveStatus constants for SaveResult.Status.
+const (
+	SaveStatusSaved   = "saved"
+	SaveStatusUpdated = "updated"
+	SaveStatusExists  = "exists"
+)
+
+// scored pairs a memory ID with its cosine similarity score.
+type scored struct {
+	id    string
+	score float32
 }
 
 func (s *Store) Recall(ctx context.Context, query, serverID string, topN int, simThreshold float64) ([]MemoryRow, error) {
@@ -37,10 +50,6 @@ func (s *Store) Recall(ctx context.Context, query, serverID string, topN int, si
 		embeddings, err := s.allEmbeddings(ctx, serverID)
 		if err != nil {
 			return nil, fmt.Errorf("load embeddings: %w", err)
-		}
-		type scored struct {
-			id    string
-			score float32
 		}
 		results := make([]scored, 0, len(embeddings))
 		for id, emb := range embeddings {
@@ -139,17 +148,7 @@ func (s *Store) ftsSearch(ctx context.Context, query, serverID string) ([]string
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan fts result: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return scanIDs(rows)
 }
 
 // likeSearch returns memory IDs matching the query via SQL LIKE substring search.
@@ -162,13 +161,17 @@ func (s *Store) likeSearch(ctx context.Context, query, serverID string) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	return scanIDs(rows)
+}
 
+// scanIDs collects a single string column from each row and returns them as a slice.
+func scanIDs(rows *sql.Rows) ([]string, error) {
+	defer rows.Close()
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan keyword result: %w", err)
+			return nil, err
 		}
 		ids = append(ids, id)
 	}
