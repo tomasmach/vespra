@@ -55,9 +55,12 @@ type TurnConfig struct {
 	MaxToolIterations        int  `toml:"max_tool_iterations"`
 	HistoryBackfillLimit     int  `toml:"history_backfill_limit"`
 	MemoryExtractionInterval int  `toml:"memory_extraction_interval"` // -1 to disable
-	CoalesceDisabled         bool `toml:"coalesce_disabled"`
-	CoalesceDebounceMs       int  `toml:"coalesce_debounce_ms"`
-	CoalesceMaxWaitMs        int  `toml:"coalesce_max_wait_ms"`
+	CoalesceDisabled         bool    `toml:"coalesce_disabled"`
+	CoalesceDebounceMs       int     `toml:"coalesce_debounce_ms"`
+	CoalesceMaxWaitMs        int     `toml:"coalesce_max_wait_ms"`
+	MemoryRecallLimit        int     `toml:"memory_recall_limit"`
+	MemoryDedupThreshold     float64 `toml:"memory_dedup_threshold"`
+	MemoryRecallThreshold    float64 `toml:"memory_recall_threshold"`
 }
 
 type ResponseConfig struct {
@@ -174,6 +177,15 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Agent.CoalesceMaxWaitMs == 0 {
 		cfg.Agent.CoalesceMaxWaitMs = 5000
+	}
+	if cfg.Agent.MemoryRecallLimit <= 0 {
+		cfg.Agent.MemoryRecallLimit = 15
+	}
+	if cfg.Agent.MemoryDedupThreshold <= 0 {
+		cfg.Agent.MemoryDedupThreshold = 0.85
+	}
+	if cfg.Agent.MemoryRecallThreshold <= 0 {
+		cfg.Agent.MemoryRecallThreshold = 0.35
 	}
 	if cfg.Tools.WebTimeoutSeconds <= 0 {
 		cfg.Tools.WebTimeoutSeconds = 120
