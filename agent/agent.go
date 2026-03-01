@@ -935,6 +935,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	var toolCalls []toolCallRecord
 	var assistantContent string
+	var replyToolText string // captures the text sent via the reply tool before ReplyText is zeroed
 	for iter := 0; ; iter++ {
 		if iter >= cfg.Agent.MaxToolIterations {
 			if err := tp.sendFn("I got stuck in a loop. Please try again."); err != nil {
@@ -981,6 +982,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		// so subsequent LLM calls have context of what the assistant replied.
 		// Reset ReplyText after appending so this only fires once (Replied is a sticky latch).
 		if tp.reg.Replied && tp.reg.ReplyText != "" {
+			replyToolText = tp.reg.ReplyText
 			tp.llmMsgs = append(tp.llmMsgs, llm.Message{Role: "assistant", Content: tp.reg.ReplyText})
 			tp.reg.ReplyText = ""
 		}
@@ -1021,7 +1023,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 		responseText := assistantContent
 		if responseText == "" && tp.reg.Replied {
-			responseText = tp.reg.ReplyText
+			responseText = replyToolText
 		}
 		if err := a.resources.Memory.LogConversation(ctx, a.channelID, tp.userMsgText, toolCallsJSON, responseText); err != nil {
 			a.logger.Warn("log conversation error", "error", err)

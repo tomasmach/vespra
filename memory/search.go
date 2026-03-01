@@ -71,10 +71,18 @@ func (s *Store) Recall(ctx context.Context, query, serverID string, topN int, si
 		}
 	}
 
-	// FTS5 keyword search with fallback to LIKE.
-	keywordIDs, err := s.ftsSearch(ctx, query, serverID)
-	if err != nil {
-		slog.Warn("fts search failed, falling back to LIKE", "error", err)
+	// Keyword search: use FTS5 when available, otherwise fall back to LIKE.
+	var keywordIDs []string
+	if s.fts5Enabled {
+		keywordIDs, err = s.ftsSearch(ctx, query, serverID)
+		if err != nil {
+			slog.Warn("fts search failed, falling back to LIKE", "error", err)
+			keywordIDs, err = s.likeSearch(ctx, query, serverID)
+			if err != nil {
+				return nil, fmt.Errorf("keyword search: %w", err)
+			}
+		}
+	} else {
 		keywordIDs, err = s.likeSearch(ctx, query, serverID)
 		if err != nil {
 			return nil, fmt.Errorf("keyword search: %w", err)
