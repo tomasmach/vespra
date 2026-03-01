@@ -241,5 +241,10 @@ export async function render(container, params) {
     }
   }
 
-  renderView();
+  const activeSoul = souls.find(s => s.active);
+  if (activeSoul) {
+    await selectSoul(activeSoul.name);
+  } else {
+    renderView();
+  }
 }
