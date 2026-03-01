@@ -61,11 +61,11 @@ func TestSaveAndRecall(t *testing.T) {
 	store := newTestStore(t, embSrv)
 	ctx := context.Background()
 
-	id, err := store.Save(ctx, "the cat sat on the mat", "srv1", "user1", "chan1", 0.5)
+	result, err := store.Save(ctx, "the cat sat on the mat", "srv1", "user1", "chan1", 0.5, 0)
 	if err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
-	if id == "" {
+	if result.ID == "" {
 		t.Fatal("Save() returned empty ID")
 	}
 
@@ -79,13 +79,13 @@ func TestSaveAndRecall(t *testing.T) {
 
 	found := false
 	for _, r := range results {
-		if r.ID == id {
+		if r.ID == result.ID {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("saved memory %q not found in recall results: %v", id, results)
+		t.Errorf("saved memory %q not found in recall results: %v", result.ID, results)
 	}
 }
 
@@ -94,12 +94,12 @@ func TestForgetHidesFromRecall(t *testing.T) {
 	store := newTestStore(t, embSrv)
 	ctx := context.Background()
 
-	id, err := store.Save(ctx, "secret memory", "srv1", "user1", "chan1", 0.5)
+	result, err := store.Save(ctx, "secret memory", "srv1", "user1", "chan1", 0.5, 0)
 	if err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
 
-	if err := store.Forget(ctx, "srv1", id); err != nil {
+	if err := store.Forget(ctx, "srv1", result.ID); err != nil {
 		t.Fatalf("Forget() error: %v", err)
 	}
 
@@ -108,8 +108,8 @@ func TestForgetHidesFromRecall(t *testing.T) {
 		t.Fatalf("Recall() error: %v", err)
 	}
 	for _, r := range results {
-		if r.ID == id {
-			t.Errorf("forgotten memory %q still appears in recall results", id)
+		if r.ID == result.ID {
+			t.Errorf("forgotten memory %q still appears in recall results", result.ID)
 		}
 	}
 }
@@ -126,11 +126,11 @@ func TestSaveWithEmbeddingFailure(t *testing.T) {
 	store := newTestStore(t, failSrv)
 	ctx := context.Background()
 
-	id, err := store.Save(ctx, "keyword-only memory", "srv1", "user1", "chan1", 0.5)
+	result, err := store.Save(ctx, "keyword-only memory", "srv1", "user1", "chan1", 0.5, 0)
 	if err != nil {
 		t.Fatalf("Save() should succeed even when embedding fails, got error: %v", err)
 	}
-	if id == "" {
+	if result.ID == "" {
 		t.Fatal("Save() returned empty ID")
 	}
 }
@@ -140,7 +140,7 @@ func TestListLIKEEscaping(t *testing.T) {
 	store := newTestStore(t, embSrv)
 	ctx := context.Background()
 
-	id, err := store.Save(ctx, "100% done with task_1", "srv1", "user1", "chan1", 0.5)
+	result, err := store.Save(ctx, "100% done with task_1", "srv1", "user1", "chan1", 0.5, 0)
 	if err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
@@ -156,8 +156,8 @@ func TestListLIKEEscaping(t *testing.T) {
 	if total == 0 || len(rows) == 0 {
 		t.Fatalf("expected results with LIKE-special query, got 0")
 	}
-	if rows[0].ID != id {
-		t.Errorf("expected memory %q, got %q", id, rows[0].ID)
+	if rows[0].ID != result.ID {
+		t.Errorf("expected memory %q, got %q", result.ID, rows[0].ID)
 	}
 }
 
@@ -177,13 +177,13 @@ func TestForgetWrongServerReturnsErrMemoryNotFound(t *testing.T) {
 	store := newTestStore(t, embSrv)
 	ctx := context.Background()
 
-	id, err := store.Save(ctx, "cross-server memory", "srv1", "user1", "chan1", 0.5)
+	result, err := store.Save(ctx, "cross-server memory", "srv1", "user1", "chan1", 0.5, 0)
 	if err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
 
 	// Attempt to forget using a different server_id.
-	err = store.Forget(ctx, "srv2", id)
+	err = store.Forget(ctx, "srv2", result.ID)
 	if !errors.Is(err, ErrMemoryNotFound) {
 		t.Errorf("Forget() with wrong server_id should return ErrMemoryNotFound, got: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestUpdateContentRefreshesEmbedding(t *testing.T) {
 	store := newTestStore(t, embSrv)
 	ctx := context.Background()
 
-	id, err := store.Save(ctx, "original content", "srv1", "user1", "chan1", 0.5)
+	result, err := store.Save(ctx, "original content", "srv1", "user1", "chan1", 0.5, 0)
 	if err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
@@ -202,19 +202,19 @@ func TestUpdateContentRefreshesEmbedding(t *testing.T) {
 	// Verify an embedding row exists after Save.
 	var beforeBlob []byte
 	if err := store.db.QueryRowContext(ctx,
-		`SELECT vector FROM embeddings WHERE memory_id = ?`, id,
+		`SELECT vector FROM embeddings WHERE memory_id = ?`, result.ID,
 	).Scan(&beforeBlob); err != nil {
 		t.Fatalf("embedding not found after Save: %v", err)
 	}
 
-	if err := store.UpdateContent(ctx, id, "srv1", "updated content"); err != nil {
+	if err := store.UpdateContent(ctx, result.ID, "srv1", "updated content"); err != nil {
 		t.Fatalf("UpdateContent() error: %v", err)
 	}
 
 	// The embedding row should still exist (upserted) after UpdateContent.
 	var afterBlob []byte
 	if err := store.db.QueryRowContext(ctx,
-		`SELECT vector FROM embeddings WHERE memory_id = ?`, id,
+		`SELECT vector FROM embeddings WHERE memory_id = ?`, result.ID,
 	).Scan(&afterBlob); err != nil {
 		t.Fatalf("embedding not found after UpdateContent: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestUpdateContentRefreshesEmbedding(t *testing.T) {
 	// The content column should reflect the new value.
 	var content string
 	if err := store.db.QueryRowContext(ctx,
-		`SELECT content FROM memories WHERE id = ?`, id,
+		`SELECT content FROM memories WHERE id = ?`, result.ID,
 	).Scan(&content); err != nil {
 		t.Fatalf("memory not found after UpdateContent: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestRecallDoesNotLeakCrossServer(t *testing.T) {
 	ctx := context.Background()
 
 	// Save a memory under srv1.
-	_, err := store.Save(ctx, "srv1 private data", "srv1", "user1", "chan1", 0.5)
+	_, err := store.Save(ctx, "srv1 private data", "srv1", "user1", "chan1", 0.5, 0)
 	if err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
@@ -258,11 +258,11 @@ func TestListUnderscoreEscaping(t *testing.T) {
 	ctx := context.Background()
 
 	// Save two memories: one matching, one that would match with unescaped _
-	id1, err := store.Save(ctx, "task_done", "srv1", "u", "c", 0.5)
+	r1, err := store.Save(ctx, "task_done", "srv1", "u", "c", 0.5, 0)
 	if err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
-	id2, err := store.Save(ctx, "taskXdone", "srv1", "u", "c", 0.5)
+	r2, err := store.Save(ctx, "taskXdone", "srv1", "u", "c", 0.5, 0)
 	if err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
@@ -274,14 +274,86 @@ func TestListUnderscoreEscaping(t *testing.T) {
 	}
 	foundID1 := false
 	for _, r := range rows {
-		if r.ID == id2 {
+		if r.ID == r2.ID {
 			t.Error("underscore was not escaped: 'taskXdone' matched 'task_done' query")
 		}
-		if r.ID == id1 {
+		if r.ID == r1.ID {
 			foundID1 = true
 		}
 	}
 	if !foundID1 {
-		t.Errorf("expected memory %q ('task_done') to appear in results, but it did not", id1)
+		t.Errorf("expected memory %q ('task_done') to appear in results, but it did not", r1.ID)
+	}
+}
+
+func TestSaveDedupSkipsIdentical(t *testing.T) {
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
+	ctx := context.Background()
+
+	r1, err := store.Save(ctx, "Tomas likes coffee", "srv1", "user1", "", 0.5, 0.85)
+	if err != nil {
+		t.Fatalf("first Save() error: %v", err)
+	}
+	if r1.Status != "saved" {
+		t.Fatalf("expected status 'saved', got %q", r1.Status)
+	}
+
+	r2, err := store.Save(ctx, "Tomas likes coffee", "srv1", "user1", "", 0.5, 0.85)
+	if err != nil {
+		t.Fatalf("second Save() error: %v", err)
+	}
+	if r2.Status != "exists" {
+		t.Errorf("expected status 'exists', got %q", r2.Status)
+	}
+	if r2.ID != r1.ID {
+		t.Errorf("expected existing ID %q, got %q", r1.ID, r2.ID)
+	}
+}
+
+func TestSaveDedupUpdatesLongerContent(t *testing.T) {
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
+	ctx := context.Background()
+
+	r1, err := store.Save(ctx, "Tomas likes coffee", "srv1", "user1", "", 0.5, 0.85)
+	if err != nil {
+		t.Fatalf("first Save() error: %v", err)
+	}
+
+	r2, err := store.Save(ctx, "Tomas likes dark roast coffee, especially Ethiopian", "srv1", "user1", "", 0.7, 0.85)
+	if err != nil {
+		t.Fatalf("second Save() error: %v", err)
+	}
+	if r2.Status != "updated" {
+		t.Errorf("expected status 'updated', got %q", r2.Status)
+	}
+	if r2.ID != r1.ID {
+		t.Errorf("expected same ID %q, got %q", r1.ID, r2.ID)
+	}
+
+	var content string
+	store.db.QueryRowContext(ctx, `SELECT content FROM memories WHERE id = ?`, r1.ID).Scan(&content)
+	if content != "Tomas likes dark roast coffee, especially Ethiopian" {
+		t.Errorf("content not updated: got %q", content)
+	}
+}
+
+func TestSaveDedupDisabledWithZeroThreshold(t *testing.T) {
+	embSrv := fakeEmbeddingServer(t, 4)
+	store := newTestStore(t, embSrv)
+	ctx := context.Background()
+
+	r1, err := store.Save(ctx, "some fact", "srv1", "user1", "", 0.5, 0)
+	if err != nil {
+		t.Fatalf("first Save() error: %v", err)
+	}
+
+	r2, err := store.Save(ctx, "some fact", "srv1", "user1", "", 0.5, 0)
+	if err != nil {
+		t.Fatalf("second Save() error: %v", err)
+	}
+	if r2.ID == r1.ID {
+		t.Errorf("with threshold 0, should create new memory, got same ID")
 	}
 }

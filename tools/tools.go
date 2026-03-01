@@ -73,8 +73,9 @@ type SendFunc func(content string) error
 type ReactFunc func(emoji string) error
 
 type memorySaveTool struct {
-	store    *memory.Store
-	serverID string
+	store          *memory.Store
+	serverID       string
+	dedupThreshold float64
 }
 
 func (t *memorySaveTool) Name() string { return "memory_save" }
@@ -108,11 +109,18 @@ func (t *memorySaveTool) Call(ctx context.Context, args json.RawMessage) (string
 	if p.Importance != nil {
 		importance = *p.Importance
 	}
-	id, err := t.store.Save(ctx, p.Content, t.serverID, p.UserID, "", importance)
+	result, err := t.store.Save(ctx, p.Content, t.serverID, p.UserID, "", importance, t.dedupThreshold)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Memory saved (id: %s)", id), nil
+	switch result.Status {
+	case "updated":
+		return fmt.Sprintf("Memory updated with new details (id: %s)", result.ID), nil
+	case "exists":
+		return fmt.Sprintf("Memory already exists (id: %s)", result.ID), nil
+	default:
+		return fmt.Sprintf("Memory saved (id: %s)", result.ID), nil
+	}
 }
 
 type memoryRecallTool struct {
@@ -413,9 +421,9 @@ func (t *webSearchTool) runSearch(query string) {
 
 // NewDefaultRegistry creates a registry with standard tools.
 // If searchDeps is non-nil, the async web_search and web_fetch tools are also registered.
-func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps) *Registry {
+func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps) *Registry {
 	r := NewRegistry()
-	r.Register(&memorySaveTool{store: store, serverID: serverID})
+	r.Register(&memorySaveTool{store: store, serverID: serverID, dedupThreshold: dedupThreshold})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID})
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
 	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText})
@@ -436,9 +444,9 @@ func (r *Registry) RegisterWebFetch(timeoutSeconds int) {
 
 // NewMemoryOnlyRegistry creates a registry with only memory_save and memory_recall.
 // Used by the background memory extraction pass.
-func NewMemoryOnlyRegistry(store *memory.Store, serverID string) *Registry {
+func NewMemoryOnlyRegistry(store *memory.Store, serverID string, dedupThreshold float64) *Registry {
 	r := NewRegistry()
-	r.Register(&memorySaveTool{store: store, serverID: serverID})
+	r.Register(&memorySaveTool{store: store, serverID: serverID, dedupThreshold: dedupThreshold})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID})
 	return r
 }

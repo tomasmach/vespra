@@ -531,7 +531,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, a.webSearchDeps())
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, sendFn, reactFn, a.webSearchDeps())
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
@@ -630,7 +630,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, a.webSearchDeps())
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, sendFn, reactFn, a.webSearchDeps())
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 
@@ -681,7 +681,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 		return err
 	}
 	reactFn := func(emoji string) error { return nil }
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, nil)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, sendFn, reactFn, nil)
 	// Register web_fetch so the LLM can follow up on URLs from search results,
 	// but do NOT register web_search to prevent infinite search loops.
 	timeout := cfg.Tools.WebTimeoutSeconds
@@ -987,7 +987,7 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 	}
 
 	snapshot := stripImageParts(history)
-	reg := tools.NewMemoryOnlyRegistry(a.resources.Memory, a.serverID)
+	reg := tools.NewMemoryOnlyRegistry(a.resources.Memory, a.serverID, a.cfgStore.Get().Agent.MemoryDedupThreshold)
 
 	a.extractionWg.Add(1)
 	go func() {

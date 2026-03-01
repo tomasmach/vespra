@@ -20,6 +20,12 @@ type MemoryRow struct {
 	CreatedAt  time.Time
 }
 
+// SaveResult holds the outcome of a Save operation.
+type SaveResult struct {
+	ID     string // memory ID (new or existing)
+	Status string // "saved", "updated", or "exists"
+}
+
 func (s *Store) Recall(ctx context.Context, query, serverID string, topN int) ([]MemoryRow, error) {
 	var semanticIDs []string
 

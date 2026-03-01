@@ -105,21 +105,43 @@ func newID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID string, importance float64) (string, error) {
+func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID string, importance float64, dedupThreshold float64) (SaveResult, error) {
 	vec, embedErr := s.llm.Embed(ctx, content)
 	if embedErr != nil {
 		slog.Warn("embed failed, skipping embedding", "error", embedErr)
 	}
 
+	// Dedup check: find existing similar memory if embedding succeeded and threshold > 0.
+	if embedErr == nil && dedupThreshold > 0 {
+		match, err := s.findSimilar(ctx, serverID, vec, dedupThreshold)
+		if err != nil {
+			slog.Warn("dedup check failed, saving as new", "error", err)
+		} else if match != nil {
+			var existingContent string
+			if err := s.db.QueryRowContext(ctx,
+				`SELECT content FROM memories WHERE id = ? AND server_id = ? AND forgotten = 0`,
+				match.id, serverID,
+			).Scan(&existingContent); err == nil {
+				if len(content) > len(existingContent) {
+					if err := s.updateForDedup(ctx, match.id, serverID, content, importance, vec); err != nil {
+						return SaveResult{}, fmt.Errorf("dedup update: %w", err)
+					}
+					return SaveResult{ID: match.id, Status: "updated"}, nil
+				}
+				return SaveResult{ID: match.id, Status: "exists"}, nil
+			}
+		}
+	}
+
 	id, err := newID()
 	if err != nil {
-		return "", fmt.Errorf("generate id: %w", err)
+		return SaveResult{}, fmt.Errorf("generate id: %w", err)
 	}
 	now := time.Now().UTC()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", fmt.Errorf("begin transaction: %w", err)
+		return SaveResult{}, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -128,7 +150,7 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 		id, content, importance, serverID, userID, channelID, now, now,
 	); err != nil {
-		return "", fmt.Errorf("insert memory: %w", err)
+		return SaveResult{}, fmt.Errorf("insert memory: %w", err)
 	}
 
 	if embedErr == nil {
@@ -136,7 +158,7 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 			`INSERT INTO embeddings (memory_id, vector) VALUES (?, ?)`,
 			id, llm.VectorToBlob(vec),
 		); err != nil {
-			return "", fmt.Errorf("insert embedding: %w", err)
+			return SaveResult{}, fmt.Errorf("insert embedding: %w", err)
 		}
 	}
 
@@ -144,13 +166,50 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 		`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`,
 		id, content,
 	); err != nil {
-		return "", fmt.Errorf("insert fts: %w", err)
+		return SaveResult{}, fmt.Errorf("insert fts: %w", err)
 	}
 
 	if err = tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit transaction: %w", err)
+		return SaveResult{}, fmt.Errorf("commit transaction: %w", err)
 	}
-	return id, nil
+	return SaveResult{ID: id, Status: "saved"}, nil
+}
+
+// updateForDedup updates an existing memory's content, importance, embedding, and FTS entry.
+func (s *Store) updateForDedup(ctx context.Context, id, serverID, content string, importance float64, vec []float32) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE memories SET content = ?, importance = ?, updated_at = ? WHERE id = ? AND server_id = ? AND forgotten = 0`,
+		content, importance, time.Now().UTC(), id, serverID,
+	); err != nil {
+		return fmt.Errorf("update memory: %w", err)
+	}
+
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO embeddings (memory_id, vector) VALUES (?, ?)
+		 ON CONFLICT(memory_id) DO UPDATE SET vector = excluded.vector`,
+		id, llm.VectorToBlob(vec),
+	); err != nil {
+		return fmt.Errorf("upsert embedding: %w", err)
+	}
+
+	if _, err = tx.ExecContext(ctx,
+		`DELETE FROM memories_fts WHERE memory_id = ?`, id,
+	); err != nil {
+		return fmt.Errorf("delete old fts: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`, id, content,
+	); err != nil {
+		return fmt.Errorf("insert new fts: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 func (s *Store) Forget(ctx context.Context, serverID, memoryID string) error {
