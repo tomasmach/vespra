@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     ts         DATETIME NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_conv_channel ON conversations(channel_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(memory_id UNINDEXED, content);
 `
 
 type Store struct {
@@ -76,6 +78,22 @@ func New(cfg *config.MemoryConfig, llmClient *llm.Client) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("run migration: %w", err)
 	}
+
+	// Backfill FTS index for existing memories that predate FTS5 migration.
+	var ftsCount int
+	if err := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM memories_fts").Scan(&ftsCount); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("count fts entries: %w", err)
+	}
+	if ftsCount == 0 {
+		if _, err := db.ExecContext(context.Background(),
+			`INSERT INTO memories_fts(memory_id, content) SELECT id, content FROM memories WHERE forgotten = 0`,
+		); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("backfill fts index: %w", err)
+		}
+	}
+
 	return &Store{db: db, llm: llmClient}, nil
 }
 
@@ -122,6 +140,13 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 		}
 	}
 
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`,
+		id, content,
+	); err != nil {
+		return "", fmt.Errorf("insert fts: %w", err)
+	}
+
 	if err = tx.Commit(); err != nil {
 		return "", fmt.Errorf("commit transaction: %w", err)
 	}
@@ -129,7 +154,13 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 }
 
 func (s *Store) Forget(ctx context.Context, serverID, memoryID string) error {
-	result, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	result, err := tx.ExecContext(ctx,
 		`UPDATE memories SET forgotten = 1, updated_at = ? WHERE id = ? AND server_id = ?`,
 		time.Now().UTC(), memoryID, serverID,
 	)
@@ -143,7 +174,14 @@ func (s *Store) Forget(ctx context.Context, serverID, memoryID string) error {
 	if n == 0 {
 		return ErrMemoryNotFound
 	}
-	return nil
+
+	if _, err = tx.ExecContext(ctx,
+		`DELETE FROM memories_fts WHERE memory_id = ?`, memoryID,
+	); err != nil {
+		return fmt.Errorf("delete fts: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 type ListOptions struct {
@@ -232,6 +270,17 @@ func (s *Store) UpdateContent(ctx context.Context, id, serverID, content string)
 		id, llm.VectorToBlob(vec),
 	); err != nil {
 		return fmt.Errorf("upsert embedding: %w", err)
+	}
+
+	if _, err = tx.ExecContext(ctx,
+		`DELETE FROM memories_fts WHERE memory_id = ?`, id,
+	); err != nil {
+		return fmt.Errorf("delete old fts: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`, id, content,
+	); err != nil {
+		return fmt.Errorf("insert new fts: %w", err)
 	}
 
 	if err = tx.Commit(); err != nil {

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build
-go build -o vespra .
+go build -tags sqlite_fts5 -o vespra .
 
 # Run (config path resolution: VESPRA_CONFIG env → --config flag → ~/.config/vespra/config.toml)
 ./vespra --config ./config.toml
@@ -15,7 +15,7 @@ go build -o vespra .
 ./vespra --config /path/to/config.toml --log-level debug --log-format json
 ```
 
-The project uses CGO (via `go-sqlite3`), so a C compiler is required.
+The project uses CGO (via `go-sqlite3`), so a C compiler is required. The `-tags sqlite_fts5` flag is required to enable SQLite FTS5 full-text search support.
 
 ## Architecture
 
@@ -63,7 +63,7 @@ It is acceptable to add small test-infrastructure items to production code when 
 
 Run all tests:
 ```bash
-go test ./...
+go test -tags sqlite_fts5 ./...
 ```
 
 ## Z.AI (GLM) API
