@@ -333,7 +333,9 @@ func TestSaveDedupUpdatesLongerContent(t *testing.T) {
 	}
 
 	var content string
-	store.db.QueryRowContext(ctx, `SELECT content FROM memories WHERE id = ?`, r1.ID).Scan(&content)
+	if err := store.db.QueryRowContext(ctx, `SELECT content FROM memories WHERE id = ?`, r1.ID).Scan(&content); err != nil {
+		t.Fatalf("fetch updated content: %v", err)
+	}
 	if content != "Tomas likes dark roast coffee, especially Ethiopian" {
 		t.Errorf("content not updated: got %q", content)
 	}

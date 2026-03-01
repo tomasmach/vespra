@@ -518,9 +518,13 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 	// Two-pass recall: user-specific memories + content-relevant memories.
 	recallLimit := cfg.Agent.MemoryRecallLimit
-	userMemories, err := a.resources.Memory.RecallByUser(ctx, a.serverID, msg.Author.ID, recallLimit/2)
-	if err != nil {
-		a.logger.Warn("user memory recall error", "error", err)
+	var userMemories []memory.MemoryRow
+	if msg.Author != nil && msg.Author.ID != "" {
+		var err error
+		userMemories, err = a.resources.Memory.RecallByUser(ctx, a.serverID, msg.Author.ID, recallLimit/2)
+		if err != nil {
+			a.logger.Warn("user memory recall error", "error", err)
+		}
 	}
 	contentMemories, err := a.resources.Memory.Recall(ctx, msg.Content, a.serverID, recallLimit, cfg.Agent.MemoryRecallThreshold)
 	if err != nil {
@@ -629,9 +633,13 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	if lastMsg.Author != nil {
 		lastAuthorID = lastMsg.Author.ID
 	}
-	userMemories, err := a.resources.Memory.RecallByUser(ctx, a.serverID, lastAuthorID, recallLimit/2)
-	if err != nil {
-		a.logger.Warn("user memory recall error", "error", err)
+	var userMemories []memory.MemoryRow
+	if lastAuthorID != "" {
+		var err error
+		userMemories, err = a.resources.Memory.RecallByUser(ctx, a.serverID, lastAuthorID, recallLimit/2)
+		if err != nil {
+			a.logger.Warn("user memory recall error", "error", err)
+		}
 	}
 	contentMemories, err := a.resources.Memory.Recall(ctx, recallQuery, a.serverID, recallLimit, cfg.Agent.MemoryRecallThreshold)
 	if err != nil {

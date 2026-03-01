@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -124,13 +125,16 @@ func (s *Store) RecallByUser(ctx context.Context, serverID, userID string, limit
 
 // ftsSearch returns memory IDs matching the query via FTS5 full-text search.
 func (s *Store) ftsSearch(ctx context.Context, query, serverID string) ([]string, error) {
+	// FTS5 MATCH uses its own syntax (AND, OR, -, ", *, NEAR). Wrap the query
+	// in double quotes to treat it as a phrase, escaping embedded quotes.
+	ftsQuery := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT f.memory_id FROM memories_fts f
 		 JOIN memories m ON m.id = f.memory_id
 		 WHERE m.server_id = ? AND m.forgotten = 0
 		 AND memories_fts MATCH ?
 		 ORDER BY rank`,
-		serverID, query,
+		serverID, ftsQuery,
 	)
 	if err != nil {
 		return nil, err

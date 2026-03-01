@@ -140,7 +140,7 @@ func (t *memoryRecallTool) Parameters() json.RawMessage {
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Search query."},
-            "top_n": {"type": "integer", "description": "Max results to return, default 10."}
+            "top_n": {"type": "integer", "description": "Max results to return."}
         },
         "required": ["query"]
     }`)

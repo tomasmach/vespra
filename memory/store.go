@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -80,14 +81,17 @@ func New(cfg *config.MemoryConfig, llmClient *llm.Client) (*Store, error) {
 	}
 
 	// Backfill FTS index for existing memories that predate FTS5 migration.
-	var ftsCount int
-	if err := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM memories_fts").Scan(&ftsCount); err != nil {
+	var missing int
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM memories WHERE forgotten = 0 AND id NOT IN (SELECT memory_id FROM memories_fts)`,
+	).Scan(&missing); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("count fts entries: %w", err)
+		return nil, fmt.Errorf("count missing fts entries: %w", err)
 	}
-	if ftsCount == 0 {
+	if missing > 0 {
 		if _, err := db.ExecContext(context.Background(),
-			`INSERT INTO memories_fts(memory_id, content) SELECT id, content FROM memories WHERE forgotten = 0`,
+			`INSERT INTO memories_fts(memory_id, content)
+			 SELECT id, content FROM memories WHERE forgotten = 0 AND id NOT IN (SELECT memory_id FROM memories_fts)`,
 		); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("backfill fts index: %w", err)
@@ -118,10 +122,13 @@ func (s *Store) Save(ctx context.Context, content, serverID, userID, channelID s
 			slog.Warn("dedup check failed, saving as new", "error", err)
 		} else if match != nil {
 			var existingContent string
-			if err := s.db.QueryRowContext(ctx,
+			err := s.db.QueryRowContext(ctx,
 				`SELECT content FROM memories WHERE id = ? AND server_id = ? AND forgotten = 0`,
 				match.id, serverID,
-			).Scan(&existingContent); err == nil {
+			).Scan(&existingContent)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				slog.Warn("dedup fetch failed, saving as new", "error", err)
+			} else if err == nil {
 				if len(content) > len(existingContent) {
 					if err := s.updateForDedup(ctx, match.id, serverID, content, importance, vec); err != nil {
 						return SaveResult{}, fmt.Errorf("dedup update: %w", err)
@@ -183,11 +190,19 @@ func (s *Store) updateForDedup(ctx context.Context, id, serverID, content string
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if _, err = tx.ExecContext(ctx,
+	result, err := tx.ExecContext(ctx,
 		`UPDATE memories SET content = ?, importance = ?, updated_at = ? WHERE id = ? AND server_id = ? AND forgotten = 0`,
 		content, importance, time.Now().UTC(), id, serverID,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("update memory: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrMemoryNotFound
 	}
 
 	if _, err = tx.ExecContext(ctx,
@@ -455,4 +470,42 @@ func (s *Store) allEmbeddings(ctx context.Context, serverID string) (map[string]
 		result[memID] = llm.BlobToVector(blob)
 	}
 	return result, rows.Err()
+}
+
+// similarMatch holds a memory ID and its cosine similarity score.
+type similarMatch struct {
+	id    string
+	score float32
+}
+
+// findSimilar returns the single best matching memory above the threshold
+// for the given server. Returns nil if no match exceeds the threshold.
+func (s *Store) findSimilar(ctx context.Context, serverID string, vec []float32, threshold float64) (*similarMatch, error) {
+	embeddings, err := s.allEmbeddings(ctx, serverID)
+	if err != nil {
+		return nil, fmt.Errorf("load embeddings: %w", err)
+	}
+
+	type scored struct {
+		id    string
+		score float32
+	}
+	var candidates []scored
+	for id, emb := range embeddings {
+		if len(emb) != len(vec) {
+			continue
+		}
+		sim := cosine(vec, emb)
+		if float64(sim) >= threshold {
+			candidates = append(candidates, scored{id, sim})
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+	return &similarMatch{id: candidates[0].id, score: candidates[0].score}, nil
 }
