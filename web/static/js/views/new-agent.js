@@ -8,7 +8,9 @@ export async function render(container, params) {
 
   // Mutable form state
   const state = {
-    response_mode: '',
+    // Default to opt-in channels for new Discord guilds.
+    // Bot stays silent until channels are explicitly whitelisted.
+    response_mode: 'none',
     provider: '',
   };
 
@@ -96,6 +98,7 @@ export async function render(container, params) {
       el('div', { className: 'input-group' },
         el('label', { className: 'input-label' }, 'Response Mode'),
         modePickerEl,
+        el('span', { className: 'input-hint' }, 'Default is none: bot is silent until you whitelist channels.'),
       ),
       el('div', { className: 'input-group' },
         el('label', { className: 'input-label' }, 'Language'),
