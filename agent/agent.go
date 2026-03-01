@@ -538,7 +538,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, sendFn, reactFn, a.webSearchDeps())
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps())
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
@@ -649,7 +649,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, sendFn, reactFn, a.webSearchDeps())
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps())
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 
@@ -700,7 +700,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 		return err
 	}
 	reactFn := func(emoji string) error { return nil }
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, sendFn, reactFn, nil)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, nil)
 	// Register web_fetch so the LLM can follow up on URLs from search results,
 	// but do NOT register web_search to prevent infinite search loops.
 	timeout := cfg.Tools.WebTimeoutSeconds
@@ -772,8 +772,33 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	sb.WriteString(a.soulText)
 	if len(memories) > 0 {
 		sb.WriteString("\n\n## Relevant Memories\n")
+		now := time.Now()
 		for _, m := range memories {
-			fmt.Fprintf(&sb, "- [%s] %s\n", m.ID, m.Content)
+			age := now.Sub(m.CreatedAt)
+			var ageStr string
+			switch {
+			case age < 24*time.Hour:
+				ageStr = "today"
+			case age < 48*time.Hour:
+				ageStr = "yesterday"
+			case age < 7*24*time.Hour:
+				ageStr = fmt.Sprintf("%d days ago", int(age.Hours()/24))
+			case age < 30*24*time.Hour:
+				weeks := int(age.Hours() / 24 / 7)
+				if weeks == 1 {
+					ageStr = "1 week ago"
+				} else {
+					ageStr = fmt.Sprintf("%d weeks ago", weeks)
+				}
+			default:
+				months := int(age.Hours() / 24 / 30)
+				if months == 1 {
+					ageStr = "1 month ago"
+				} else {
+					ageStr = fmt.Sprintf("%d months ago", months)
+				}
+			}
+			fmt.Fprintf(&sb, "- [%s] (importance: %.1f, %s) %s\n", m.ID, m.Importance, ageStr, m.Content)
 		}
 	}
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
@@ -1034,7 +1059,7 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 	}
 
 	snapshot := stripImageParts(history)
-	reg := tools.NewMemoryOnlyRegistry(a.resources.Memory, a.serverID, a.cfgStore.Get().Agent.MemoryDedupThreshold)
+	reg := tools.NewMemoryOnlyRegistry(a.resources.Memory, a.serverID, a.cfgStore.Get().Agent.MemoryDedupThreshold, a.cfgStore.Get().Agent.MemoryRecallLimit)
 
 	a.extractionWg.Add(1)
 	go func() {

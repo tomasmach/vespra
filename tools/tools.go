@@ -124,8 +124,9 @@ func (t *memorySaveTool) Call(ctx context.Context, args json.RawMessage) (string
 }
 
 type memoryRecallTool struct {
-	store    *memory.Store
-	serverID string
+	store       *memory.Store
+	serverID    string
+	defaultTopN int
 }
 
 func (t *memoryRecallTool) Name() string { return "memory_recall" }
@@ -153,7 +154,7 @@ func (t *memoryRecallTool) Call(ctx context.Context, args json.RawMessage) (stri
 		return "", err
 	}
 	if p.TopN == 0 {
-		p.TopN = 10
+		p.TopN = t.defaultTopN
 	}
 	// Tool-invoked recall uses threshold 0: the LLM explicitly asked, don't filter.
 	rows, err := t.store.Recall(ctx, p.Query, t.serverID, p.TopN, 0)
@@ -422,10 +423,10 @@ func (t *webSearchTool) runSearch(query string) {
 
 // NewDefaultRegistry creates a registry with standard tools.
 // If searchDeps is non-nil, the async web_search and web_fetch tools are also registered.
-func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps) *Registry {
+func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID, dedupThreshold: dedupThreshold})
-	r.Register(&memoryRecallTool{store: store, serverID: serverID})
+	r.Register(&memoryRecallTool{store: store, serverID: serverID, defaultTopN: defaultRecallLimit})
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
 	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText})
 	r.Register(&reactTool{react: react})
@@ -445,9 +446,9 @@ func (r *Registry) RegisterWebFetch(timeoutSeconds int) {
 
 // NewMemoryOnlyRegistry creates a registry with only memory_save and memory_recall.
 // Used by the background memory extraction pass.
-func NewMemoryOnlyRegistry(store *memory.Store, serverID string, dedupThreshold float64) *Registry {
+func NewMemoryOnlyRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID, dedupThreshold: dedupThreshold})
-	r.Register(&memoryRecallTool{store: store, serverID: serverID})
+	r.Register(&memoryRecallTool{store: store, serverID: serverID, defaultTopN: defaultRecallLimit})
 	return r
 }
