@@ -169,6 +169,8 @@ export async function render(container, params) {
         const dbVal = dbPathInput.value.trim();
         if (dbVal) data.db_path = dbVal;
 
+        // 'none' is the default and is truthy, so this guard correctly sends it.
+        // If the default changes to a falsy value, this guard must be updated too.
         if (state.response_mode) data.response_mode = state.response_mode;
 
         const langVal = languageInput.value.trim();

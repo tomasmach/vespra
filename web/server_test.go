@@ -161,6 +161,36 @@ func TestHandleCreateAgentDefaultsToNoneResponseMode(t *testing.T) {
 	}
 }
 
+func TestHandleCreateAgentExplicitResponseModeNotOverwritten(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	resp, err := http.Post(ts.URL+"/api/agents", "application/json", strings.NewReader(`{"id":"explicit-mode","server_id":"424242","response_mode":"all"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create agent: expected 201, got %d", resp.StatusCode)
+	}
+
+	resp, err = http.Get(ts.URL + "/api/agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var agents []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	if got, _ := agents[0]["response_mode"].(string); got != "all" {
+		t.Fatalf("response_mode = %q, want %q", got, "all")
+	}
+}
+
 func TestAgentSoulLibrary(t *testing.T) {
 	ts, _ := newTestServer(t)
 
