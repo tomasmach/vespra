@@ -501,6 +501,7 @@ type turnParams struct {
 	userMsgText  string // human-readable user input for conversation logging
 	internal     bool   // true for system-generated turns (e.g., web search results); skips LogConversation
 	maxIter      int    // override cfg.Agent.MaxToolIterations; 0 = use config default
+	addressed    bool   // true when the user directly @mentioned the bot
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
@@ -564,6 +565,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		reg:          reg,
 		llmMsgs:      llmMsgs,
 		userMsgText:  historyUserContent(msg.Message, botID, botName),
+		addressed:    addressed,
 	})
 }
 
@@ -670,6 +672,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		reg:          reg,
 		llmMsgs:      llmMsgs,
 		userMsgText:  strings.Join(userLogLines, "\n"),
+		addressed:    anyAddressed,
 	})
 }
 
@@ -1065,8 +1068,10 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	// In smart mode the model should only communicate via reply/react tools.
 	// Suppress any leftover plain-text content that was not sent through a tool.
-	// Exception: vision model responses are always plain text (tools are omitted for GLM vision).
-	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse {
+	// Exception 1: vision model responses are always plain text (tools are omitted for GLM vision).
+	// Exception 2: when the user directly @mentioned the bot, let any non-empty content through
+	//   as a fallback — the LLM occasionally forgets to use the reply tool despite the instruction.
+	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse && !tp.addressed {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
 		assistantContent = ""
 	}
