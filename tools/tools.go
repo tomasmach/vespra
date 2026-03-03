@@ -377,6 +377,8 @@ func (t *webSearchTool) Call(ctx context.Context, args json.RawMessage) (string,
 	if !t.deps.SearchRunning.CompareAndSwap(false, true) {
 		return "A web search is already running, please wait for results.", nil
 	}
+	// Set only on the successful CAS path so processTurn's loop-break guard
+	// fires exclusively when a new search was actually launched, not on a skip.
 	*t.searchCalled = true
 
 	t.deps.SearchWg.Add(1)

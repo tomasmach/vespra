@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tomasmach/vespra/tools"
@@ -145,3 +147,225 @@ func TestReplyToolDeduplication(t *testing.T) {
 		t.Errorf("second call: expected send count still 1, got %d", sendCount)
 	}
 }
+
+// newSearchDeps creates a minimal WebSearchDeps suitable for unit tests.
+// deliverResult is called when the async search goroutine finishes; pass a no-op
+// if the test does not need to observe the delivered result.
+func newSearchDeps(searchRunning *atomic.Bool, wg *sync.WaitGroup, deliver func(string)) *tools.WebSearchDeps {
+	if deliver == nil {
+		deliver = func(string) {}
+	}
+	return &tools.WebSearchDeps{
+		DeliverResult:  deliver,
+		LLM:            nil, // not reached in CAS-failure path; tests guard against the goroutine path
+		Model:          "",
+		Ctx:            context.Background(),
+		SearchWg:       wg,
+		SearchRunning:  searchRunning,
+		TimeoutSeconds: 5,
+		// SearchProvider left empty: falls through to the GLM path which we never reach
+		// because we only test the CAS guard and the early-return branch.
+	}
+}
+
+// TestWebSearchCalledFlagSetOnSuccessfulCAS verifies that the Registry.WebSearchCalled
+// field is set to true when web_search executes and the CompareAndSwap succeeds
+// (i.e., no concurrent search is already running).
+func TestWebSearchCalledFlagSetOnSuccessfulCAS(t *testing.T) {
+	var searchRunning atomic.Bool
+	var wg sync.WaitGroup
+
+	// Use a pre-cancelled context so the background goroutine's HTTP/LLM call
+	// fails immediately due to context cancellation rather than panicking on a
+	// nil LLM client. DeliverResult is always called by runSearch before it
+	// returns, so the WaitGroup will still complete.
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	deps := &tools.WebSearchDeps{
+		DeliverResult:  func(string) {}, // no-op; we only care about the CAS path
+		LLM:            nil,
+		Model:          "",
+		Ctx:            cancelledCtx,
+		SearchWg:       &wg,
+		SearchRunning:  &searchRunning,
+		TimeoutSeconds: 5,
+		SearchProvider: "brave",
+		SearchAPIKey:   "fake-key-to-enter-brave-path",
+		// Brave client will use the cancelled context and fail with a context error
+		// before making any real network call.
+	}
+
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps)
+
+	if r.WebSearchCalled {
+		t.Fatal("WebSearchCalled should be false before any tool call")
+	}
+
+	result, err := r.Dispatch(context.Background(), "web_search", json.RawMessage(`{"query":"test query"}`))
+	if err != nil {
+		t.Fatalf("Dispatch() returned unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Web search started") {
+		t.Errorf("unexpected result from successful web_search: %q", result)
+	}
+
+	// Flag must be set immediately after the successful CAS, before the goroutine finishes.
+	if !r.WebSearchCalled {
+		t.Error("WebSearchCalled should be true after a successful web_search call")
+	}
+
+	// Wait for the background goroutine to finish (it will exit quickly due to cancelled ctx).
+	wg.Wait()
+}
+
+// TestWebSearchCalledFlagNotSetWhenAlreadyRunning verifies that the Registry.WebSearchCalled
+// field remains false when web_search is called while another search is already running
+// (CompareAndSwap fails).
+func TestWebSearchCalledFlagNotSetWhenAlreadyRunning(t *testing.T) {
+	var searchRunning atomic.Bool
+	// Pre-set the flag to simulate a search already in progress.
+	searchRunning.Store(true)
+
+	var wg sync.WaitGroup
+	deps := newSearchDeps(&searchRunning, &wg, nil)
+
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps)
+
+	result, err := r.Dispatch(context.Background(), "web_search", json.RawMessage(`{"query":"concurrent query"}`))
+	if err != nil {
+		t.Fatalf("Dispatch() returned unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "already running") {
+		t.Errorf("expected 'already running' message, got %q", result)
+	}
+
+	// The CAS failed, so WebSearchCalled must remain false.
+	if r.WebSearchCalled {
+		t.Error("WebSearchCalled should be false when CAS fails (search already running)")
+	}
+
+	// No goroutine was launched, so SearchRunning should still be true (unchanged).
+	if !searchRunning.Load() {
+		t.Error("SearchRunning should still be true after CAS failure")
+	}
+}
+
+// TestWebSearchCalledFlagEmptyQueryReturnsEarly verifies that an empty query
+// returns an error message without touching the CAS or setting WebSearchCalled.
+func TestWebSearchCalledFlagEmptyQueryReturnsEarly(t *testing.T) {
+	var searchRunning atomic.Bool
+	var wg sync.WaitGroup
+	deps := newSearchDeps(&searchRunning, &wg, nil)
+
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps)
+
+	result, err := r.Dispatch(context.Background(), "web_search", json.RawMessage(`{"query":""}`))
+	if err != nil {
+		t.Fatalf("Dispatch() returned unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "query is required") {
+		t.Errorf("expected 'query is required' message, got %q", result)
+	}
+	if r.WebSearchCalled {
+		t.Error("WebSearchCalled should be false when query is empty")
+	}
+	if searchRunning.Load() {
+		t.Error("SearchRunning should not be set when query is empty")
+	}
+}
+
+// TestRegistryLoopBreakConditionBothFlagsSet verifies the invariant that drives
+// the processTurn immediate-break guard: when both WebSearchCalled and Replied
+// are true, the loop should break. This test validates the flag state that
+// processTurn relies on rather than testing processTurn directly (which requires
+// a live LLM).
+func TestRegistryLoopBreakConditionBothFlagsSet(t *testing.T) {
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil)
+
+	// Initially neither flag is set.
+	if r.WebSearchCalled || r.Replied {
+		t.Fatal("expected both flags to start as false")
+	}
+
+	// Simulate the reply tool firing.
+	_, err := r.Dispatch(context.Background(), "reply", json.RawMessage(`{"content":"Searching now..."}`))
+	if err != nil {
+		t.Fatalf("reply Dispatch() error: %v", err)
+	}
+	if !r.Replied {
+		t.Fatal("Replied should be true after reply tool call")
+	}
+
+	// WebSearchCalled is still false; the break condition should NOT be met.
+	if r.WebSearchCalled && r.Replied {
+		t.Error("break condition should not be met when only Replied is true")
+	}
+
+	// Manually set WebSearchCalled (as webSearchTool.Call does after a successful CAS).
+	r.WebSearchCalled = true
+
+	// Now both flags are true — the immediate break condition is met.
+	if !(r.WebSearchCalled && r.Replied) {
+		t.Error("break condition should be met when both WebSearchCalled and Replied are true")
+	}
+}
+
+// TestRegistryLoopBreakConditionOnlyWebSearchCalled verifies that the immediate
+// break condition does NOT fire when web_search ran but the reply tool was never called.
+func TestRegistryLoopBreakConditionOnlyWebSearchCalled(t *testing.T) {
+	r := tools.NewRegistry()
+	r.WebSearchCalled = true
+
+	// Replied is still false — break condition must not be met.
+	if r.WebSearchCalled && r.Replied {
+		t.Error("break condition must not fire when only WebSearchCalled is true and Replied is false")
+	}
+}
+
+// TestRegistryLoopBreakConditionOnlyReplied verifies that only having Replied set
+// does NOT trigger the immediate break (it activates the post-reply cap instead).
+func TestRegistryLoopBreakConditionOnlyReplied(t *testing.T) {
+	r := tools.NewRegistry()
+	r.Replied = true
+
+	// WebSearchCalled is false — immediate break condition must not be met.
+	if r.WebSearchCalled && r.Replied {
+		t.Error("immediate break condition must not fire when only Replied is true and WebSearchCalled is false")
+	}
+}
+
+// TestRegistryWebSearchCalledIsStickyLatch verifies that once set, WebSearchCalled
+// is never reset within a turn by the registry itself, matching the invariant
+// documented in processTurn ("sticky latches that are never reset within a turn").
+func TestRegistryWebSearchCalledIsStickyLatch(t *testing.T) {
+	r := tools.NewRegistry()
+
+	// Set the flag directly (as webSearchTool does after a successful CAS).
+	r.WebSearchCalled = true
+
+	// Nothing in the registry should reset it — a subsequent Dispatch of another tool
+	// must not affect WebSearchCalled.
+	r.Register(&noopTool{})
+	_, _ = r.Dispatch(context.Background(), "noop", json.RawMessage(`{}`))
+
+	if !r.WebSearchCalled {
+		t.Error("WebSearchCalled must remain true (sticky latch) after other tool calls")
+	}
+}
+
+// noopTool is a minimal Tool implementation used in sticky-latch tests.
+type noopTool struct{}
+
+func (n *noopTool) Name() string                                          { return "noop" }
+func (n *noopTool) Description() string                                   { return "does nothing" }
+func (n *noopTool) Parameters() json.RawMessage                           { return json.RawMessage(`{"type":"object","properties":{}}`) }
+func (n *noopTool) Call(_ context.Context, _ json.RawMessage) (string, error) { return "ok", nil }

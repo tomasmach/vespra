@@ -186,8 +186,9 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 
 const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
 
-// internalTurnMaxIter caps tool iterations for system-generated turns (e.g. web search results):
-// 1 for web_fetch + 1 for reply + 1 for react/memory before stopping.
+// internalTurnMaxIter caps LLM completion round-trips for system-generated turns (e.g. web search
+// results). Each iteration may produce multiple tool calls. Assumes at most one web_fetch call per
+// internal turn; chaining two web_fetch calls before replying would tighten the budget unexpectedly.
 const internalTurnMaxIter = 3
 
 // classifyAttachments partitions attachments into images and videos,
@@ -1001,6 +1002,9 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 
 		// Immediate break: web_search started + reply sent — results arrive async.
+		// These checks rely on Replied and WebSearchCalled being sticky latches that are never
+		// reset within a turn. tp.reg is created fresh per turn, so the assumption holds; a
+		// future reg.Reset() or registry reuse would silently break these guards.
 		if tp.reg.WebSearchCalled && tp.reg.Replied {
 			break
 		}
