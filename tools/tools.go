@@ -235,6 +235,12 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if isStageDirection(p.Content) {
 		return "Replied.", nil
 	}
+	// Guardrail: only one visible reply per turn.
+	// Models occasionally call reply multiple times in one loop iteration chain,
+	// which leads to duplicate or near-duplicate Discord messages.
+	if *t.replied {
+		return "Reply already sent in this turn.", nil
+	}
 	parts := SplitMessage(p.Content, 2000)
 	for _, part := range parts {
 		if err := t.send(part); err != nil {

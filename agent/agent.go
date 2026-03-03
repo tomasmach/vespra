@@ -673,12 +673,13 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
 	}
-	sb.WriteString("You are receiving web search results. If the results contain URLs with specific data you need, you may call web_fetch to read a page for more precise information. Then summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Focus on presenting the new information clearly, with relevant sources and links.")
+	sb.WriteString("You are receiving web search results. If the results contain URLs with specific data you need, you may call web_fetch to read a page for more precise information. Then summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Focus on presenting only the new information clearly, with relevant sources and links. Keep it concise: max 5 short bullets or ~700 characters.")
 	if lang := cfg.ResolveLanguage(a.serverID, a.channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 
 	sendFn := func(text string) error {
+		text = truncateForInternalReply(text, 900)
 		_, err := a.resources.Session.ChannelMessageSend(a.channelID, text)
 		return err
 	}
@@ -1182,4 +1183,17 @@ func buildMessages(systemPrompt string, history []llm.Message) []llm.Message {
 	msgs = append(msgs, llm.Message{Role: "system", Content: systemPrompt})
 	msgs = append(msgs, history...)
 	return msgs
+}
+
+// truncateForInternalReply caps internal (search-result) replies to avoid very long dumps.
+func truncateForInternalReply(s string, limit int) string {
+	s = strings.TrimSpace(s)
+	if limit <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return strings.TrimSpace(string(r[:limit])) + "\n\n…(zkráceno)"
 }
