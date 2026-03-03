@@ -708,3 +708,60 @@ func TestSanitizeHistory(t *testing.T) {
 		})
 	}
 }
+
+func TestTruncateForInternalReply(t *testing.T) {
+	const suffix = "\n\n…(truncated)"
+
+	tests := []struct {
+		name  string
+		input string
+		limit int
+		want  string
+	}{
+		{
+			name:  "shorter than limit",
+			input: "hello",
+			limit: 10,
+			want:  "hello",
+		},
+		{
+			name:  "exactly at limit",
+			input: "hello",
+			limit: 5,
+			want:  "hello",
+		},
+		{
+			name:  "longer than limit",
+			input: "hello world",
+			limit: 5,
+			want:  "hello" + suffix,
+		},
+		{
+			name:  "limit zero",
+			input: "hello",
+			limit: 0,
+			want:  "hello",
+		},
+		{
+			name:  "limit negative",
+			input: "hello",
+			limit: -1,
+			want:  "hello",
+		},
+		{
+			name:  "multi-byte UTF-8 rune count not byte count",
+			input: "😀😀😀😀😀",
+			limit: 3,
+			want:  "😀😀😀" + suffix,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateForInternalReply(tt.input, tt.limit)
+			if got != tt.want {
+				t.Errorf("truncateForInternalReply(%q, %d) = %q; want %q", tt.input, tt.limit, got, tt.want)
+			}
+		})
+	}
+}
