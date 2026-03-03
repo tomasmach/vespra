@@ -55,7 +55,23 @@ func sanitizeHistory(msgs []llm.Message) []llm.Message {
 	if dropped > 0 {
 		slog.Warn("dropped leading non-user messages after history trim", "count", dropped)
 	}
-	return msgs
+	// Merge consecutive plain-text assistant messages (no tool calls) into one.
+	// Back-to-back assistant entries confuse some models and can cause empty responses.
+	out := make([]llm.Message, 0, len(msgs))
+	for _, m := range msgs {
+		last := len(out) - 1
+		if m.Role == "assistant" && len(m.ToolCalls) == 0 &&
+			last >= 0 && out[last].Role == "assistant" && len(out[last].ToolCalls) == 0 {
+			if out[last].Content != "" && m.Content != "" {
+				out[last].Content += "\n\n" + m.Content
+			} else if m.Content != "" {
+				out[last].Content = m.Content
+			}
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // ChannelAgent is a per-channel conversation goroutine.
@@ -1106,6 +1122,16 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			if err := tp.sendFn(p); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
+		}
+	}
+
+	// Fallback: if the bot produced no reply at all and the user directly addressed it,
+	// send an error nudge rather than going silent. This catches cases where the LLM
+	// returns empty content with no tool calls (e.g. confused by malformed history).
+	if !tp.internal && !tp.reg.Replied && assistantContent == "" && tp.addressed {
+		a.logger.Warn("LLM produced no output for addressed message; sending fallback")
+		if err := tp.sendFn("I'm having trouble responding. Please try again."); err != nil {
+			a.logger.Error("send message", "error", err)
 		}
 	}
 
