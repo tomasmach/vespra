@@ -679,7 +679,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	}
 
 	sendFn := func(text string) error {
-		text = truncateForInternalReply(text, 900)
+		text = truncateForInternalReply(text, 900) // hard ceiling; prompt asks for ~700 chars as soft guide
 		_, err := a.resources.Session.ChannelMessageSend(a.channelID, text)
 		return err
 	}
@@ -1195,5 +1195,5 @@ func truncateForInternalReply(s string, limit int) string {
 	if len(r) <= limit {
 		return s
 	}
-	return strings.TrimSpace(string(r[:limit])) + "\n\n…(zkráceno)"
+	return strings.TrimSpace(string(r[:limit])) + "\n\n…(truncated)"
 }

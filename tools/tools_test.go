@@ -109,3 +109,39 @@ func TestSplitMessageExactLimit(t *testing.T) {
 		t.Errorf("string exactly at limit should be 1 part, got %d", len(parts))
 	}
 }
+
+func TestReplyToolDeduplication(t *testing.T) {
+	sendCount := 0
+	send := func(content string) error {
+		sendCount++
+		return nil
+	}
+	react := func(emoji string) error { return nil }
+
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil)
+	ctx := context.Background()
+
+	// First call: should send and return "Replied."
+	result, err := r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"hello"}`))
+	if err != nil {
+		t.Fatalf("first Dispatch() returned unexpected error: %v", err)
+	}
+	if result != "Replied." {
+		t.Errorf("first call: expected %q, got %q", "Replied.", result)
+	}
+	if sendCount != 1 {
+		t.Errorf("first call: expected send count 1, got %d", sendCount)
+	}
+
+	// Second call: dedup guard should fire, send must not be called again.
+	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"hello again"}`))
+	if err != nil {
+		t.Fatalf("second Dispatch() returned unexpected error: %v", err)
+	}
+	if result != "Reply already sent in this turn." {
+		t.Errorf("second call: expected %q, got %q", "Reply already sent in this turn.", result)
+	}
+	if sendCount != 1 {
+		t.Errorf("second call: expected send count still 1, got %d", sendCount)
+	}
+}
