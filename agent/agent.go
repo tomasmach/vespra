@@ -186,6 +186,10 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 
 const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
 
+// internalTurnMaxIter caps tool iterations for system-generated turns (e.g. web search results):
+// 1 for web_fetch + 1 for reply + 1 for react/memory before stopping.
+const internalTurnMaxIter = 3
+
 // classifyAttachments partitions attachments into images and videos,
 // skipping videos that exceed maxVideoBytes.
 func classifyAttachments(attachments []*discordgo.MessageAttachment) (images, videos []*discordgo.MessageAttachment) {
@@ -710,7 +714,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 		llmMsgs:      llmMsgs,
 		userMsgText:  content,
 		internal:     true,
-		maxIter:      3, // 1 web_fetch + 1 reply + 1 react before cap
+		maxIter:      internalTurnMaxIter,
 	})
 	// Trim back to the pre-turn history length, preserving any assistant reply that
 	// processTurn appended, but dropping the injected system message entry.
