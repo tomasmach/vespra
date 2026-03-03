@@ -1013,6 +1013,24 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			tp.reg.ReplyText = ""
 		}
 
+		// If the LLM produced content alongside only side-effect tool calls (memory ops,
+		// react — not web_fetch or web_search), treat the content as the final reply and
+		// stop. Without this, the LLM loops again and calls web_fetch unnecessarily because
+		// it sees no sent reply in the context.
+		if !tp.reg.Replied && choice.Message.Content != "" {
+			hasFetch := false
+			for _, tc := range choice.Message.ToolCalls {
+				if tc.Function.Name == "web_fetch" || tc.Function.Name == "web_search" {
+					hasFetch = true
+					break
+				}
+			}
+			if !hasFetch {
+				assistantContent = choice.Message.Content
+				break
+			}
+		}
+
 		// Immediate break: web_search was invoked — results arrive async via
 		// handleInternalMessage. No need to wait for the reply tool; the LLM
 		// often puts a short status message in content (not via the reply tool),
