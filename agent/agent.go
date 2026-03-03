@@ -401,6 +401,18 @@ func (a *ChannelAgent) run(ctx context.Context) {
 		case intMsg := <-a.internalCh:
 			flush(ctx)
 			resetIdleTimer()
+			// Wait for all in-flight searches to finish, then drain any
+			// additional results so everything is handled in one turn.
+			a.searchWg.Wait()
+			for {
+				select {
+				case extra := <-a.internalCh:
+					intMsg += "\n\n" + extra
+				default:
+					goto drained
+				}
+			}
+		drained:
 			a.handleInternalMessage(ctx, intMsg)
 
 		case <-timerC(debounceTimer):
@@ -1001,11 +1013,16 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			tp.reg.ReplyText = ""
 		}
 
-		// Immediate break: web_search started + reply sent — results arrive async.
-		// These checks rely on Replied and WebSearchCalled being sticky latches that are never
-		// reset within a turn. tp.reg is created fresh per turn, so the assumption holds; a
-		// future reg.Reset() or registry reuse would silently break these guards.
-		if tp.reg.WebSearchCalled && tp.reg.Replied {
+		// Immediate break: web_search was invoked — results arrive async via
+		// handleInternalMessage. No need to wait for the reply tool; the LLM
+		// often puts a short status message in content (not via the reply tool),
+		// and continuing the loop lets it fire additional searches/fetches.
+		// Capture the inline content so the post-loop code can send it as the
+		// "searching" status message to Discord.
+		if tp.reg.WebSearchCalled {
+			if !tp.reg.Replied && choice.Message.Content != "" {
+				assistantContent = choice.Message.Content
+			}
 			break
 		}
 
