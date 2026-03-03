@@ -26,9 +26,10 @@ type Tool interface {
 
 // Registry holds registered tools and provides dispatch.
 type Registry struct {
-	tools     map[string]Tool
-	Replied   bool   // set to true when the reply tool is called
-	ReplyText string // the content argument passed to the reply tool
+	tools           map[string]Tool
+	Replied         bool   // set to true when the reply tool is called
+	ReplyText       string // the content argument passed to the reply tool
+	WebSearchCalled bool   // set to true when web_search is invoked
 }
 
 // NewRegistry creates an empty registry.
@@ -344,7 +345,8 @@ type WebSearchDeps struct {
 }
 
 type webSearchTool struct {
-	deps *WebSearchDeps
+	deps         *WebSearchDeps
+	searchCalled *bool
 }
 
 func (t *webSearchTool) Name() string { return "web_search" }
@@ -375,6 +377,7 @@ func (t *webSearchTool) Call(ctx context.Context, args json.RawMessage) (string,
 	if !t.deps.SearchRunning.CompareAndSwap(false, true) {
 		return "A web search is already running, please wait for results.", nil
 	}
+	*t.searchCalled = true
 
 	t.deps.SearchWg.Add(1)
 	go t.runSearch(p.Query)
@@ -437,7 +440,7 @@ func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold flo
 	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText})
 	r.Register(&reactTool{react: react})
 	if searchDeps != nil {
-		r.Register(&webSearchTool{deps: searchDeps})
+		r.Register(&webSearchTool{deps: searchDeps, searchCalled: &r.WebSearchCalled})
 		r.Register(&webFetchTool{timeoutSeconds: searchDeps.TimeoutSeconds})
 	}
 	return r

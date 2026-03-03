@@ -483,6 +483,7 @@ type turnParams struct {
 	llmMsgs      []llm.Message
 	userMsgText  string // human-readable user input for conversation logging
 	internal     bool   // true for system-generated turns (e.g., web search results); skips LogConversation
+	maxIter      int    // override cfg.Agent.MaxToolIterations; 0 = use config default
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
@@ -673,7 +674,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
 	}
-	sb.WriteString("You are receiving web search results. If the results contain URLs with specific data you need, you may call web_fetch to read a page for more precise information. Then summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Focus on presenting only the new information clearly, with relevant sources and links. Keep it concise: max 5 short bullets or ~700 characters.")
+	sb.WriteString("You are receiving web search results. If the results contain URLs with specific data you need, you may call web_fetch to read a page for more precise information. Then summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Do NOT reference or claim to have previously told the user anything — you have not spoken to them yet in this context. Focus on presenting only the new information clearly, with relevant sources and links. Keep it concise: max 5 short bullets or ~700 characters.")
 	if lang := cfg.ResolveLanguage(a.serverID, a.channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
@@ -709,6 +710,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 		llmMsgs:      llmMsgs,
 		userMsgText:  content,
 		internal:     true,
+		maxIter:      3, // 1 web_fetch + 1 reply + 1 react before cap
 	})
 	// Trim back to the pre-turn history length, preserving any assistant reply that
 	// processTurn appended, but dropping the injected system message entry.
@@ -934,11 +936,17 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	// appended to tp.llmMsgs don't corrupt the check.
 	visionResponse := len(tp.llmMsgs) > 0 && len(tp.llmMsgs[len(tp.llmMsgs)-1].ContentParts) > 0
 
+	maxIter := cfg.Agent.MaxToolIterations
+	if tp.maxIter > 0 {
+		maxIter = tp.maxIter
+	}
+
 	var toolCalls []toolCallRecord
 	var assistantContent string
 	var replyToolText string // captures the text sent via the reply tool before ReplyText is zeroed
+	postReplyIter := -1      // iteration at which the reply tool first fired
 	for iter := 0; ; iter++ {
-		if iter >= cfg.Agent.MaxToolIterations {
+		if iter >= maxIter {
 			if err := tp.sendFn("I got stuck in a loop. Please try again."); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
@@ -986,6 +994,19 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			replyToolText = tp.reg.ReplyText
 			tp.llmMsgs = append(tp.llmMsgs, llm.Message{Role: "assistant", Content: tp.reg.ReplyText})
 			tp.reg.ReplyText = ""
+		}
+
+		// Immediate break: web_search started + reply sent — results arrive async.
+		if tp.reg.WebSearchCalled && tp.reg.Replied {
+			break
+		}
+
+		// General post-reply cap: allow 1 more iteration for react/memory, then stop.
+		if tp.reg.Replied && postReplyIter < 0 {
+			postReplyIter = iter
+		}
+		if postReplyIter >= 0 && iter > postReplyIter+1 {
+			break
 		}
 	}
 
