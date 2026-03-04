@@ -205,7 +205,7 @@ const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
 // internalTurnMaxIter caps LLM completion round-trips for system-generated turns (e.g. web search
 // results). Each iteration may produce multiple tool calls. Assumes at most one web_fetch call per
 // internal turn; chaining two web_fetch calls before replying would tighten the budget unexpectedly.
-const internalTurnMaxIter = 4
+const internalTurnMaxIter = 3
 
 // classifyAttachments partitions attachments into images and videos,
 // skipping videos that exceed maxVideoBytes.
@@ -722,13 +722,9 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	}
 	reactFn := func(emoji string) error { return nil }
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, nil)
-	// Register web_fetch so the LLM can follow up on URLs from search results,
-	// but do NOT register web_search to prevent infinite search loops.
-	timeout := cfg.Tools.WebTimeoutSeconds
-	if cfg.Tools.Search.Timeout > 0 {
-		timeout = cfg.Tools.Search.Timeout
-	}
-	reg.RegisterWebFetch(timeout)
+	// Do NOT register web_search (infinite loops) or web_fetch (burns iterations
+	// on cookie walls / 403s without reaching a final answer). The search result
+	// snippets from Brave are sufficient to produce a concise reply.
 
 	userMsg := llm.Message{Role: "user", Content: content}
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
