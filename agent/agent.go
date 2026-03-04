@@ -716,7 +716,6 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	}
 
 	sendFn := func(text string) error {
-		text = truncateForInternalReply(text, 900) // hard ceiling; prompt asks for ~700 chars as soft guide
 		_, err := a.resources.Session.ChannelMessageSend(a.channelID, text)
 		return err
 	}
@@ -1279,15 +1278,3 @@ func buildMessages(systemPrompt string, history []llm.Message) []llm.Message {
 	return msgs
 }
 
-// truncateForInternalReply caps internal (search-result) replies to avoid very long dumps.
-func truncateForInternalReply(s string, limit int) string {
-	s = strings.TrimSpace(s)
-	if limit <= 0 {
-		return s
-	}
-	r := []rune(s)
-	if len(r) <= limit {
-		return s
-	}
-	return strings.TrimSpace(string(r[:limit])) + "\n\n…(truncated)"
-}
