@@ -33,7 +33,7 @@ type webFetchTool struct {
 	timeoutSeconds int
 }
 
-func (t *webFetchTool) Name() string { return "web_fetch" }
+func (t *webFetchTool) Name() string { return ToolNameWebFetch }
 func (t *webFetchTool) Description() string {
 	return "Fetch a web page and extract its readable text content. " +
 		"Use when you need to read actual page content — to get current data, " +

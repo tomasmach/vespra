@@ -1003,7 +1003,11 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 
 		tp.llmMsgs = append(tp.llmMsgs, choice.Message)
+		var hasFetchTool bool
 		for _, tc := range choice.Message.ToolCalls {
+			if tc.Function.Name == tools.ToolNameWebFetch || tc.Function.Name == tools.ToolNameWebSearch {
+				hasFetchTool = true
+			}
 			a.logger.Debug("tool call", "tool", tc.Function.Name)
 			result, err := tp.reg.Dispatch(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
 			if err != nil {
@@ -1034,18 +1038,9 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		// "Ukládám si tvoji strategii...") and should not be treated as a final reply.
 		// Without this guard, the loop would continue and the LLM calls web_fetch
 		// unnecessarily because it sees no sent reply in the context.
-		if !tp.reg.Replied && strings.Contains(choice.Message.Content, "\n") {
-			hasFetch := false
-			for _, tc := range choice.Message.ToolCalls {
-				if tc.Function.Name == "web_fetch" || tc.Function.Name == "web_search" {
-					hasFetch = true
-					break
-				}
-			}
-			if !hasFetch {
-				assistantContent = choice.Message.Content
-				break
-			}
+		if !tp.reg.Replied && !hasFetchTool && strings.Contains(choice.Message.Content, "\n") {
+			assistantContent = choice.Message.Content
+			break
 		}
 
 		// Immediate break: web_search was invoked — results arrive async via

@@ -16,6 +16,12 @@ import (
 	"github.com/tomasmach/vespra/memory"
 )
 
+// Tool name constants used across packages to avoid stringly-typed checks.
+const (
+	ToolNameWebSearch = "web_search"
+	ToolNameWebFetch  = "web_fetch"
+)
+
 // Tool is the interface every tool must implement.
 type Tool interface {
 	Name() string
@@ -349,7 +355,7 @@ type webSearchTool struct {
 	searchCalled *bool
 }
 
-func (t *webSearchTool) Name() string { return "web_search" }
+func (t *webSearchTool) Name() string { return ToolNameWebSearch }
 func (t *webSearchTool) Description() string {
 	return "Search the web for current information. You MUST call this tool to trigger a search — " +
 		"results will not appear unless you explicitly invoke it. " +
