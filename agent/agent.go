@@ -205,7 +205,7 @@ const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
 // internalTurnMaxIter caps LLM completion round-trips for system-generated turns (e.g. web search
 // results). Each iteration may produce multiple tool calls. Assumes at most one web_fetch call per
 // internal turn; chaining two web_fetch calls before replying would tighten the budget unexpectedly.
-const internalTurnMaxIter = 3
+const internalTurnMaxIter = 4
 
 // classifyAttachments partitions attachments into images and videos,
 // skipping videos that exceed maxVideoBytes.
@@ -1032,11 +1032,14 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			tp.reg.ReplyText = ""
 		}
 
-		// If the LLM produced content alongside only side-effect tool calls (memory ops,
-		// react — not web_fetch or web_search), treat the content as the final reply and
-		// stop. Without this, the LLM loops again and calls web_fetch unnecessarily because
-		// it sees no sent reply in the context.
-		if !tp.reg.Replied && choice.Message.Content != "" {
+		// If the LLM produced multi-line content alongside only side-effect tool calls
+		// (memory ops, react — not web_fetch or web_search), treat it as the final reply
+		// and stop. Multi-line content indicates a structured answer (e.g. a formatted
+		// stock list); single-line content is a transitional status comment (e.g.
+		// "Ukládám si tvoji strategii...") and should not be treated as a final reply.
+		// Without this guard, the loop would continue and the LLM calls web_fetch
+		// unnecessarily because it sees no sent reply in the context.
+		if !tp.reg.Replied && strings.Contains(choice.Message.Content, "\n") {
 			hasFetch := false
 			for _, tc := range choice.Message.ToolCalls {
 				if tc.Function.Name == "web_fetch" || tc.Function.Name == "web_search" {
