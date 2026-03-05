@@ -655,9 +655,9 @@ func TestVisionRoutesToGLMWhenVisionBaseURLMatchesGLMBaseURL(t *testing.T) {
 
 func TestDescribeMedia(t *testing.T) {
 	t.Run("no vision model returns empty string without HTTP call", func(t *testing.T) {
-		serverCalled := false
+		var serverCalled atomic.Bool
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			serverCalled = true
+			serverCalled.Store(true)
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		t.Cleanup(srv.Close)
@@ -674,7 +674,7 @@ func TestDescribeMedia(t *testing.T) {
 		if desc != "" {
 			t.Errorf("expected empty description, got %q", desc)
 		}
-		if serverCalled {
+		if serverCalled.Load() {
 			t.Error("expected no HTTP call when vision model is not set")
 		}
 	})
