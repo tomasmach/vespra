@@ -20,6 +20,7 @@ import (
 const (
 	ToolNameWebSearch = "web_search"
 	ToolNameWebFetch  = "web_fetch"
+	ToolNameImageGen  = "generate_image"
 )
 
 // Tool is the interface every tool must implement.
@@ -36,6 +37,7 @@ type Registry struct {
 	Replied         bool   // set to true when the reply tool is called
 	ReplyText       string // the content argument passed to the reply tool
 	WebSearchCalled bool   // set to true when web_search is invoked
+	ImageGenCalled  bool   // set to true when generate_image is invoked
 }
 
 // NewRegistry creates an empty registry.
@@ -440,7 +442,7 @@ func (t *webSearchTool) runSearch(query string) {
 
 // NewDefaultRegistry creates a registry with standard tools.
 // If searchDeps is non-nil, the async web_search and web_fetch tools are also registered.
-func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps) *Registry {
+func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps, imageGenDeps *ImageGenDeps) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID, dedupThreshold: dedupThreshold})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID, defaultTopN: defaultRecallLimit})
@@ -450,6 +452,9 @@ func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold flo
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps, searchCalled: &r.WebSearchCalled})
 		r.Register(&webFetchTool{timeoutSeconds: searchDeps.TimeoutSeconds})
+	}
+	if imageGenDeps != nil {
+		r.Register(&imageGenTool{deps: imageGenDeps, imageCalled: &r.ImageGenCalled})
 	}
 	return r
 }

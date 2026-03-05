@@ -38,7 +38,16 @@ Use web_fetch when:
 
 Do NOT use web_fetch when:
 - The user just wants a link recommendation — provide the URL directly
-- Search results already contain enough information to answer`
+- Search results already contain enough information to answer
+
+## Image Generation
+
+You can generate images using the generate_image tool. Rules:
+- Only generate images when the user explicitly asks (e.g., "draw", "create an image", "generate a picture", "visualize")
+- Before generating, use memory_recall if the subject is someone/something you may have memories about
+- Craft a detailed English prompt describing the scene, style, composition, lighting, and mood
+- Use the reply tool to tell the user you are generating the image
+- Do NOT generate images unprompted or as a surprise`
 
 // Load returns the soul/system prompt for the given server.
 // Resolution order:

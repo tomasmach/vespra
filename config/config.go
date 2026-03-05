@@ -69,8 +69,16 @@ type ResponseConfig struct {
 }
 
 type ToolsConfig struct {
-	WebTimeoutSeconds int         `toml:"web_timeout_seconds"`
+	WebTimeoutSeconds int          `toml:"web_timeout_seconds"`
 	Search            SearchConfig `toml:"search"`
+	Image             ImageConfig  `toml:"image"`
+}
+
+type ImageConfig struct {
+	APIKey              string `toml:"api_key" json:"-"`
+	Model               string `toml:"model"`
+	EnableSafetyChecker *bool  `toml:"enable_safety_checker"`
+	TimeoutSeconds      int    `toml:"timeout_seconds"`
 }
 
 type SearchConfig struct {
@@ -140,6 +148,10 @@ func Load(path string) (*Config, error) {
 		cfg.Memory.DBPath = v
 		slog.Info("db path overridden by env var", "VESPRA_DB_PATH", v)
 	}
+	if v := os.Getenv("FAL_API_KEY"); v != "" {
+		cfg.Tools.Image.APIKey = v
+		slog.Info("fal api key overridden by env var", "FAL_API_KEY", "***")
+	}
 	if v := os.Getenv("BRAVE_API_KEY"); v != "" {
 		cfg.Tools.Search.APIKey = v
 		slog.Info("brave api key overridden by env var", "BRAVE_API_KEY", "***")
@@ -193,6 +205,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Tools.Search.Provider == "" {
 		cfg.Tools.Search.Provider = "glm"
+	}
+	if cfg.Tools.Image.Model == "" {
+		cfg.Tools.Image.Model = "fal-ai/flux/schnell"
+	}
+	if cfg.Tools.Image.TimeoutSeconds <= 0 {
+		cfg.Tools.Image.TimeoutSeconds = 60
 	}
 	if cfg.Response.DefaultMode == "" {
 		cfg.Response.DefaultMode = "smart"

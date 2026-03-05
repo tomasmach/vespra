@@ -120,7 +120,7 @@ func TestReplyToolDeduplication(t *testing.T) {
 	}
 	react := func(emoji string) error { return nil }
 
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil)
 	ctx := context.Background()
 
 	// First call: should send and return "Replied."
@@ -198,7 +198,7 @@ func TestWebSearchCalledFlagSetOnSuccessfulCAS(t *testing.T) {
 
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil)
 
 	if r.WebSearchCalled {
 		t.Fatal("WebSearchCalled should be false before any tool call")
@@ -234,7 +234,7 @@ func TestWebSearchCalledFlagNotSetWhenAlreadyRunning(t *testing.T) {
 
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil)
 
 	result, err := r.Dispatch(context.Background(), "web_search", json.RawMessage(`{"query":"concurrent query"}`))
 	if err != nil {
@@ -264,7 +264,7 @@ func TestWebSearchCalledFlagEmptyQueryReturnsEarly(t *testing.T) {
 
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil)
 
 	result, err := r.Dispatch(context.Background(), "web_search", json.RawMessage(`{"query":""}`))
 	if err != nil {
@@ -289,7 +289,7 @@ func TestWebSearchCalledFlagEmptyQueryReturnsEarly(t *testing.T) {
 func TestRegistryLoopBreakConditionBothFlagsSet(t *testing.T) {
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil)
 
 	// Initially neither flag is set.
 	if r.WebSearchCalled || r.Replied {

@@ -96,6 +96,8 @@ type ChannelAgent struct {
 	extractionWg      sync.WaitGroup // tracks in-flight memory extraction goroutines
 	searchRunning     atomic.Bool    // prevents concurrent web searches
 	searchWg          sync.WaitGroup // tracks in-flight web search goroutines
+	imageRunning      atomic.Bool    // prevents concurrent image generations
+	imageWg           sync.WaitGroup // tracks in-flight image generation goroutines
 
 	ctx        context.Context    // agent's own context; set at the start of run()
 	msgCh      chan *discordgo.MessageCreate // buffered 100
@@ -350,6 +352,7 @@ func (a *ChannelAgent) run(ctx context.Context) {
 	// so that SQLite connections are not closed while they are still running.
 	defer a.extractionWg.Wait()
 	defer a.searchWg.Wait()
+	defer a.imageWg.Wait()
 
 	idleTimeout := time.Duration(a.cfgStore.Get().Agent.IdleTimeoutMinutes) * time.Minute
 	idleTimer := time.NewTimer(idleTimeout)
@@ -570,7 +573,14 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps())
+	sendImageFn := func(filename string, data io.Reader, caption string) error {
+		_, err := a.resources.Session.ChannelMessageSendComplex(msg.ChannelID, &discordgo.MessageSend{
+			Content: caption,
+			Files:   []*discordgo.File{{Name: filename, Reader: data}},
+		})
+		return err
+	}
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(sendImageFn, sendFn))
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	if hasMediaParts(userMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
@@ -720,7 +730,14 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps())
+	sendImageFn := func(filename string, data io.Reader, caption string) error {
+		_, err := a.resources.Session.ChannelMessageSendComplex(lastMsg.ChannelID, &discordgo.MessageSend{
+			Content: caption,
+			Files:   []*discordgo.File{{Name: filename, Reader: data}},
+		})
+		return err
+	}
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(sendImageFn, sendFn))
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 	if hasMediaParts(combinedUserMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
@@ -776,7 +793,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 		return err
 	}
 	reactFn := func(emoji string) error { return nil }
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, nil)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, nil, nil)
 	// Do NOT register web_search (infinite loops) or web_fetch (burns iterations
 	// on cookie walls / 403s without reaching a final answer). The search result
 	// snippets from Brave are sufficient to produce a concise reply.
@@ -1013,6 +1030,28 @@ func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
 	}
 }
 
+func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tools.SendFunc) *tools.ImageGenDeps {
+	cfg := a.cfgStore.Get()
+	if cfg.Tools.Image.APIKey == "" {
+		return nil
+	}
+	safetyChecker := true
+	if cfg.Tools.Image.EnableSafetyChecker != nil {
+		safetyChecker = *cfg.Tools.Image.EnableSafetyChecker
+	}
+	return &tools.ImageGenDeps{
+		SendImage:      sendImage,
+		SendText:       sendText,
+		ImageWg:        &a.imageWg,
+		ImageRunning:   &a.imageRunning,
+		Ctx:            a.ctx,
+		APIKey:         cfg.Tools.Image.APIKey,
+		Model:          cfg.Tools.Image.Model,
+		SafetyChecker:  safetyChecker,
+		TimeoutSeconds: cfg.Tools.Image.TimeoutSeconds,
+	}
+}
+
 // processTurn runs the tool-call loop, applies content suppression, logs the
 // conversation, sends the reply, and updates history. Both handleMessage and
 // handleMessages delegate here after preparing their inputs.
@@ -1061,7 +1100,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		tp.llmMsgs = append(tp.llmMsgs, choice.Message)
 		var hasFetchTool bool
 		for _, tc := range choice.Message.ToolCalls {
-			if tc.Function.Name == tools.ToolNameWebFetch || tc.Function.Name == tools.ToolNameWebSearch {
+			if tc.Function.Name == tools.ToolNameWebFetch || tc.Function.Name == tools.ToolNameWebSearch || tc.Function.Name == tools.ToolNameImageGen {
 				hasFetchTool = true
 			}
 			a.logger.Debug("tool call", "tool", tc.Function.Name)
@@ -1106,6 +1145,15 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		// Capture the inline content so the post-loop code can send it as the
 		// "searching" status message to Discord.
 		if tp.reg.WebSearchCalled {
+			if !tp.reg.Replied && choice.Message.Content != "" {
+				assistantContent = choice.Message.Content
+			}
+			break
+		}
+
+		// Immediate break: generate_image was invoked — the image is sent
+		// directly to Discord from the background goroutine.
+		if tp.reg.ImageGenCalled {
 			if !tp.reg.Replied && choice.Message.Content != "" {
 				assistantContent = choice.Message.Content
 			}
