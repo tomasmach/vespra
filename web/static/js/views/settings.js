@@ -100,6 +100,12 @@ export async function render(container, params) {
     value: (imageConfig && imageConfig.model) || '',
     placeholder: 'fal-ai/flux/schnell',
   });
+  const imgImg2ImgModelInput = el('input', {
+    className: 'input',
+    type: 'text',
+    value: (imageConfig && imageConfig.img2img_model) || '',
+    placeholder: 'fal-ai/flux/dev/image-to-image',
+  });
 
   // Three states: null (inherit/default), true (enabled), false (disabled)
   // Initialize from current config: null if not set, otherwise the boolean value
@@ -155,6 +161,7 @@ export async function render(container, params) {
         if (keyVal) data.api_key = keyVal;
         const modelVal = imgModelInput.value.trim();
         if (modelVal) data.model = modelVal;
+        data.img2img_model = imgImg2ImgModelInput.value.trim();
         // Always send enable_safety_checker: null means clear, true/false means set
         data.enable_safety_checker = imgSafetyState.value;
         const timeoutVal = parseInt(imgTimeoutInput.value, 10);
@@ -185,6 +192,11 @@ export async function render(container, params) {
         el('label', { className: 'input-label' }, 'Model'),
         imgModelInput,
         el('span', { className: 'input-hint' }, 'Default: fal-ai/flux/schnell'),
+      ),
+      el('div', { className: 'input-group' },
+        el('label', { className: 'input-label' }, 'Image-to-Image Model'),
+        imgImg2ImgModelInput,
+        el('span', { className: 'input-hint' }, 'Used when a reference image is attached. Default: fal-ai/flux/dev/image-to-image'),
       ),
       el('div', { style: { display: 'flex', gap: 'var(--sp-6)', alignItems: 'flex-start' } },
         el('div', { className: 'input-group' },

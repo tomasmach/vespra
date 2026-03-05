@@ -189,6 +189,13 @@ default_mode = "smart"      # smart | mention | all | none
 [tools]
 web_search_key = "..."      # optional; web_search disabled if absent
 
+[tools.image]
+api_key = "..."                                         # fal.ai API key; image generation disabled if absent
+model = "fal-ai/flux/schnell"                           # text-to-image model
+img2img_model = "fal-ai/flux/dev/image-to-image"       # image-to-image model (used when reference image attached)
+enable_safety_checker = true
+timeout_seconds = 60
+
 [web]
 addr = ":8080"              # management UI address (default :8080)
 

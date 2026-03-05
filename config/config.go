@@ -77,6 +77,7 @@ type ToolsConfig struct {
 type ImageConfig struct {
 	APIKey              string `toml:"api_key" json:"-"`
 	Model               string `toml:"model"`
+	Img2ImgModel        string `toml:"img2img_model"`
 	EnableSafetyChecker *bool  `toml:"enable_safety_checker"`
 	TimeoutSeconds      int    `toml:"timeout_seconds"`
 }
@@ -107,6 +108,7 @@ type AgentConfig struct {
 type AgentImageConfig struct {
 	APIKey              string `toml:"api_key" json:"-"`
 	Model               string `toml:"model" json:"model,omitempty"`
+	Img2ImgModel        string `toml:"img2img_model" json:"img2img_model,omitempty"`
 	EnableSafetyChecker *bool  `toml:"enable_safety_checker" json:"enable_safety_checker,omitempty"`
 }
 
@@ -217,6 +219,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Tools.Image.Model == "" {
 		cfg.Tools.Image.Model = "fal-ai/flux/schnell"
+	}
+	if cfg.Tools.Image.Img2ImgModel == "" {
+		cfg.Tools.Image.Img2ImgModel = "fal-ai/flux/dev/image-to-image"
 	}
 	if cfg.Tools.Image.TimeoutSeconds <= 0 {
 		cfg.Tools.Image.TimeoutSeconds = 60
