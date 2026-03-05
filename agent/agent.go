@@ -573,14 +573,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	sendImageFn := func(filename string, data io.Reader, caption string) error {
-		_, err := a.resources.Session.ChannelMessageSendComplex(msg.ChannelID, &discordgo.MessageSend{
-			Content: caption,
-			Files:   []*discordgo.File{{Name: filename, Reader: data}},
-		})
-		return err
-	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(sendImageFn, sendFn))
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn))
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	if hasMediaParts(userMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
@@ -730,14 +723,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	sendImageFn := func(filename string, data io.Reader, caption string) error {
-		_, err := a.resources.Session.ChannelMessageSendComplex(lastMsg.ChannelID, &discordgo.MessageSend{
-			Content: caption,
-			Files:   []*discordgo.File{{Name: filename, Reader: data}},
-		})
-		return err
-	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(sendImageFn, sendFn))
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn))
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 	if hasMediaParts(combinedUserMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
@@ -1027,6 +1013,16 @@ func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
 		TimeoutSeconds: timeout,
 		SearchProvider: cfg.Tools.Search.Provider,
 		SearchAPIKey:   cfg.Tools.Search.APIKey,
+	}
+}
+
+func (a *ChannelAgent) makeSendImageFn(channelID string) tools.SendImageFunc {
+	return func(filename string, data io.Reader, caption string) error {
+		_, err := a.resources.Session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+			Content: caption,
+			Files:   []*discordgo.File{{Name: filename, Reader: data}},
+		})
+		return err
 	}
 }
 
