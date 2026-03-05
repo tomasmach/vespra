@@ -23,6 +23,9 @@ import (
 	"github.com/tomasmach/vespra/tools"
 )
 
+// maxMediaDescriptionRunes is the maximum length of a media description before truncation.
+const maxMediaDescriptionRunes = 500
+
 // toolCallRecord is used to log tool calls made during a conversation turn.
 type toolCallRecord struct {
 	Name   string `json:"name"`
@@ -570,6 +573,10 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps())
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
+	if hasMediaParts(userMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
+		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
+		a.annotateMediaDescription(ctx, cfg, &userMsg)
+	}
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
 	llmMsgs = append(llmMsgs, userMsg)
@@ -583,6 +590,51 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		userMsgText:  historyUserContent(msg.Message, botID, botName),
 		addressed:    addressed,
 	})
+}
+
+// hasMediaParts reports whether parts contains at least one image or video part.
+func hasMediaParts(parts []llm.ContentPart) bool {
+	for _, p := range parts {
+		if p.Type == "image_url" || p.Type == "video_url" {
+			return true
+		}
+	}
+	return false
+}
+
+// annotateMediaDescription calls the vision model to produce a short text description
+// of the media in msg.ContentParts and injects it into the text content part.
+// This description survives stripImages() so the main model can reference it later.
+// The full msg.ContentParts slice (including any user text) is passed to DescribeMedia
+// intentionally — this gives the vision model context about what the user said.
+func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, cfg *config.Config, msg *llm.Message) {
+	// 4x: 1 per retry attempt (up to 3 retries) plus 1 buffer for backoff delays.
+	timeout := time.Duration(cfg.LLM.RequestTimeoutSeconds) * time.Second * 4
+	descCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	desc, err := a.llm.DescribeMedia(descCtx, msg.ContentParts)
+	if err != nil {
+		a.logger.Warn("media description failed", "error", err)
+		return
+	}
+	desc = strings.TrimSpace(desc)
+	if desc == "" {
+		return
+	}
+	if runes := []rune(desc); len(runes) > maxMediaDescriptionRunes {
+		desc = string(runes[:maxMediaDescriptionRunes]) + "..."
+	}
+	for i := range msg.ContentParts {
+		if msg.ContentParts[i].Type == "text" {
+			msg.ContentParts[i].Text += "\n[Media description: " + desc + "]"
+			return
+		}
+	}
+	// No text part found (image-only message): prepend a new text part so the
+	// description is not silently dropped.
+	msg.ContentParts = append([]llm.ContentPart{{Type: "text", Text: "[Media description: " + desc + "]"}}, msg.ContentParts...)
+	a.logger.Debug("prepended media description text part for image-only message")
 }
 
 // buildCombinedContent builds the combined user content string for a batch of coalesced messages.
@@ -671,6 +723,10 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps())
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
+	if hasMediaParts(combinedUserMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
+		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
+		a.annotateMediaDescription(ctx, cfg, &combinedUserMsg)
+	}
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)

@@ -653,6 +653,75 @@ func TestVisionRoutesToGLMWhenVisionBaseURLMatchesGLMBaseURL(t *testing.T) {
 	}
 }
 
+func TestDescribeMedia(t *testing.T) {
+	t.Run("no vision model returns empty string without HTTP call", func(t *testing.T) {
+		var serverCalled atomic.Bool
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			serverCalled.Store(true)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(srv.Close)
+
+		// clientWithBaseURL does not set VisionModel, so DescribeMedia should short-circuit.
+		client := clientWithBaseURL(t, srv.URL)
+		parts := []llm.ContentPart{
+			{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://example.com/img.png"}},
+		}
+		desc, err := client.DescribeMedia(context.Background(), parts)
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+		if desc != "" {
+			t.Errorf("expected empty description, got %q", desc)
+		}
+		if serverCalled.Load() {
+			t.Error("expected no HTTP call when vision model is not set")
+		}
+	})
+
+	t.Run("vision model set returns description text", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]any{"role": "assistant", "content": "A cat sitting on a mat."}},
+				},
+			})
+		}))
+		t.Cleanup(srv.Close)
+
+		client := clientWithVisionModel(t, srv.URL)
+		parts := []llm.ContentPart{
+			{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://example.com/cat.png"}},
+		}
+		desc, err := client.DescribeMedia(context.Background(), parts)
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+		if desc != "A cat sitting on a mat." {
+			t.Errorf("expected description %q, got %q", "A cat sitting on a mat.", desc)
+		}
+	})
+
+	t.Run("HTTP 5xx returns error", func(t *testing.T) {
+		t.Cleanup(llm.SetRetryDelays([]time.Duration{0, 0}))
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(srv.Close)
+
+		client := clientWithVisionModel(t, srv.URL)
+		parts := []llm.ContentPart{
+			{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://example.com/img.png"}},
+		}
+		_, err := client.DescribeMedia(context.Background(), parts)
+		if err == nil {
+			t.Fatal("expected error on 5xx, got nil")
+		}
+	})
+}
+
 func TestMessageMarshalContentParts(t *testing.T) {
 	msg := llm.Message{
 		Role: "user",

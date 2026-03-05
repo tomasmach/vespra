@@ -43,6 +43,7 @@ type LLMConfig struct {
 	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
 	BaseURL               string `toml:"base_url" json:"-"`
 	EmbeddingBaseURL      string `toml:"embedding_base_url" json:"-"`
+	MediaDescriptions     *bool  `toml:"media_descriptions"` // nil = enabled when vision_model set
 }
 
 type MemoryConfig struct {
