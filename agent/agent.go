@@ -1032,12 +1032,28 @@ func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
 
 func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tools.SendFunc) *tools.ImageGenDeps {
 	cfg := a.cfgStore.Get()
-	if cfg.Tools.Image.APIKey == "" {
-		return nil
-	}
+
+	// Resolve per-agent overrides over global config.
+	apiKey := cfg.Tools.Image.APIKey
+	model := cfg.Tools.Image.Model
 	safetyChecker := true
 	if cfg.Tools.Image.EnableSafetyChecker != nil {
 		safetyChecker = *cfg.Tools.Image.EnableSafetyChecker
+	}
+	if a.resources.Config != nil {
+		if a.resources.Config.Image.APIKey != "" {
+			apiKey = a.resources.Config.Image.APIKey
+		}
+		if a.resources.Config.Image.Model != "" {
+			model = a.resources.Config.Image.Model
+		}
+		if a.resources.Config.Image.EnableSafetyChecker != nil {
+			safetyChecker = *a.resources.Config.Image.EnableSafetyChecker
+		}
+	}
+
+	if apiKey == "" {
+		return nil
 	}
 	return &tools.ImageGenDeps{
 		SendImage:      sendImage,
@@ -1045,8 +1061,8 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 		ImageWg:        &a.imageWg,
 		ImageRunning:   &a.imageRunning,
 		Ctx:            a.ctx,
-		APIKey:         cfg.Tools.Image.APIKey,
-		Model:          cfg.Tools.Image.Model,
+		APIKey:         apiKey,
+		Model:          model,
 		SafetyChecker:  safetyChecker,
 		TimeoutSeconds: cfg.Tools.Image.TimeoutSeconds,
 	}

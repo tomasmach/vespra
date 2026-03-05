@@ -99,6 +99,15 @@ type AgentConfig struct {
 	Model        string          `toml:"model" json:"model,omitempty"`       // model name override; "" = use global
 	IgnoreUsers  []string        `toml:"ignore_users,omitempty" json:"ignore_users,omitempty"`
 	Channels     []ChannelConfig `toml:"channels" json:"channels,omitempty"`
+	Image        AgentImageConfig `toml:"image" json:"image,omitempty"`
+}
+
+// AgentImageConfig holds per-agent image generation overrides.
+// Non-zero fields override the global [tools.image] settings.
+type AgentImageConfig struct {
+	APIKey              string `toml:"api_key" json:"-"`
+	Model               string `toml:"model" json:"model,omitempty"`
+	EnableSafetyChecker *bool  `toml:"enable_safety_checker" json:"enable_safety_checker,omitempty"`
 }
 
 // ResolveDBPath returns the DB path for this agent.
