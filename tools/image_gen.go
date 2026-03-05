@@ -38,7 +38,8 @@ type imageGenTool struct {
 
 func (t *imageGenTool) Name() string { return ToolNameImageGen }
 func (t *imageGenTool) Description() string {
-	return "Generate an image from a text prompt. Only use when the user explicitly asks you to draw, create, or generate an image. " +
+	return "Generate an image from a text prompt. Call this tool whenever the user asks you to draw, create, make, generate, visualize, or show an image or picture of anything — including requests phrased as 'make an image of X', 'show me what X looks like', 'draw X', or similar. " +
+		"Do NOT describe the image generation in your text — always call this tool first. " +
 		"After calling this tool, use the reply tool to tell the user you are generating the image (in their language)."
 }
 func (t *imageGenTool) Parameters() json.RawMessage {
@@ -151,7 +152,7 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 		return
 	}
 
-	if len(falResp.HasNSFWConcepts) > 0 && falResp.HasNSFWConcepts[0] {
+	if t.deps.SafetyChecker && len(falResp.HasNSFWConcepts) > 0 && falResp.HasNSFWConcepts[0] {
 		slog.Warn("image gen NSFW content blocked", "prompt", prompt)
 		_ = t.deps.SendText("The generated image was flagged as inappropriate and was not sent.")
 		return
