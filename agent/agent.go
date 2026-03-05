@@ -579,13 +579,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		a.annotateMediaDescription(ctx, cfg, &userMsg)
 	}
 
-	// Extract reference image URL for img2img (first image part from the message).
 	imgDeps := a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn)
-	for _, p := range userMsg.ContentParts {
-		if p.Type == "image_url" && p.ImageURL != nil && imgDeps != nil {
-			imgDeps.ReferenceImageURL = p.ImageURL.URL
-			break
-		}
+	if imgDeps != nil {
+		imgDeps.ReferenceImageURL = firstImageURL(userMsg.ContentParts)
 	}
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), imgDeps)
 
@@ -612,6 +608,16 @@ func hasMediaParts(parts []llm.ContentPart) bool {
 		}
 	}
 	return false
+}
+
+// firstImageURL returns the URL of the first image_url content part, or empty string.
+func firstImageURL(parts []llm.ContentPart) string {
+	for _, p := range parts {
+		if p.Type == "image_url" && p.ImageURL != nil {
+			return p.ImageURL.URL
+		}
+	}
+	return ""
 }
 
 // annotateMediaDescription calls the vision model to produce a short text description
@@ -738,13 +744,9 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		a.annotateMediaDescription(ctx, cfg, &combinedUserMsg)
 	}
 
-	// Extract reference image URL for img2img (first image part from the batch).
 	imgDeps := a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn)
-	for _, p := range combinedUserMsg.ContentParts {
-		if p.Type == "image_url" && p.ImageURL != nil && imgDeps != nil {
-			imgDeps.ReferenceImageURL = p.ImageURL.URL
-			break
-		}
+	if imgDeps != nil {
+		imgDeps.ReferenceImageURL = firstImageURL(combinedUserMsg.ContentParts)
 	}
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), imgDeps)
 

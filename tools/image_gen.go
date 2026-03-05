@@ -77,8 +77,17 @@ func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, 
 	}
 	*t.imageCalled = true
 
+	refURL := ""
+	if p.UseReferenceImage {
+		if t.deps.ReferenceImageURL == "" {
+			slog.Warn("use_reference_image requested but no reference image available, falling back to text-to-image", "prompt", p.Prompt)
+		} else {
+			refURL = t.deps.ReferenceImageURL
+		}
+	}
+
 	t.deps.ImageWg.Add(1)
-	go t.runGenerate(p.Prompt, p.ImageSize, p.UseReferenceImage)
+	go t.runGenerate(p.Prompt, p.ImageSize, refURL)
 	return fmt.Sprintf("Image generation started for prompt: %q — the image will be sent shortly.", p.Prompt), nil
 }
 
@@ -100,7 +109,13 @@ type falResponse struct {
 	HasNSFWConcepts []bool `json:"has_nsfw_concepts"`
 }
 
-func (t *imageGenTool) runGenerate(prompt, imageSize string, useReference bool) {
+// img2img generation parameters. Schnell uses 4 steps; dev/img2img needs more for quality.
+const (
+	img2imgStrength       = 0.85 // blend between reference and new prompt (0=reference, 1=prompt)
+	img2imgInferenceSteps = 28
+)
+
+func (t *imageGenTool) runGenerate(prompt, imageSize, referenceURL string) {
 	defer t.deps.ImageWg.Done()
 	defer t.deps.ImageRunning.Store(false)
 
@@ -116,13 +131,11 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string, useReference bool) 
 		NumImages:           1,
 		OutputFormat:        "jpeg",
 	}
-	if useReference && t.deps.ReferenceImageURL != "" {
+	if referenceURL != "" {
 		model = t.deps.Img2ImgModel
-		reqBody.ImageURL = t.deps.ReferenceImageURL
-		reqBody.Strength = 0.85
-		reqBody.NumInferenceSteps = 28
-	} else if useReference {
-		slog.Warn("use_reference_image requested but no reference image available, falling back to text-to-image", "prompt", prompt)
+		reqBody.ImageURL = referenceURL
+		reqBody.Strength = img2imgStrength
+		reqBody.NumInferenceSteps = img2imgInferenceSteps
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
