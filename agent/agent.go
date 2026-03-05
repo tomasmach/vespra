@@ -632,6 +632,7 @@ func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, msg *llm.Me
 	// No text part found (image-only message): prepend a new text part so the
 	// description is not silently dropped.
 	msg.ContentParts = append([]llm.ContentPart{{Type: "text", Text: "[Media description: " + desc + "]"}}, msg.ContentParts...)
+	a.logger.Debug("prepended media description text part for image-only message")
 }
 
 // buildCombinedContent builds the combined user content string for a batch of coalesced messages.
