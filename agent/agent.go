@@ -1237,7 +1237,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	// Fallback: if the bot produced no reply at all and the user directly addressed it,
 	// send an error nudge rather than going silent. This catches cases where the LLM
 	// returns empty content with no tool calls (e.g. confused by malformed history).
-	if !tp.internal && !tp.reg.Replied && assistantContent == "" && tp.addressed {
+	if !tp.internal && !tp.reg.Replied && !tp.reg.ImageGenCalled && assistantContent == "" && tp.addressed {
 		a.logger.Warn("LLM produced no output for addressed message; sending fallback")
 		if err := tp.sendFn("I'm having trouble responding. Please try again."); err != nil {
 			a.logger.Error("send message", "error", err)
