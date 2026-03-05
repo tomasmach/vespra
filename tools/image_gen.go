@@ -19,16 +19,18 @@ type SendImageFunc func(filename string, data io.Reader, caption string) error
 // ImageGenDeps groups dependencies for the async image generation tool.
 // Pass nil to NewDefaultRegistry to omit image generation from the registry.
 type ImageGenDeps struct {
-	SendImage      SendImageFunc
-	SendText       SendFunc
-	ImageWg        *sync.WaitGroup
-	ImageRunning   *atomic.Bool
-	Ctx            context.Context
-	APIKey         string
-	Model          string
-	SafetyChecker  bool
-	TimeoutSeconds int
-	BaseURL        string // for testing; overrides https://fal.run
+	SendImage         SendImageFunc
+	SendText          SendFunc
+	ImageWg           *sync.WaitGroup
+	ImageRunning      *atomic.Bool
+	Ctx               context.Context
+	APIKey            string
+	Model             string
+	Img2ImgModel      string // model to use when ReferenceImageURL is set
+	ReferenceImageURL string // base64 data URL of user-attached image (empty = no reference)
+	SafetyChecker     bool
+	TimeoutSeconds    int
+	BaseURL           string // for testing; overrides https://fal.run
 }
 
 type imageGenTool struct {
@@ -47,7 +49,8 @@ func (t *imageGenTool) Parameters() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"prompt": {"type": "string", "description": "A detailed English prompt describing the image to generate."},
-			"image_size": {"type": "string", "description": "Image size/aspect ratio. Options: square_hd, square, portrait_4_3, portrait_16_9, landscape_4_3, landscape_16_9. Default: landscape_4_3."}
+			"image_size": {"type": "string", "description": "Image size/aspect ratio. Options: square_hd, square, portrait_4_3, portrait_16_9, landscape_4_3, landscape_16_9. Default: landscape_4_3."},
+			"use_reference_image": {"type": "boolean", "description": "Set to true to use the user's attached image as a visual reference for generation. Only valid when the user has attached an image in this message."}
 		},
 		"required": ["prompt"]
 	}`)
@@ -55,8 +58,9 @@ func (t *imageGenTool) Parameters() json.RawMessage {
 
 func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		Prompt    string `json:"prompt"`
-		ImageSize string `json:"image_size"`
+		Prompt           string `json:"prompt"`
+		ImageSize        string `json:"image_size"`
+		UseReferenceImage bool   `json:"use_reference_image"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
@@ -74,17 +78,19 @@ func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, 
 	*t.imageCalled = true
 
 	t.deps.ImageWg.Add(1)
-	go t.runGenerate(p.Prompt, p.ImageSize)
+	go t.runGenerate(p.Prompt, p.ImageSize, p.UseReferenceImage)
 	return fmt.Sprintf("Image generation started for prompt: %q — the image will be sent shortly.", p.Prompt), nil
 }
 
 type falRequest struct {
-	Prompt              string `json:"prompt"`
-	NumInferenceSteps   int    `json:"num_inference_steps"`
-	ImageSize           string `json:"image_size"`
-	EnableSafetyChecker bool   `json:"enable_safety_checker"`
-	NumImages           int    `json:"num_images"`
-	OutputFormat        string `json:"output_format"`
+	Prompt              string  `json:"prompt"`
+	NumInferenceSteps   int     `json:"num_inference_steps"`
+	ImageSize           string  `json:"image_size"`
+	EnableSafetyChecker bool    `json:"enable_safety_checker"`
+	NumImages           int     `json:"num_images"`
+	OutputFormat        string  `json:"output_format"`
+	ImageURL            string  `json:"image_url,omitempty"` // for img2img
+	Strength            float64 `json:"strength,omitempty"`  // 0.0–1.0, deviation from reference
 }
 
 type falResponse struct {
@@ -94,13 +100,14 @@ type falResponse struct {
 	HasNSFWConcepts []bool `json:"has_nsfw_concepts"`
 }
 
-func (t *imageGenTool) runGenerate(prompt, imageSize string) {
+func (t *imageGenTool) runGenerate(prompt, imageSize string, useReference bool) {
 	defer t.deps.ImageWg.Done()
 	defer t.deps.ImageRunning.Store(false)
 
 	ctx, cancel := context.WithTimeout(t.deps.Ctx, time.Duration(t.deps.TimeoutSeconds)*time.Second)
 	defer cancel()
 
+	model := t.deps.Model
 	reqBody := falRequest{
 		Prompt:              prompt,
 		NumInferenceSteps:   4,
@@ -109,6 +116,15 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 		NumImages:           1,
 		OutputFormat:        "jpeg",
 	}
+	if useReference && t.deps.ReferenceImageURL != "" {
+		model = t.deps.Img2ImgModel
+		reqBody.ImageURL = t.deps.ReferenceImageURL
+		reqBody.Strength = 0.85
+		reqBody.NumInferenceSteps = 28
+	} else if useReference {
+		slog.Warn("use_reference_image requested but no reference image available, falling back to text-to-image", "prompt", prompt)
+	}
+
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		slog.Error("image gen marshal error", "error", err)
@@ -122,7 +138,7 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	if baseURL == "" {
 		baseURL = "https://fal.run"
 	}
-	url := fmt.Sprintf("%s/%s", baseURL, t.deps.Model)
+	url := fmt.Sprintf("%s/%s", baseURL, model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		slog.Error("image gen request creation error", "error", err)

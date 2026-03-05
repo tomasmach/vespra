@@ -573,13 +573,22 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn))
-
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	if hasMediaParts(userMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
 		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
 		a.annotateMediaDescription(ctx, cfg, &userMsg)
 	}
+
+	// Extract reference image URL for img2img (first image part from the message).
+	imgDeps := a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn)
+	for _, p := range userMsg.ContentParts {
+		if p.Type == "image_url" && p.ImageURL != nil && imgDeps != nil {
+			imgDeps.ReferenceImageURL = p.ImageURL.URL
+			break
+		}
+	}
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), imgDeps)
+
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
 	llmMsgs = append(llmMsgs, userMsg)
@@ -723,13 +732,21 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn))
-
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 	if hasMediaParts(combinedUserMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
 		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
 		a.annotateMediaDescription(ctx, cfg, &combinedUserMsg)
 	}
+
+	// Extract reference image URL for img2img (first image part from the batch).
+	imgDeps := a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn)
+	for _, p := range combinedUserMsg.ContentParts {
+		if p.Type == "image_url" && p.ImageURL != nil && imgDeps != nil {
+			imgDeps.ReferenceImageURL = p.ImageURL.URL
+			break
+		}
+	}
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), imgDeps)
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
@@ -1032,6 +1049,7 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 	// Resolve per-agent overrides over global config.
 	apiKey := cfg.Tools.Image.APIKey
 	model := cfg.Tools.Image.Model
+	img2imgModel := cfg.Tools.Image.Img2ImgModel
 	safetyChecker := true
 	if cfg.Tools.Image.EnableSafetyChecker != nil {
 		safetyChecker = *cfg.Tools.Image.EnableSafetyChecker
@@ -1042,6 +1060,9 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 		}
 		if a.resources.Config.Image.Model != "" {
 			model = a.resources.Config.Image.Model
+		}
+		if a.resources.Config.Image.Img2ImgModel != "" {
+			img2imgModel = a.resources.Config.Image.Img2ImgModel
 		}
 		if a.resources.Config.Image.EnableSafetyChecker != nil {
 			safetyChecker = *a.resources.Config.Image.EnableSafetyChecker
@@ -1059,6 +1080,7 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 		Ctx:            a.ctx,
 		APIKey:         apiKey,
 		Model:          model,
+		Img2ImgModel:   img2imgModel,
 		SafetyChecker:  safetyChecker,
 		TimeoutSeconds: cfg.Tools.Image.TimeoutSeconds,
 	}

@@ -1127,6 +1127,7 @@ func (s *Server) handleGetImageConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"has_api_key":           cfg.Tools.Image.APIKey != "",
 		"model":                 cfg.Tools.Image.Model,
+		"img2img_model":         cfg.Tools.Image.Img2ImgModel,
 		"enable_safety_checker": cfg.Tools.Image.EnableSafetyChecker,
 		"timeout_seconds":       cfg.Tools.Image.TimeoutSeconds,
 	})
@@ -1136,6 +1137,7 @@ func (s *Server) handlePutImageConfig(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		APIKey              string          `json:"api_key"`
 		Model               string          `json:"model"`
+		Img2ImgModel        string          `json:"img2img_model"`
 		EnableSafetyChecker json.RawMessage `json:"enable_safety_checker"` // null = clear, true/false = set, absent = no change
 		TimeoutSeconds      int             `json:"timeout_seconds"`
 	}
@@ -1161,6 +1163,9 @@ func (s *Server) handlePutImageConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if input.Model != "" {
 			img["model"] = input.Model
+		}
+		if input.Img2ImgModel != "" {
+			img["img2img_model"] = input.Img2ImgModel
 		}
 		if len(input.EnableSafetyChecker) > 0 {
 			if string(input.EnableSafetyChecker) == "null" {
