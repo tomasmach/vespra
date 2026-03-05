@@ -265,6 +265,26 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	return result.Choices[0], nil
 }
 
+const mediaDescriptionPrompt = `Briefly describe what is shown in the attached media in 1-2 sentences. Be factual and concise. If there are multiple images or videos, describe each briefly.`
+
+// DescribeMedia makes a lightweight vision call to produce a text description
+// of the given media content parts. Returns "" if no vision model is configured.
+func (c *Client) DescribeMedia(ctx context.Context, parts []ContentPart) (string, error) {
+	cfg := c.cfgStore.Get().LLM
+	if cfg.VisionModel == "" {
+		return "", nil
+	}
+	messages := []Message{
+		{Role: "system", Content: mediaDescriptionPrompt},
+		{Role: "user", ContentParts: parts},
+	}
+	choice, err := c.Chat(ctx, messages, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	return choice.Message.Content, nil
+}
+
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	cfg := c.cfgStore.Get().LLM
 	body := map[string]any{

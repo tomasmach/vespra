@@ -570,6 +570,10 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps())
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
+	if len(userMsg.ContentParts) > 0 && cfg.LLM.VisionModel != "" &&
+		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
+		a.annotateMediaDescription(ctx, &userMsg)
+	}
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
 	llmMsgs = append(llmMsgs, userMsg)
@@ -583,6 +587,33 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		userMsgText:  historyUserContent(msg.Message, botID, botName),
 		addressed:    addressed,
 	})
+}
+
+// annotateMediaDescription calls the vision model to produce a short text description
+// of the media in msg.ContentParts and injects it into the text content part.
+// This description survives stripImages() so the main model can reference it later.
+func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, msg *llm.Message) {
+	descCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	desc, err := a.llm.DescribeMedia(descCtx, msg.ContentParts)
+	if err != nil {
+		a.logger.Warn("media description failed", "error", err)
+		return
+	}
+	desc = strings.TrimSpace(desc)
+	if desc == "" {
+		return
+	}
+	if len(desc) > 500 {
+		desc = desc[:500] + "..."
+	}
+	for i := range msg.ContentParts {
+		if msg.ContentParts[i].Type == "text" {
+			msg.ContentParts[i].Text += "\n[Media description: " + desc + "]"
+			return
+		}
+	}
 }
 
 // buildCombinedContent builds the combined user content string for a batch of coalesced messages.
@@ -671,6 +702,10 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps())
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
+	if len(combinedUserMsg.ContentParts) > 0 && cfg.LLM.VisionModel != "" &&
+		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
+		a.annotateMediaDescription(ctx, &combinedUserMsg)
+	}
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
