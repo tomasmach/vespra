@@ -216,6 +216,57 @@ func TestImageGenHTTPError(t *testing.T) {
 	}
 }
 
+func TestImageGenNSFWSpoilerWhenSafetyCheckerOff(t *testing.T) {
+	imageData := []byte("fake-jpeg-data")
+
+	imgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(imageData)
+	}))
+	defer imgServer.Close()
+
+	falServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"images":[{"url":"%s/image.jpg"}],"has_nsfw_concepts":[true]}`, imgServer.URL)
+	}))
+	defer falServer.Close()
+
+	var imageRunning atomic.Bool
+	var wg sync.WaitGroup
+	var receivedFilename string
+
+	deps := &tools.ImageGenDeps{
+		SendImage: func(filename string, data io.Reader, caption string) error {
+			receivedFilename = filename
+			return nil
+		},
+		SendText:       func(string) error { return nil },
+		ImageWg:        &wg,
+		ImageRunning:   &imageRunning,
+		Ctx:            context.Background(),
+		APIKey:         "test-key",
+		Model:          "test-model",
+		SafetyChecker:  false,
+		TimeoutSeconds: 5,
+		BaseURL:        falServer.URL,
+	}
+
+	send := func(string) error { return nil }
+	react := func(string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps)
+
+	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"test"}`))
+	if err != nil {
+		t.Fatalf("Dispatch() error: %v", err)
+	}
+
+	wg.Wait()
+
+	if receivedFilename != "SPOILER_generated.jpg" {
+		t.Errorf("expected filename 'SPOILER_generated.jpg', got %q", receivedFilename)
+	}
+}
+
 func TestImageGenSuccess(t *testing.T) {
 	imageData := []byte("fake-jpeg-data")
 

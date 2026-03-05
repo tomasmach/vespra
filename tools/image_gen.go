@@ -179,6 +179,11 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 		}
 	}
 
+	// When safety checker is disabled, send NSFW images as spoilers.
+	isNSFW := !t.deps.SafetyChecker &&
+		len(falResp.HasNSFWConcepts) > 0 &&
+		falResp.HasNSFWConcepts[0]
+
 	if len(falResp.Images) == 0 || falResp.Images[0].URL == "" {
 		slog.Error("image gen returned no images", "prompt", prompt)
 		if err := t.deps.SendText("Failed to generate image: no image was returned."); err != nil {
@@ -223,7 +228,11 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 		return
 	}
 
-	if err := t.deps.SendImage("generated.jpg", bytes.NewReader(imgData), ""); err != nil {
+	filename := "generated.jpg"
+	if isNSFW {
+		filename = "SPOILER_generated.jpg"
+	}
+	if err := t.deps.SendImage(filename, bytes.NewReader(imgData), ""); err != nil {
 		slog.Error("image send to Discord failed", "error", err)
 		if err := t.deps.SendText("Failed to send the generated image."); err != nil {
 			slog.Warn("image gen notify failed", "error", err)
