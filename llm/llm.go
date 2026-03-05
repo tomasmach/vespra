@@ -270,6 +270,8 @@ const mediaDescriptionPrompt = `Briefly describe what is shown in the attached m
 // DescribeMedia makes a lightweight vision call to produce a text description
 // of the given media content parts. Returns "" if no vision model is configured.
 func (c *Client) DescribeMedia(ctx context.Context, parts []ContentPart) (string, error) {
+	// cfg is re-read here independently of the caller's snapshot — intentional
+	// double-read for simplicity; worst case is a no-op if the model just changed.
 	cfg := c.cfgStore.Get().LLM
 	if cfg.VisionModel == "" {
 		return "", nil

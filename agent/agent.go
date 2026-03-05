@@ -23,6 +23,9 @@ import (
 	"github.com/tomasmach/vespra/tools"
 )
 
+// maxMediaDescriptionRunes is the maximum length of a media description before truncation.
+const maxMediaDescriptionRunes = 500
+
 // toolCallRecord is used to log tool calls made during a conversation turn.
 type toolCallRecord struct {
 	Name   string `json:"name"`
@@ -602,6 +605,8 @@ func hasMediaParts(parts []llm.ContentPart) bool {
 // annotateMediaDescription calls the vision model to produce a short text description
 // of the media in msg.ContentParts and injects it into the text content part.
 // This description survives stripImages() so the main model can reference it later.
+// The full msg.ContentParts slice (including any user text) is passed to DescribeMedia
+// intentionally — this gives the vision model context about what the user said.
 func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, msg *llm.Message) {
 	descCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -615,8 +620,8 @@ func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, msg *llm.Me
 	if desc == "" {
 		return
 	}
-	if runes := []rune(desc); len(runes) > 500 {
-		desc = string(runes[:500]) + "..."
+	if runes := []rune(desc); len(runes) > maxMediaDescriptionRunes {
+		desc = string(runes[:maxMediaDescriptionRunes]) + "..."
 	}
 	for i := range msg.ContentParts {
 		if msg.ContentParts[i].Type == "text" {
@@ -624,6 +629,9 @@ func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, msg *llm.Me
 			return
 		}
 	}
+	// No text part found (image-only message): prepend a new text part so the
+	// description is not silently dropped.
+	msg.ContentParts = append([]llm.ContentPart{{Type: "text", Text: "[Media description: " + desc + "]"}}, msg.ContentParts...)
 }
 
 // buildCombinedContent builds the combined user content string for a batch of coalesced messages.
