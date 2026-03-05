@@ -354,3 +354,37 @@ func TestAgentSoulLibrary(t *testing.T) {
 		t.Fatalf("expected 0 souls after delete, got %d", len(souls))
 	}
 }
+
+func TestUpdateAgentPreservesChannels(t *testing.T) {
+	agentsTOML := "\n[[agents]]\nid = \"chan-agent\"\nserver_id = \"111\"\n[[agents.channels]]\nid = \"999\"\nresponse_mode = \"all\"\n"
+	ts, _ := newTestServerWithAgents(t, agentsTOML)
+
+	// Update the agent without sending channels (simulates the dashboard saving image settings).
+	body := `{"server_id":"111","response_mode":"mention","language":"","provider":"","model":"","db_path":"","ignore_users":[],"image":{}}`
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/agents/chan-agent", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("update agent: expected 204, got %d", resp.StatusCode)
+	}
+
+	// Channel config must survive the update.
+	resp, err = http.Get(ts.URL + "/api/agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agents []map[string]any
+	json.NewDecoder(resp.Body).Decode(&agents)
+	resp.Body.Close()
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	channels, ok := agents[0]["channels"].([]any)
+	if !ok || len(channels) == 0 {
+		t.Fatal("channel config was wiped by update without channels field")
+	}
+}

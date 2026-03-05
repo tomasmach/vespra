@@ -475,6 +475,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if input.Image.APIKey == "" {
 		input.Image.APIKey = newAgents[idx].Image.APIKey // preserve existing image API key if not updated
 	}
+	if input.Channels == nil {
+		input.Channels = newAgents[idx].Channels // preserve channel overrides if not provided in update
+	}
 	input.ID = id // ensure ID unchanged
 	newAgents[idx] = input
 

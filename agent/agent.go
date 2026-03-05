@@ -961,10 +961,24 @@ func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*dis
 	return llm.Message{Role: "user", ContentParts: parts}
 }
 
+// currentAgentConfig looks up the current per-agent config from the live
+// config store by server ID. This ensures running channel agents always use
+// the latest config rather than the snapshot captured at creation time.
+// Returns nil for DMs or unconfigured servers.
+func (a *ChannelAgent) currentAgentConfig() *config.AgentConfig {
+	cfg := a.cfgStore.Get()
+	for i := range cfg.Agents {
+		if cfg.Agents[i].ServerID == a.serverID {
+			return &cfg.Agents[i]
+		}
+	}
+	return nil
+}
+
 // chatOptions returns per-agent ChatOptions when the agent has a provider or
 // model override configured, or nil to use global defaults.
 func (a *ChannelAgent) chatOptions() *llm.ChatOptions {
-	cfg := a.resources.Config
+	cfg := a.currentAgentConfig()
 	if cfg == nil || (cfg.Provider == "" && cfg.Model == "") {
 		return nil
 	}
@@ -987,8 +1001,8 @@ func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
 
 	// Resolve the model: use the agent's configured model when available.
 	model := cfg.LLM.Model
-	if a.resources.Config != nil && a.resources.Config.Model != "" {
-		model = a.resources.Config.Model
+	if agentCfg := a.currentAgentConfig(); agentCfg != nil && agentCfg.Model != "" {
+		model = agentCfg.Model
 	}
 
 	// Use Brave timeout if configured, otherwise use web timeout
@@ -1036,15 +1050,15 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 	if cfg.Tools.Image.EnableSafetyChecker != nil {
 		safetyChecker = *cfg.Tools.Image.EnableSafetyChecker
 	}
-	if a.resources.Config != nil {
-		if a.resources.Config.Image.APIKey != "" {
-			apiKey = a.resources.Config.Image.APIKey
+	if agentCfg := a.currentAgentConfig(); agentCfg != nil {
+		if agentCfg.Image.APIKey != "" {
+			apiKey = agentCfg.Image.APIKey
 		}
-		if a.resources.Config.Image.Model != "" {
-			model = a.resources.Config.Image.Model
+		if agentCfg.Image.Model != "" {
+			model = agentCfg.Image.Model
 		}
-		if a.resources.Config.Image.EnableSafetyChecker != nil {
-			safetyChecker = *a.resources.Config.Image.EnableSafetyChecker
+		if agentCfg.Image.EnableSafetyChecker != nil {
+			safetyChecker = *agentCfg.Image.EnableSafetyChecker
 		}
 	}
 
