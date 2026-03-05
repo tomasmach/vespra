@@ -42,7 +42,8 @@ func (t *imageGenTool) Name() string { return ToolNameImageGen }
 func (t *imageGenTool) Description() string {
 	return "Generate an image from a text prompt. Call this tool whenever the user asks you to draw, create, make, generate, visualize, or show an image or picture of anything — including requests phrased as 'make an image of X', 'show me what X looks like', 'draw X', or similar. " +
 		"Do NOT describe the image generation in your text — always call this tool first. " +
-		"Include a brief status message as inline text content alongside this tool call (e.g. 'Generating your image…') — do NOT call the reply tool separately after this one."
+		"Include a brief status message as inline text content alongside this tool call (e.g. 'Generating your image…') — do NOT call the reply tool separately after this one. " +
+		"If the user has attached an image and is asking for a variation or style transfer of it, also pass `use_reference_image: true`."
 }
 func (t *imageGenTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -94,7 +95,7 @@ func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, 
 type falRequest struct {
 	Prompt              string  `json:"prompt"`
 	NumInferenceSteps   int     `json:"num_inference_steps"`
-	ImageSize           string  `json:"image_size"`
+	ImageSize           string  `json:"image_size,omitempty"`
 	EnableSafetyChecker bool    `json:"enable_safety_checker"`
 	NumImages           int     `json:"num_images"`
 	OutputFormat        string  `json:"output_format"`
@@ -111,7 +112,7 @@ type falResponse struct {
 
 // img2img generation parameters. Schnell uses 4 steps; dev/img2img needs more for quality.
 const (
-	img2imgStrength       = 0.85 // blend between reference and new prompt (0=reference, 1=prompt)
+	img2imgStrength       = 0.85 // blend strength: 0 = ignore reference, 1 = copy reference exactly
 	img2imgInferenceSteps = 28
 )
 
@@ -126,7 +127,6 @@ func (t *imageGenTool) runGenerate(prompt, imageSize, referenceURL string) {
 	reqBody := falRequest{
 		Prompt:              prompt,
 		NumInferenceSteps:   4,
-		ImageSize:           imageSize,
 		EnableSafetyChecker: t.deps.SafetyChecker,
 		NumImages:           1,
 		OutputFormat:        "jpeg",
@@ -136,6 +136,9 @@ func (t *imageGenTool) runGenerate(prompt, imageSize, referenceURL string) {
 		reqBody.ImageURL = referenceURL
 		reqBody.Strength = img2imgStrength
 		reqBody.NumInferenceSteps = img2imgInferenceSteps
+		// img2img endpoint derives output dimensions from the input image; omit image_size.
+	} else {
+		reqBody.ImageSize = imageSize
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)

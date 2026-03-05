@@ -161,8 +161,7 @@ export async function render(container, params) {
         if (keyVal) data.api_key = keyVal;
         const modelVal = imgModelInput.value.trim();
         if (modelVal) data.model = modelVal;
-        const img2imgModelVal = imgImg2ImgModelInput.value.trim();
-        if (img2imgModelVal) data.img2img_model = img2imgModelVal;
+        data.img2img_model = imgImg2ImgModelInput.value.trim();
         // Always send enable_safety_checker: null means clear, true/false means set
         data.enable_safety_checker = imgSafetyState.value;
         const timeoutVal = parseInt(imgTimeoutInput.value, 10);

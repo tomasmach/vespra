@@ -614,6 +614,7 @@ func hasMediaParts(parts []llm.ContentPart) bool {
 func firstImageURL(parts []llm.ContentPart) string {
 	for _, p := range parts {
 		if p.Type == "image_url" && p.ImageURL != nil {
+			// Only the first image is used as reference to avoid ambiguity when multiple images are attached.
 			return p.ImageURL.URL
 		}
 	}

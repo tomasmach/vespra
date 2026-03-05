@@ -1166,6 +1166,8 @@ func (s *Server) handlePutImageConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if input.Img2ImgModel != "" {
 			img["img2img_model"] = input.Img2ImgModel
+		} else {
+			delete(img, "img2img_model")
 		}
 		if len(input.EnableSafetyChecker) > 0 {
 			if string(input.EnableSafetyChecker) == "null" {

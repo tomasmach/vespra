@@ -229,13 +229,6 @@ func TestImageGenImg2ImgWithReference(t *testing.T) {
 	}))
 	defer falServer.Close()
 
-	// Mock image download — use a data URL so no real HTTP call is needed
-	imgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/jpeg")
-		w.Write([]byte("fake-img"))
-	}))
-	defer imgServer.Close()
-
 	var imageRunning atomic.Bool
 	var wg sync.WaitGroup
 
