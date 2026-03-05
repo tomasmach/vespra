@@ -1134,10 +1134,10 @@ func (s *Server) handleGetImageConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePutImageConfig(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		APIKey              string `json:"api_key"`
-		Model               string `json:"model"`
-		EnableSafetyChecker *bool  `json:"enable_safety_checker"`
-		TimeoutSeconds      int    `json:"timeout_seconds"`
+		APIKey              string          `json:"api_key"`
+		Model               string          `json:"model"`
+		EnableSafetyChecker json.RawMessage `json:"enable_safety_checker"` // null = clear, true/false = set, absent = no change
+		TimeoutSeconds      int             `json:"timeout_seconds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -1162,8 +1162,15 @@ func (s *Server) handlePutImageConfig(w http.ResponseWriter, r *http.Request) {
 		if input.Model != "" {
 			img["model"] = input.Model
 		}
-		if input.EnableSafetyChecker != nil {
-			img["enable_safety_checker"] = *input.EnableSafetyChecker
+		if len(input.EnableSafetyChecker) > 0 {
+			if string(input.EnableSafetyChecker) == "null" {
+				delete(img, "enable_safety_checker")
+			} else {
+				var v bool
+				if err := json.Unmarshal(input.EnableSafetyChecker, &v); err == nil {
+					img["enable_safety_checker"] = v
+				}
+			}
 		}
 		if input.TimeoutSeconds > 0 {
 			img["timeout_seconds"] = int64(input.TimeoutSeconds)
@@ -1181,10 +1188,12 @@ func (s *Server) handlePutImageConfig(w http.ResponseWriter, r *http.Request) {
 
 // writeAgents replaces the [[agents]] section in the config file and reloads.
 func (s *Server) writeAgents(agents []config.AgentConfig) error {
-	// Build token map before marshaling — Token has json:"-" so Marshal drops it
+	// Build token and image key maps before marshaling — both have json:"-" so Marshal drops them
 	tokenByID := make(map[string]string, len(agents))
+	imageKeyByID := make(map[string]string, len(agents))
 	for _, a := range agents {
 		tokenByID[a.ID] = a.Token
+		imageKeyByID[a.ID] = a.Image.APIKey
 	}
 
 	agentsJSON, err := json.Marshal(agents)
@@ -1195,12 +1204,20 @@ func (s *Server) writeAgents(agents []config.AgentConfig) error {
 	if err := json.Unmarshal(agentsJSON, &agentsRaw); err != nil {
 		return err
 	}
-	// Restore tokens dropped by json:"-"
+	// Restore fields dropped by json:"-"
 	for _, item := range agentsRaw {
 		if m, ok := item.(map[string]any); ok {
 			id, _ := m["id"].(string)
 			if tok := tokenByID[id]; tok != "" {
 				m["token"] = tok
+			}
+			if key := imageKeyByID[id]; key != "" {
+				img, _ := m["image"].(map[string]any)
+				if img == nil {
+					img = make(map[string]any)
+				}
+				img["api_key"] = key
+				m["image"] = img
 			}
 		}
 	}

@@ -101,18 +101,34 @@ export async function render(container, params) {
     placeholder: 'fal-ai/flux/schnell',
   });
 
-  const imgSafetyState = { value: imageConfig ? imageConfig.enable_safety_checker !== false : true };
+  // Three states: null (inherit/default), true (enabled), false (disabled)
+  // Initialize from current config: null if not set, otherwise the boolean value
+  const imgSafetyState = {
+    value: (imageConfig && imageConfig.enable_safety_checker != null)
+      ? imageConfig.enable_safety_checker
+      : null
+  };
   const imgSafetyBtn = el('button', {
     className: 'btn btn-sm btn-secondary',
     type: 'button',
-    style: { minWidth: '80px' },
+    style: { minWidth: '100px' },
   });
   function updateSafetyBtn() {
-    imgSafetyBtn.textContent = imgSafetyState.value ? 'Enabled' : 'Disabled';
-    imgSafetyBtn.style.opacity = imgSafetyState.value ? '1' : '0.5';
+    if (imgSafetyState.value === null) {
+      imgSafetyBtn.textContent = 'Default';
+      imgSafetyBtn.style.opacity = '0.6';
+    } else if (imgSafetyState.value === true) {
+      imgSafetyBtn.textContent = 'Enabled';
+      imgSafetyBtn.style.opacity = '1';
+    } else {
+      imgSafetyBtn.textContent = 'Disabled';
+      imgSafetyBtn.style.opacity = '0.5';
+    }
   }
   imgSafetyBtn.addEventListener('click', () => {
-    imgSafetyState.value = !imgSafetyState.value;
+    if (imgSafetyState.value === null) imgSafetyState.value = true;
+    else if (imgSafetyState.value === true) imgSafetyState.value = false;
+    else imgSafetyState.value = null;
     updateSafetyBtn();
   });
   updateSafetyBtn();
@@ -134,13 +150,13 @@ export async function render(container, params) {
       imgSaveBtn.disabled = true;
       imgSaveBtn.textContent = 'Saving...';
       try {
-        const data = {
-          enable_safety_checker: imgSafetyState.value,
-        };
+        const data = {};
         const keyVal = imgApiKeyInput.value.trim();
         if (keyVal) data.api_key = keyVal;
         const modelVal = imgModelInput.value.trim();
         if (modelVal) data.model = modelVal;
+        // Always send enable_safety_checker: null means clear, true/false means set
+        data.enable_safety_checker = imgSafetyState.value;
         const timeoutVal = parseInt(imgTimeoutInput.value, 10);
         if (timeoutVal > 0) data.timeout_seconds = timeoutVal;
         await API.setImageConfig(data);

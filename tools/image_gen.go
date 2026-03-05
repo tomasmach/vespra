@@ -40,7 +40,7 @@ func (t *imageGenTool) Name() string { return ToolNameImageGen }
 func (t *imageGenTool) Description() string {
 	return "Generate an image from a text prompt. Call this tool whenever the user asks you to draw, create, make, generate, visualize, or show an image or picture of anything — including requests phrased as 'make an image of X', 'show me what X looks like', 'draw X', or similar. " +
 		"Do NOT describe the image generation in your text — always call this tool first. " +
-		"After calling this tool, use the reply tool to tell the user you are generating the image (in their language)."
+		"Include a brief status message as inline text content alongside this tool call (e.g. 'Generating your image…') — do NOT call the reply tool separately after this one."
 }
 func (t *imageGenTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -112,7 +112,9 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		slog.Error("image gen marshal error", "error", err)
-		_ = t.deps.SendText(fmt.Sprintf("Failed to generate image: %s", err))
+		if err := t.deps.SendText(fmt.Sprintf("Failed to generate image: %s", err)); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 		return
 	}
 
@@ -124,7 +126,9 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		slog.Error("image gen request creation error", "error", err)
-		_ = t.deps.SendText(fmt.Sprintf("Failed to generate image: %s", err))
+		if err := t.deps.SendText(fmt.Sprintf("Failed to generate image: %s", err)); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 		return
 	}
 	req.Header.Set("Authorization", "Key "+t.deps.APIKey)
@@ -133,7 +137,9 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		slog.Error("image gen API call failed", "error", err, "prompt", prompt)
-		_ = t.deps.SendText(fmt.Sprintf("Failed to generate image: %s", err))
+		if err := t.deps.SendText(fmt.Sprintf("Failed to generate image: %s", err)); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 		return
 	}
 	defer resp.Body.Close()
@@ -141,26 +147,43 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		slog.Error("image gen API error", "status", resp.StatusCode, "body", string(body), "prompt", prompt)
-		_ = t.deps.SendText(fmt.Sprintf("Failed to generate image (HTTP %d).", resp.StatusCode))
+		if err := t.deps.SendText(fmt.Sprintf("Failed to generate image (HTTP %d).", resp.StatusCode)); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 		return
 	}
 
 	var falResp falResponse
 	if err := json.NewDecoder(resp.Body).Decode(&falResp); err != nil {
 		slog.Error("image gen response decode error", "error", err)
-		_ = t.deps.SendText("Failed to generate image: could not parse response.")
+		if err := t.deps.SendText("Failed to generate image: could not parse response."); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 		return
 	}
 
-	if t.deps.SafetyChecker && len(falResp.HasNSFWConcepts) > 0 && falResp.HasNSFWConcepts[0] {
-		slog.Warn("image gen NSFW content blocked", "prompt", prompt)
-		_ = t.deps.SendText("The generated image was flagged as inappropriate and was not sent.")
-		return
+	if t.deps.SafetyChecker {
+		if len(falResp.HasNSFWConcepts) == 0 {
+			slog.Warn("image gen safety check: has_nsfw_concepts absent, blocking image", "prompt", prompt)
+			if err := t.deps.SendText("The generated image could not be safety-checked and was not sent."); err != nil {
+				slog.Warn("image gen notify failed", "error", err)
+			}
+			return
+		}
+		if falResp.HasNSFWConcepts[0] {
+			slog.Warn("image gen NSFW content blocked", "prompt", prompt)
+			if err := t.deps.SendText("The generated image was flagged as inappropriate and was not sent."); err != nil {
+				slog.Warn("image gen notify failed", "error", err)
+			}
+			return
+		}
 	}
 
 	if len(falResp.Images) == 0 || falResp.Images[0].URL == "" {
 		slog.Error("image gen returned no images", "prompt", prompt)
-		_ = t.deps.SendText("Failed to generate image: no image was returned.")
+		if err := t.deps.SendText("Failed to generate image: no image was returned."); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 		return
 	}
 
@@ -168,32 +191,42 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	imgReq, err := http.NewRequestWithContext(ctx, http.MethodGet, falResp.Images[0].URL, nil)
 	if err != nil {
 		slog.Error("image download request error", "error", err)
-		_ = t.deps.SendText("Failed to download generated image.")
+		if err := t.deps.SendText("Failed to download generated image."); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 		return
 	}
 	imgResp, err := http.DefaultClient.Do(imgReq)
 	if err != nil {
 		slog.Error("image download failed", "error", err)
-		_ = t.deps.SendText("Failed to download generated image.")
+		if err := t.deps.SendText("Failed to download generated image."); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 		return
 	}
 	defer imgResp.Body.Close()
 
 	if imgResp.StatusCode != http.StatusOK {
 		slog.Error("image download HTTP error", "status", imgResp.StatusCode)
-		_ = t.deps.SendText("Failed to download generated image.")
+		if err := t.deps.SendText("Failed to download generated image."); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 		return
 	}
 
 	imgData, err := io.ReadAll(io.LimitReader(imgResp.Body, 20*1024*1024)) // 20 MB max
 	if err != nil {
 		slog.Error("image read error", "error", err)
-		_ = t.deps.SendText("Failed to read generated image.")
+		if err := t.deps.SendText("Failed to read generated image."); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 		return
 	}
 
 	if err := t.deps.SendImage("generated.jpg", bytes.NewReader(imgData), ""); err != nil {
 		slog.Error("image send to Discord failed", "error", err)
-		_ = t.deps.SendText("Failed to send the generated image.")
+		if err := t.deps.SendText("Failed to send the generated image."); err != nil {
+			slog.Warn("image gen notify failed", "error", err)
+		}
 	}
 }

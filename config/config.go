@@ -105,7 +105,7 @@ type AgentConfig struct {
 // AgentImageConfig holds per-agent image generation overrides.
 // Non-zero fields override the global [tools.image] settings.
 type AgentImageConfig struct {
-	APIKey              string `toml:"api_key" json:"api_key,omitempty"`
+	APIKey              string `toml:"api_key" json:"-"`
 	Model               string `toml:"model" json:"model,omitempty"`
 	EnableSafetyChecker *bool  `toml:"enable_safety_checker" json:"enable_safety_checker,omitempty"`
 }
