@@ -608,7 +608,7 @@ func hasMediaParts(parts []llm.ContentPart) bool {
 // The full msg.ContentParts slice (including any user text) is passed to DescribeMedia
 // intentionally — this gives the vision model context about what the user said.
 func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, cfg *config.Config, msg *llm.Message) {
-	// Cover 3 full retry attempts plus one buffer multiple to account for backoff.
+	// 4x: 1 per retry attempt (up to 3 retries) plus 1 buffer for backoff delays.
 	timeout := time.Duration(cfg.LLM.RequestTimeoutSeconds) * time.Second * 4
 	descCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
