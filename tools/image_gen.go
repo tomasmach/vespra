@@ -179,11 +179,6 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 		}
 	}
 
-	// When safety checker is disabled, send NSFW images as spoilers.
-	isNSFW := !t.deps.SafetyChecker &&
-		len(falResp.HasNSFWConcepts) > 0 &&
-		falResp.HasNSFWConcepts[0]
-
 	if len(falResp.Images) == 0 || falResp.Images[0].URL == "" {
 		slog.Error("image gen returned no images", "prompt", prompt)
 		if err := t.deps.SendText("Failed to generate image: no image was returned."); err != nil {
@@ -228,8 +223,9 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 		return
 	}
 
+	// When safety checker is disabled, send NSFW images as spoilers.
 	filename := "generated.jpg"
-	if isNSFW {
+	if !t.deps.SafetyChecker && len(falResp.HasNSFWConcepts) > 0 && falResp.HasNSFWConcepts[0] {
 		filename = "SPOILER_generated.jpg"
 	}
 	if err := t.deps.SendImage(filename, bytes.NewReader(imgData), ""); err != nil {
