@@ -570,7 +570,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps())
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
-	if len(userMsg.ContentParts) > 0 && cfg.LLM.VisionModel != "" &&
+	if hasMediaParts(userMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
 		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
 		a.annotateMediaDescription(ctx, &userMsg)
 	}
@@ -589,6 +589,16 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	})
 }
 
+// hasMediaParts reports whether parts contains at least one image or video part.
+func hasMediaParts(parts []llm.ContentPart) bool {
+	for _, p := range parts {
+		if p.Type == "image_url" || p.Type == "video_url" {
+			return true
+		}
+	}
+	return false
+}
+
 // annotateMediaDescription calls the vision model to produce a short text description
 // of the media in msg.ContentParts and injects it into the text content part.
 // This description survives stripImages() so the main model can reference it later.
@@ -605,8 +615,8 @@ func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, msg *llm.Me
 	if desc == "" {
 		return
 	}
-	if len(desc) > 500 {
-		desc = desc[:500] + "..."
+	if runes := []rune(desc); len(runes) > 500 {
+		desc = string(runes[:500]) + "..."
 	}
 	for i := range msg.ContentParts {
 		if msg.ContentParts[i].Type == "text" {
@@ -702,7 +712,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps())
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
-	if len(combinedUserMsg.ContentParts) > 0 && cfg.LLM.VisionModel != "" &&
+	if hasMediaParts(combinedUserMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
 		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
 		a.annotateMediaDescription(ctx, &combinedUserMsg)
 	}
