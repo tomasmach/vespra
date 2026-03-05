@@ -575,7 +575,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	if hasMediaParts(userMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
 		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
-		a.annotateMediaDescription(ctx, &userMsg)
+		a.annotateMediaDescription(ctx, cfg, &userMsg)
 	}
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
@@ -607,8 +607,10 @@ func hasMediaParts(parts []llm.ContentPart) bool {
 // This description survives stripImages() so the main model can reference it later.
 // The full msg.ContentParts slice (including any user text) is passed to DescribeMedia
 // intentionally — this gives the vision model context about what the user said.
-func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, msg *llm.Message) {
-	descCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, cfg *config.Config, msg *llm.Message) {
+	// Cover 3 full retry attempts plus one buffer multiple to account for backoff.
+	timeout := time.Duration(cfg.LLM.RequestTimeoutSeconds) * time.Second * 4
+	descCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	desc, err := a.llm.DescribeMedia(descCtx, msg.ContentParts)
@@ -723,7 +725,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 	if hasMediaParts(combinedUserMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
 		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
-		a.annotateMediaDescription(ctx, &combinedUserMsg)
+		a.annotateMediaDescription(ctx, cfg, &combinedUserMsg)
 	}
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
