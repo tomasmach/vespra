@@ -1,5 +1,5 @@
 import { API } from '../api.js';
-import { el, esc, toast, modePicker, loading, emptyState } from '../components.js';
+import { el, esc, toast, modePicker, loading, emptyState, section } from '../components.js';
 
 export async function render(container, params) {
   const wrap = el('div', { className: 'fade-in' });
@@ -9,12 +9,14 @@ export async function render(container, params) {
   let status;
   let soulData;
   let configData;
+  let imageConfig;
 
   try {
-    [status, soulData, configData] = await Promise.all([
+    [status, soulData, configData, imageConfig] = await Promise.all([
       API.getStatus().catch(() => null),
       API.getGlobalSoul().catch(() => null),
       API.getConfig().catch(() => null),
+      API.getImageConfig().catch(() => null),
     ]);
   } catch (err) {
     toast('Failed to load settings: ' + err.message, 'error');
@@ -86,8 +88,105 @@ export async function render(container, params) {
 
   wrap.appendChild(soulSection);
 
-  // ── 3. Raw Config (collapsible) ──
-  const configDetails = el('details', { className: 'settings-section' });
+  // ── 3. Image Generation ──
+  const imgApiKeyInput = el('input', {
+    className: 'input',
+    type: 'password',
+    placeholder: imageConfig && imageConfig.has_api_key ? '••••••••••••••••' : 'fal_...',
+  });
+  const imgModelInput = el('input', {
+    className: 'input',
+    type: 'text',
+    value: (imageConfig && imageConfig.model) || '',
+    placeholder: 'fal-ai/flux/schnell',
+  });
+
+  const imgSafetyState = { value: imageConfig ? imageConfig.enable_safety_checker !== false : true };
+  const imgSafetyBtn = el('button', {
+    className: 'btn btn-sm btn-secondary',
+    type: 'button',
+    style: { minWidth: '80px' },
+  });
+  function updateSafetyBtn() {
+    imgSafetyBtn.textContent = imgSafetyState.value ? 'Enabled' : 'Disabled';
+    imgSafetyBtn.style.opacity = imgSafetyState.value ? '1' : '0.5';
+  }
+  imgSafetyBtn.addEventListener('click', () => {
+    imgSafetyState.value = !imgSafetyState.value;
+    updateSafetyBtn();
+  });
+  updateSafetyBtn();
+
+  const imgTimeoutInput = el('input', {
+    className: 'input',
+    type: 'number',
+    value: (imageConfig && imageConfig.timeout_seconds) || 60,
+    min: '10',
+    max: '300',
+    style: { width: '100px' },
+  });
+
+  const imgSaveBtn = el('button', {
+    className: 'btn btn-sm',
+    type: 'button',
+    style: { marginTop: 'var(--sp-3)' },
+    onClick: async () => {
+      imgSaveBtn.disabled = true;
+      imgSaveBtn.textContent = 'Saving...';
+      try {
+        const data = {
+          enable_safety_checker: imgSafetyState.value,
+        };
+        const keyVal = imgApiKeyInput.value.trim();
+        if (keyVal) data.api_key = keyVal;
+        const modelVal = imgModelInput.value.trim();
+        if (modelVal) data.model = modelVal;
+        const timeoutVal = parseInt(imgTimeoutInput.value, 10);
+        if (timeoutVal > 0) data.timeout_seconds = timeoutVal;
+        await API.setImageConfig(data);
+        if (keyVal) imgApiKeyInput.value = '';
+        toast('Image config saved', 'success');
+      } catch (err) {
+        toast('Failed to save image config: ' + err.message, 'error');
+      } finally {
+        imgSaveBtn.disabled = false;
+        imgSaveBtn.textContent = 'Save';
+      }
+    },
+  }, 'Save');
+
+  const imgSection = section('IMAGE GENERATION',
+    el('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
+      el('div', { className: 'input-group' },
+        el('label', { className: 'input-label' }, 'API Key (fal.ai)'),
+        imgApiKeyInput,
+        el('span', { className: 'input-hint' },
+          imageConfig && imageConfig.has_api_key
+            ? 'A key is configured. Enter a new value to replace it.'
+            : 'Enter your fal.ai API key to enable image generation.'),
+      ),
+      el('div', { className: 'input-group' },
+        el('label', { className: 'input-label' }, 'Model'),
+        imgModelInput,
+        el('span', { className: 'input-hint' }, 'Default: fal-ai/flux/schnell'),
+      ),
+      el('div', { style: { display: 'flex', gap: 'var(--sp-6)', alignItems: 'flex-start' } },
+        el('div', { className: 'input-group' },
+          el('label', { className: 'input-label' }, 'Safety Checker'),
+          imgSafetyBtn,
+        ),
+        el('div', { className: 'input-group' },
+          el('label', { className: 'input-label' }, 'Timeout (seconds)'),
+          imgTimeoutInput,
+        ),
+      ),
+      imgSaveBtn,
+    ),
+  );
+  wrap.appendChild(imgSection);
+
+  // ── 4. Raw Config (collapsible) ──
+  const configDetails = el('details', { className: 'settings-section', style: { marginTop: 'var(--sp-4)' } });
   const configSummary = el('summary', {
     className: 'mono-label',
     style: { cursor: 'pointer', userSelect: 'none' },

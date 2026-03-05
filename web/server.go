@@ -75,6 +75,8 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("GET /api/agents/{id}/conversations", s.handleGetAgentConversations)
 	mux.HandleFunc("GET /api/soul", s.handleGetGlobalSoul)
 	mux.HandleFunc("PUT /api/soul", s.handlePutGlobalSoul)
+	mux.HandleFunc("GET /api/config/image", s.handleGetImageConfig)
+	mux.HandleFunc("PUT /api/config/image", s.handlePutImageConfig)
 	sub, _ := fs.Sub(staticFiles, "static")
 	fileServer := http.FileServer(http.FS(sub))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -351,6 +353,11 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfgStore.Get()
+	type agentImageView struct {
+		HasAPIKey           bool   `json:"has_api_key"`
+		Model               string `json:"model,omitempty"`
+		EnableSafetyChecker *bool  `json:"enable_safety_checker,omitempty"`
+	}
 	type agentView struct {
 		ID           string                 `json:"id"`
 		ServerID     string                 `json:"server_id"`
@@ -363,6 +370,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		Model        string                 `json:"model,omitempty"`
 		Channels     []config.ChannelConfig `json:"channels,omitempty"`
 		IgnoreUsers  []string               `json:"ignore_users,omitempty"`
+		Image        agentImageView         `json:"image"`
 	}
 	views := make([]agentView, len(cfg.Agents))
 	for i, a := range cfg.Agents {
@@ -378,6 +386,11 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			Model:        a.Model,
 			Channels:     a.Channels,
 			IgnoreUsers:  a.IgnoreUsers,
+			Image: agentImageView{
+				HasAPIKey:           a.Image.APIKey != "",
+				Model:               a.Image.Model,
+				EnableSafetyChecker: a.Image.EnableSafetyChecker,
+			},
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -458,6 +471,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	newAgents := slices.Clone(cfg.Agents)
 	if input.Token == "" {
 		input.Token = newAgents[idx].Token // preserve existing token if not updated
+	}
+	if input.Image.APIKey == "" {
+		input.Image.APIKey = newAgents[idx].Image.APIKey // preserve existing image API key if not updated
 	}
 	input.ID = id // ensure ID unchanged
 	newAgents[idx] = input
@@ -1102,6 +1118,64 @@ func (s *Server) handleActivateAgentSoul(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetImageConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfgStore.Get()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"has_api_key":           cfg.Tools.Image.APIKey != "",
+		"model":                 cfg.Tools.Image.Model,
+		"enable_safety_checker": cfg.Tools.Image.EnableSafetyChecker,
+		"timeout_seconds":       cfg.Tools.Image.TimeoutSeconds,
+	})
+}
+
+func (s *Server) handlePutImageConfig(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		APIKey              string `json:"api_key"`
+		Model               string `json:"model"`
+		EnableSafetyChecker *bool  `json:"enable_safety_checker"`
+		TimeoutSeconds      int    `json:"timeout_seconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	err := s.patchConfig(func(raw map[string]any) {
+		tools, _ := raw["tools"].(map[string]any)
+		if tools == nil {
+			tools = make(map[string]any)
+		}
+		img, _ := tools["image"].(map[string]any)
+		if img == nil {
+			img = make(map[string]any)
+		}
+		if input.APIKey != "" {
+			img["api_key"] = input.APIKey
+		}
+		if input.Model != "" {
+			img["model"] = input.Model
+		}
+		if input.EnableSafetyChecker != nil {
+			img["enable_safety_checker"] = *input.EnableSafetyChecker
+		}
+		if input.TimeoutSeconds > 0 {
+			img["timeout_seconds"] = int64(input.TimeoutSeconds)
+		}
+		tools["image"] = img
+		raw["tools"] = tools
+	})
+	if err != nil {
+		slog.Error("save image config", "error", err)
+		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

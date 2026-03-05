@@ -201,6 +201,72 @@ export async function render(container, params) {
   );
   wrap.appendChild(ignoreSection);
 
+  // ── IMAGE GENERATION section ──
+  const agentImg = agent.image || {};
+  const imgApiKeyInput = el('input', {
+    className: 'input',
+    type: 'password',
+    placeholder: agentImg.has_api_key ? '••••••••••••••••' : 'Leave blank to use global key',
+  });
+  const imgModelInput = el('input', {
+    className: 'input',
+    type: 'text',
+    value: agentImg.model || '',
+    placeholder: 'Leave blank to use global model',
+  });
+
+  const agentImgSafetyState = { value: agentImg.enable_safety_checker };
+  const agentImgSafetyBtn = el('button', {
+    className: 'btn btn-sm btn-secondary',
+    type: 'button',
+    style: { minWidth: '100px' },
+  });
+  function updateAgentSafetyBtn() {
+    if (agentImgSafetyState.value === null || agentImgSafetyState.value === undefined) {
+      agentImgSafetyBtn.textContent = 'Inherit';
+      agentImgSafetyBtn.style.opacity = '0.6';
+    } else {
+      agentImgSafetyBtn.textContent = agentImgSafetyState.value ? 'Enabled' : 'Disabled';
+      agentImgSafetyBtn.style.opacity = agentImgSafetyState.value ? '1' : '0.5';
+    }
+  }
+  agentImgSafetyBtn.addEventListener('click', () => {
+    if (agentImgSafetyState.value === null || agentImgSafetyState.value === undefined) {
+      agentImgSafetyState.value = true;
+    } else if (agentImgSafetyState.value === true) {
+      agentImgSafetyState.value = false;
+    } else {
+      agentImgSafetyState.value = null; // back to inherit
+    }
+    updateAgentSafetyBtn();
+  });
+  updateAgentSafetyBtn();
+
+  const imageSection = section('IMAGE GENERATION',
+    el('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
+      el('div', { className: 'input-group' },
+        el('label', { className: 'input-label' }, 'API Key Override'),
+        imgApiKeyInput,
+        el('span', { className: 'input-hint' },
+          agentImg.has_api_key
+            ? 'A key is set for this agent. Enter a new value to replace it.'
+            : 'Optional. Overrides the global fal.ai API key for this agent.'),
+      ),
+      el('div', { style: { display: 'flex', gap: 'var(--sp-6)', alignItems: 'flex-start' } },
+        el('div', { className: 'input-group' },
+          el('label', { className: 'input-label' }, 'Model Override'),
+          imgModelInput,
+        ),
+        el('div', { className: 'input-group' },
+          el('label', { className: 'input-label' }, 'Safety Checker'),
+          agentImgSafetyBtn,
+          el('span', { className: 'input-hint' }, 'Inherit = use global setting'),
+        ),
+      ),
+    ),
+  );
+  wrap.appendChild(imageSection);
+
   // ── Action buttons ──
   const saveBtn = el('button', {
     className: 'btn btn-primary',
@@ -208,6 +274,8 @@ export async function render(container, params) {
     onClick: async () => {
       saveBtn.disabled = true;
       try {
+        const imgApiKeyVal = imgApiKeyInput.value.trim();
+        const imgModelVal = imgModelInput.value.trim();
         const data = {
           server_id: agent.server_id,
           soul_file: agent.soul_file || '',
@@ -217,6 +285,11 @@ export async function render(container, params) {
           model: modelInput.value.trim(),
           db_path: dbPathInput.value.trim(),
           ignore_users: state.ignore_users,
+          image: {
+            ...(imgApiKeyVal && { api_key: imgApiKeyVal }),
+            ...(imgModelVal && { model: imgModelVal }),
+            ...(agentImgSafetyState.value !== null && agentImgSafetyState.value !== undefined && { enable_safety_checker: agentImgSafetyState.value }),
+          },
         };
         const tokenVal = tokenInput.value.trim();
         if (tokenVal) {
