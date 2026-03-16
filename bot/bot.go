@@ -7,12 +7,15 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/tomasmach/vespra/agent"
+	"github.com/tomasmach/vespra/web"
 )
 
 // Bot wraps the Discord session and message routing.
 type Bot struct {
 	session *discordgo.Session
 	router  *agent.Router
+	ops     *web.Server
+	wizard  *wizardHandler
 }
 
 // New creates a new Bot, configures intents, and registers message handlers.
@@ -23,12 +26,15 @@ func New(token string) (*Bot, error) {
 		return nil, err
 	}
 
-	session.Identify.Intents = discordgo.IntentsGuildMessages |
+	session.Identify.Intents = discordgo.IntentsGuilds |
+		discordgo.IntentsGuildMessages |
 		discordgo.IntentsDirectMessages |
 		discordgo.IntentsMessageContent
 
 	b := &Bot{session: session}
 	session.AddHandler(b.onMessageCreate)
+	session.AddHandler(b.onInteractionCreate)
+	session.AddHandler(b.onGuildCreate)
 
 	return b, nil
 }
@@ -41,6 +47,36 @@ func (b *Bot) Session() *discordgo.Session {
 // SetRouter wires a Router into the bot for message dispatch.
 func (b *Bot) SetRouter(r *agent.Router) {
 	b.router = r
+}
+
+// SetOps wires the web server into the bot, enabling slash command handling.
+// Must be called before the bot starts receiving interactions.
+func (b *Bot) SetOps(ops *web.Server) {
+	b.ops = ops
+	b.wizard = newWizardHandler(ops)
+}
+
+// onGuildCreate registers slash commands whenever the bot joins a guild or reconnects.
+func (b *Bot) onGuildCreate(s *discordgo.Session, g *discordgo.GuildCreate) {
+	if b.ops == nil {
+		return
+	}
+	RegisterCommands(s, g.ID)
+}
+
+// onInteractionCreate dispatches incoming interactions to the appropriate handler.
+func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if b.ops == nil {
+		return
+	}
+	switch i.Type {
+	case discordgo.InteractionApplicationCommand:
+		b.handleSlashCommand(s, i)
+	case discordgo.InteractionMessageComponent:
+		if b.wizard != nil {
+			b.wizard.handleComponent(s, i)
+		}
+	}
 }
 
 // Start opens the Discord gateway connection.

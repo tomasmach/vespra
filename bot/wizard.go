@@ -1,0 +1,375 @@
+package bot
+
+import (
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/bwmarrin/discordgo"
+
+	"github.com/tomasmach/vespra/config"
+	"github.com/tomasmach/vespra/web"
+)
+
+type wizardStep int
+
+const (
+	wizardStepMode     wizardStep = iota
+	wizardStepChannels
+	wizardStepLanguage
+)
+
+type wizardState struct {
+	step       wizardStep
+	guildID    string
+	userID     string
+	mode       string
+	channelIDs []string
+	language   string
+	createdAt  time.Time
+}
+
+// wizardHandler manages the multi-step /init setup wizard sessions.
+type wizardHandler struct {
+	mu       sync.Mutex
+	sessions map[string]*wizardState // key: "guildID:userID"
+	ops      *web.Server
+}
+
+// newWizardHandler returns a new wizardHandler backed by ops for config writes.
+func newWizardHandler(ops *web.Server) *wizardHandler {
+	return &wizardHandler{
+		sessions: make(map[string]*wizardState),
+		ops:      ops,
+	}
+}
+
+// wizardKey produces the session map key for a guild/user pair.
+func wizardKey(guildID, userID string) string {
+	return guildID + ":" + userID
+}
+
+// intPtr returns a pointer to v; used for SelectMenu MinValues which requires *int.
+func intPtr(v int) *int {
+	return &v
+}
+
+// startInit begins the /init setup wizard for the invoking guild.
+func (w *wizardHandler) startInit(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	// Only run in guild context; DMs have no GuildID.
+	if i.GuildID == "" || i.Member == nil {
+		respondEphemeral(s, i, "This command can only be used inside a server.")
+		return
+	}
+
+	// If an agent is already configured for this server, decline the wizard.
+	cfg := w.ops.CfgStore().Get()
+	for _, a := range cfg.Agents {
+		if a.ServerID == i.GuildID {
+			respondEphemeral(s, i, "This server is already configured. Use `/mode`, `/channel`, `/language` to adjust settings, or `/status` to view current config.")
+			return
+		}
+	}
+
+	// Lazy-cleanup of stale sessions before adding a new one.
+	now := time.Now()
+	w.mu.Lock()
+	for k, st := range w.sessions {
+		if now.Sub(st.createdAt) > 10*time.Minute {
+			delete(w.sessions, k)
+		}
+	}
+
+	state := &wizardState{
+		step:      wizardStepMode,
+		guildID:   i.GuildID,
+		userID:    i.Member.User.ID,
+		createdAt: now,
+	}
+	w.sessions[wizardKey(i.GuildID, i.Member.User.ID)] = state
+	w.mu.Unlock()
+
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: "**Step 1/3 — Response Mode**\nHow should I respond to messages in this server?",
+			Flags:   discordgo.MessageFlagsEphemeral,
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.SelectMenu{
+							CustomID:    "vespra:init:mode",
+							Placeholder: "Select response mode...",
+							Options: []discordgo.SelectMenuOption{
+								{Label: "Smart", Value: "smart", Description: "AI decides when to respond based on context"},
+								{Label: "Mention only", Value: "mention", Description: "Only respond when @mentioned or replied to"},
+								{Label: "All messages", Value: "all", Description: "Respond to every message"},
+								{Label: "None", Value: "none", Description: "Silent by default, enable per-channel"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		slog.Error("wizard: send step 1", "error", err, "guild_id", i.GuildID)
+	}
+}
+
+// handleComponent routes message-component interactions to the correct wizard step handler.
+func (w *wizardHandler) handleComponent(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.GuildID == "" || i.Member == nil {
+		return
+	}
+
+	customID := i.MessageComponentData().CustomID
+
+	// Only handle wizard-scoped interactions.
+	if !strings.HasPrefix(customID, "vespra:init:") {
+		return
+	}
+
+	key := wizardKey(i.GuildID, i.Member.User.ID)
+	w.mu.Lock()
+	state, ok := w.sessions[key]
+	w.mu.Unlock()
+
+	if !ok || time.Since(state.createdAt) > 10*time.Minute {
+		if ok {
+			w.mu.Lock()
+			delete(w.sessions, key)
+			w.mu.Unlock()
+		}
+		respondEphemeralUpdate(s, i, "Your setup wizard expired. Run `/init` again.")
+		return
+	}
+
+	switch customID {
+	case "vespra:init:mode":
+		w.handleModeSelect(s, i, state)
+	case "vespra:init:channels":
+		w.handleChannelSelect(s, i, state)
+	case "vespra:init:channels_skip":
+		w.handleChannelSkip(s, i, state)
+	case "vespra:init:language":
+		w.handleLanguageSelect(s, i, state)
+	}
+}
+
+// handleModeSelect processes the response-mode selection and advances to step 2.
+func (w *wizardHandler) handleModeSelect(s *discordgo.Session, i *discordgo.InteractionCreate, state *wizardState) {
+	values := i.MessageComponentData().Values
+	if len(values) == 0 {
+		respondEphemeralUpdate(s, i, "No mode selected. Run `/init` again.")
+		return
+	}
+	state.mode = values[0]
+	state.step = wizardStepChannels
+	w.showChannelStep(s, i, state)
+}
+
+// showChannelStep fetches guild channels and renders the channel-selection step.
+func (w *wizardHandler) showChannelStep(s *discordgo.Session, i *discordgo.InteractionCreate, state *wizardState) {
+	channels, err := s.GuildChannels(state.guildID)
+	if err != nil {
+		slog.Error("wizard: fetch guild channels", "error", err, "guild_id", state.guildID)
+		respondEphemeralUpdate(s, i, "Failed to fetch channels. Run `/init` again.")
+		return
+	}
+
+	// Keep only text channels.
+	var textChannels []*discordgo.Channel
+	for _, ch := range channels {
+		if ch.Type == discordgo.ChannelTypeGuildText {
+			textChannels = append(textChannels, ch)
+		}
+	}
+
+	if len(textChannels) == 0 {
+		// No text channels — skip straight to language step.
+		state.step = wizardStepLanguage
+		w.showLanguageStep(s, i)
+		return
+	}
+
+	truncated := len(textChannels) > 25
+	if truncated {
+		textChannels = textChannels[:25]
+	}
+
+	options := make([]discordgo.SelectMenuOption, len(textChannels))
+	for idx, ch := range textChannels {
+		options[idx] = discordgo.SelectMenuOption{
+			Label: ch.Name,
+			Value: ch.ID,
+		}
+	}
+
+	content := "**Step 2/3 — Channel Setup**\nSelect channels where I should be active. If you chose 'none' as response mode, I'll only respond in the selected channels."
+	if truncated {
+		content += "\n\n*This server has more than 25 text channels. Showing the first 25 — use the web dashboard for full control.*"
+	}
+
+	maxValues := len(textChannels)
+
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+			Flags:   discordgo.MessageFlagsEphemeral,
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.SelectMenu{
+							CustomID:  "vespra:init:channels",
+							MinValues: intPtr(0),
+							MaxValues: maxValues,
+							Options:   options,
+						},
+					},
+				},
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.Button{
+							CustomID: "vespra:init:channels_skip",
+							Label:    "Skip",
+							Style:    discordgo.SecondaryButton,
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		slog.Error("wizard: send step 2", "error", err, "guild_id", state.guildID)
+	}
+}
+
+// handleChannelSelect records selected channel IDs and advances to step 3.
+func (w *wizardHandler) handleChannelSelect(s *discordgo.Session, i *discordgo.InteractionCreate, state *wizardState) {
+	state.channelIDs = i.MessageComponentData().Values
+	state.step = wizardStepLanguage
+	w.showLanguageStep(s, i)
+}
+
+// handleChannelSkip skips channel selection and advances to step 3.
+func (w *wizardHandler) handleChannelSkip(s *discordgo.Session, i *discordgo.InteractionCreate, state *wizardState) {
+	state.channelIDs = nil
+	state.step = wizardStepLanguage
+	w.showLanguageStep(s, i)
+}
+
+// showLanguageStep renders the language-selection step.
+func (w *wizardHandler) showLanguageStep(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content: "**Step 3/3 — Language**\nWhat language should I reply in?",
+			Flags:   discordgo.MessageFlagsEphemeral,
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.SelectMenu{
+							CustomID:    "vespra:init:language",
+							Placeholder: "Select language...",
+							Options: []discordgo.SelectMenuOption{
+								{Label: "Default (English)", Value: "", Description: "No language preference"},
+								{Label: "Czech", Value: "Czech"},
+								{Label: "Slovak", Value: "Slovak"},
+								{Label: "Spanish", Value: "Spanish"},
+								{Label: "French", Value: "French"},
+								{Label: "German", Value: "German"},
+								{Label: "Portuguese", Value: "Portuguese"},
+								{Label: "Italian", Value: "Italian"},
+								{Label: "Japanese", Value: "Japanese"},
+								{Label: "Chinese", Value: "Chinese"},
+								{Label: "Korean", Value: "Korean"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		slog.Error("wizard: send step 3", "error", err)
+	}
+}
+
+// handleLanguageSelect completes the wizard, persists the agent config, and shows a summary.
+func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.InteractionCreate, state *wizardState) {
+	values := i.MessageComponentData().Values
+	if len(values) > 0 {
+		state.language = values[0]
+	}
+
+	// Build channel overrides. When the server mode is "none" and specific channels were
+	// chosen, create "smart" overrides for those channels so the bot responds there.
+	// For any other server mode, channel overrides are unnecessary.
+	var channels []config.ChannelConfig
+	if state.mode == "none" && len(state.channelIDs) > 0 {
+		channels = make([]config.ChannelConfig, len(state.channelIDs))
+		for idx, chID := range state.channelIDs {
+			channels[idx] = config.ChannelConfig{ID: chID, ResponseMode: "smart"}
+		}
+	}
+
+	agentCfg := config.AgentConfig{
+		ID:           state.guildID,
+		ServerID:     state.guildID,
+		ResponseMode: state.mode,
+		Language:     state.language,
+		Channels:     channels,
+	}
+
+	if err := w.ops.UpsertAgent(agentCfg); err != nil {
+		slog.Error("wizard: upsert agent", "error", err, "guild_id", state.guildID)
+		respondEphemeralUpdate(s, i, fmt.Sprintf("Setup failed: %v. Run `/init` again.", err))
+		return
+	}
+
+	// Remove the session now that setup is complete.
+	key := wizardKey(state.guildID, state.userID)
+	w.mu.Lock()
+	delete(w.sessions, key)
+	w.mu.Unlock()
+
+	// Build summary.
+	modeDisplay := state.mode
+	langDisplay := state.language
+	if langDisplay == "" {
+		langDisplay = "default"
+	}
+
+	var channelDisplay string
+	if len(state.channelIDs) == 0 {
+		channelDisplay = "all channels"
+	} else {
+		parts := make([]string, len(state.channelIDs))
+		for idx, chID := range state.channelIDs {
+			parts[idx] = fmt.Sprintf("<#%s>", chID)
+		}
+		channelDisplay = strings.Join(parts, ", ")
+	}
+
+	summary := fmt.Sprintf(
+		"✅ **Setup Complete!**\n\nResponse mode: **%s**\nLanguage: **%s**\nChannels: %s\n\nUse `/mode`, `/channel`, `/language` to adjust settings anytime.",
+		modeDisplay, langDisplay, channelDisplay,
+	)
+
+	respondEphemeralUpdate(s, i, summary)
+}
+
+// respondEphemeralUpdate updates the existing ephemeral wizard message with a plain text reply
+// and clears all components.
+func respondEphemeralUpdate(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content:    content,
+			Components: []discordgo.MessageComponent{},
+		},
+	}); err != nil {
+		slog.Error("wizard: update message", "error", err)
+	}
+}

@@ -355,6 +355,26 @@ func TestAgentSoulLibrary(t *testing.T) {
 	}
 }
 
+func newTestWebServer(t *testing.T) *web.Server {
+	t.Helper()
+	return newTestWebServerWithAgents(t, "")
+}
+
+func newTestWebServerWithAgents(t *testing.T, agentsTOML string) *web.Server {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	base := "[bot]\ntoken=\"x\"\n[llm]\nopenrouter_key=\"test\"\n"
+	if err := os.WriteFile(cfgPath, []byte(base+agentsTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := config.NewStore(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return web.New(":0", store, cfgPath, &agent.Router{}, nil)
+}
+
 func TestUpdateAgentPreservesChannels(t *testing.T) {
 	agentsTOML := "\n[[agents]]\nid = \"chan-agent\"\nserver_id = \"111\"\n[[agents.channels]]\nid = \"999\"\nresponse_mode = \"all\"\n"
 	ts, _ := newTestServerWithAgents(t, agentsTOML)
@@ -387,4 +407,277 @@ func TestUpdateAgentPreservesChannels(t *testing.T) {
 	if !ok || len(channels) == 0 {
 		t.Fatal("channel config was wiped by update without channels field")
 	}
+}
+
+func TestUpsertAgent(t *testing.T) {
+	t.Run("valid input creates agent", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		input := config.AgentConfig{ID: "my-agent", ServerID: "111222333", ResponseMode: "all"}
+		if err := srv.UpsertAgent(input); err != nil {
+			t.Fatalf("UpsertAgent: unexpected error: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if len(cfg.Agents) != 1 {
+			t.Fatalf("expected 1 agent, got %d", len(cfg.Agents))
+		}
+		if cfg.Agents[0].ID != "my-agent" {
+			t.Errorf("id = %q, want %q", cfg.Agents[0].ID, "my-agent")
+		}
+		if cfg.Agents[0].ServerID != "111222333" {
+			t.Errorf("server_id = %q, want %q", cfg.Agents[0].ServerID, "111222333")
+		}
+		if cfg.Agents[0].ResponseMode != "all" {
+			t.Errorf("response_mode = %q, want %q", cfg.Agents[0].ResponseMode, "all")
+		}
+	})
+
+	t.Run("empty ID returns error", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		err := srv.UpsertAgent(config.AgentConfig{ID: "", ServerID: "111"})
+		if err == nil {
+			t.Fatal("expected error for empty ID, got nil")
+		}
+	})
+
+	t.Run("empty server_id returns error", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		err := srv.UpsertAgent(config.AgentConfig{ID: "agent1", ServerID: ""})
+		if err == nil {
+			t.Fatal("expected error for empty server_id, got nil")
+		}
+	})
+
+	t.Run("duplicate ID returns error", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		input := config.AgentConfig{ID: "dup-agent", ServerID: "111"}
+		if err := srv.UpsertAgent(input); err != nil {
+			t.Fatalf("first UpsertAgent: unexpected error: %v", err)
+		}
+		// Second upsert with same ID but different server_id.
+		err := srv.UpsertAgent(config.AgentConfig{ID: "dup-agent", ServerID: "222"})
+		if err == nil {
+			t.Fatal("expected error for duplicate ID, got nil")
+		}
+	})
+
+	t.Run("duplicate server_id returns error", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpsertAgent(config.AgentConfig{ID: "agent-a", ServerID: "999"}); err != nil {
+			t.Fatalf("first UpsertAgent: unexpected error: %v", err)
+		}
+		// Second upsert with different ID but same server_id.
+		err := srv.UpsertAgent(config.AgentConfig{ID: "agent-b", ServerID: "999"})
+		if err == nil {
+			t.Fatal("expected error for duplicate server_id, got nil")
+		}
+	})
+
+	t.Run("empty response_mode defaults to none", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpsertAgent(config.AgentConfig{ID: "agent-none", ServerID: "555"}); err != nil {
+			t.Fatalf("UpsertAgent: unexpected error: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if cfg.Agents[0].ResponseMode != "none" {
+			t.Errorf("response_mode = %q, want %q", cfg.Agents[0].ResponseMode, "none")
+		}
+	})
+}
+
+func TestUpdateAgentMode(t *testing.T) {
+	t.Run("updates mode on existing agent", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpsertAgent(config.AgentConfig{ID: "agent1", ServerID: "100", ResponseMode: "none"}); err != nil {
+			t.Fatalf("setup UpsertAgent: %v", err)
+		}
+		if err := srv.UpdateAgentMode("100", "all"); err != nil {
+			t.Fatalf("UpdateAgentMode: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if cfg.Agents[0].ResponseMode != "all" {
+			t.Errorf("response_mode = %q, want %q", cfg.Agents[0].ResponseMode, "all")
+		}
+	})
+
+	t.Run("auto-creates agent when none exists", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpdateAgentMode("200", "mention"); err != nil {
+			t.Fatalf("UpdateAgentMode: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if len(cfg.Agents) != 1 {
+			t.Fatalf("expected 1 agent after auto-create, got %d", len(cfg.Agents))
+		}
+		if cfg.Agents[0].ServerID != "200" {
+			t.Errorf("server_id = %q, want %q", cfg.Agents[0].ServerID, "200")
+		}
+		if cfg.Agents[0].ResponseMode != "mention" {
+			t.Errorf("response_mode = %q, want %q", cfg.Agents[0].ResponseMode, "mention")
+		}
+	})
+
+	t.Run("mode value is set correctly", func(t *testing.T) {
+		for _, mode := range []string{"smart", "mention", "all", "none"} {
+			mode := mode
+			t.Run(mode, func(t *testing.T) {
+				srv := newTestWebServer(t)
+				if err := srv.UpsertAgent(config.AgentConfig{ID: "a", ServerID: "300"}); err != nil {
+					t.Fatalf("setup: %v", err)
+				}
+				if err := srv.UpdateAgentMode("300", mode); err != nil {
+					t.Fatalf("UpdateAgentMode(%q): %v", mode, err)
+				}
+				cfg := srv.CfgStore().Get()
+				if cfg.Agents[0].ResponseMode != mode {
+					t.Errorf("response_mode = %q, want %q", cfg.Agents[0].ResponseMode, mode)
+				}
+			})
+		}
+	})
+}
+
+func TestUpdateAgentChannel(t *testing.T) {
+	t.Run("add channel override to existing agent", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpsertAgent(config.AgentConfig{ID: "agent1", ServerID: "100"}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := srv.UpdateAgentChannel("100", "chan-1", "all"); err != nil {
+			t.Fatalf("UpdateAgentChannel: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if len(cfg.Agents[0].Channels) != 1 {
+			t.Fatalf("expected 1 channel, got %d", len(cfg.Agents[0].Channels))
+		}
+		ch := cfg.Agents[0].Channels[0]
+		if ch.ID != "chan-1" || ch.ResponseMode != "all" {
+			t.Errorf("channel = {%q, %q}, want {%q, %q}", ch.ID, ch.ResponseMode, "chan-1", "all")
+		}
+	})
+
+	t.Run("add second channel override keeps both", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpsertAgent(config.AgentConfig{ID: "agent1", ServerID: "100"}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := srv.UpdateAgentChannel("100", "chan-1", "all"); err != nil {
+			t.Fatalf("add chan-1: %v", err)
+		}
+		if err := srv.UpdateAgentChannel("100", "chan-2", "mention"); err != nil {
+			t.Fatalf("add chan-2: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if len(cfg.Agents[0].Channels) != 2 {
+			t.Fatalf("expected 2 channels, got %d", len(cfg.Agents[0].Channels))
+		}
+	})
+
+	t.Run("update existing channel override", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpsertAgent(config.AgentConfig{ID: "agent1", ServerID: "100"}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := srv.UpdateAgentChannel("100", "chan-1", "all"); err != nil {
+			t.Fatalf("initial add: %v", err)
+		}
+		if err := srv.UpdateAgentChannel("100", "chan-1", "none"); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if len(cfg.Agents[0].Channels) != 1 {
+			t.Fatalf("expected 1 channel, got %d", len(cfg.Agents[0].Channels))
+		}
+		if cfg.Agents[0].Channels[0].ResponseMode != "none" {
+			t.Errorf("response_mode = %q, want %q", cfg.Agents[0].Channels[0].ResponseMode, "none")
+		}
+	})
+
+	t.Run("remove channel override with empty mode", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpsertAgent(config.AgentConfig{ID: "agent1", ServerID: "100"}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := srv.UpdateAgentChannel("100", "chan-1", "all"); err != nil {
+			t.Fatalf("add: %v", err)
+		}
+		if err := srv.UpdateAgentChannel("100", "chan-1", ""); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if len(cfg.Agents[0].Channels) != 0 {
+			t.Fatalf("expected 0 channels after removal, got %d", len(cfg.Agents[0].Channels))
+		}
+	})
+
+	t.Run("remove from non-existent agent returns error", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		err := srv.UpdateAgentChannel("no-such-server", "chan-1", "")
+		if err == nil {
+			t.Fatal("expected error when removing channel from non-existent agent, got nil")
+		}
+	})
+
+	t.Run("add channel to non-existent agent auto-creates", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpdateAgentChannel("300", "chan-1", "all"); err != nil {
+			t.Fatalf("UpdateAgentChannel: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if len(cfg.Agents) != 1 {
+			t.Fatalf("expected 1 agent after auto-create, got %d", len(cfg.Agents))
+		}
+		if len(cfg.Agents[0].Channels) != 1 {
+			t.Fatalf("expected 1 channel on auto-created agent, got %d", len(cfg.Agents[0].Channels))
+		}
+		if cfg.Agents[0].Channels[0].ResponseMode != "all" {
+			t.Errorf("channel response_mode = %q, want %q", cfg.Agents[0].Channels[0].ResponseMode, "all")
+		}
+	})
+}
+
+func TestUpdateAgentLanguage(t *testing.T) {
+	t.Run("updates language on existing agent", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpsertAgent(config.AgentConfig{ID: "agent1", ServerID: "100"}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := srv.UpdateAgentLanguage("100", "cs"); err != nil {
+			t.Fatalf("UpdateAgentLanguage: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if cfg.Agents[0].Language != "cs" {
+			t.Errorf("language = %q, want %q", cfg.Agents[0].Language, "cs")
+		}
+	})
+
+	t.Run("auto-creates agent when none exists", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpdateAgentLanguage("200", "en"); err != nil {
+			t.Fatalf("UpdateAgentLanguage: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if len(cfg.Agents) != 1 {
+			t.Fatalf("expected 1 agent after auto-create, got %d", len(cfg.Agents))
+		}
+		if cfg.Agents[0].ServerID != "200" {
+			t.Errorf("server_id = %q, want %q", cfg.Agents[0].ServerID, "200")
+		}
+		if cfg.Agents[0].Language != "en" {
+			t.Errorf("language = %q, want %q", cfg.Agents[0].Language, "en")
+		}
+	})
+
+	t.Run("clear language by setting empty string", func(t *testing.T) {
+		srv := newTestWebServer(t)
+		if err := srv.UpsertAgent(config.AgentConfig{ID: "agent1", ServerID: "100", Language: "de"}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := srv.UpdateAgentLanguage("100", ""); err != nil {
+			t.Fatalf("UpdateAgentLanguage: %v", err)
+		}
+		cfg := srv.CfgStore().Get()
+		if cfg.Agents[0].Language != "" {
+			t.Errorf("language = %q, want empty", cfg.Agents[0].Language)
+		}
+	})
 }

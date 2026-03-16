@@ -405,42 +405,19 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if input.ID == "" {
-		http.Error(w, "id is required", http.StatusBadRequest)
-		return
-	}
-	if !validAgentID(input.ID) {
-		http.Error(w, "invalid agent id: must not contain slashes or null bytes", http.StatusBadRequest)
-		return
-	}
-	if input.ServerID == "" {
-		http.Error(w, "server_id is required", http.StatusBadRequest)
-		return
-	}
-	if input.ResponseMode == "" {
-		// New guilds default to explicit channel allowlisting.
-		input.ResponseMode = "none"
-	}
 
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	cfg := s.cfgStore.Get()
-	if findAgentIndex(cfg.Agents, input.ID) != -1 {
-		http.Error(w, "agent id already exists", http.StatusConflict)
-		return
-	}
-	for _, a := range cfg.Agents {
-		if a.ServerID == input.ServerID {
-			http.Error(w, "server_id already exists", http.StatusConflict)
-			return
+	if err := s.UpsertAgent(input); err != nil {
+		// Map known validation/conflict errors to appropriate HTTP status codes.
+		msg := err.Error()
+		switch msg {
+		case "id is required", "invalid agent id: must not contain slashes or null bytes", "server_id is required":
+			http.Error(w, msg, http.StatusBadRequest)
+		case "agent id already exists", "server_id already configured":
+			http.Error(w, msg, http.StatusConflict)
+		default:
+			slog.Error("write agents", "error", err)
+			http.Error(w, "failed to save agent", http.StatusInternalServerError)
 		}
-	}
-
-	newAgents := append(slices.Clone(cfg.Agents), input)
-	if err := s.writeAgents(newAgents); err != nil {
-		slog.Error("write agents", "error", err)
-		http.Error(w, "failed to save agent", http.StatusInternalServerError)
 		return
 	}
 
