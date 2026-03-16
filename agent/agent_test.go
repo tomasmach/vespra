@@ -717,6 +717,7 @@ func TestShouldSuppressSmartMode(t *testing.T) {
 		mode           string
 		hasContent     bool
 		replied        bool
+		reacted        bool
 		visionResponse bool
 		addressed      bool
 		internal       bool
@@ -779,6 +780,16 @@ func TestShouldSuppressSmartMode(t *testing.T) {
 			want:       false,
 		},
 		{
+			// Reacted=true means the bot only reacted (emoji) and did not reply.
+			// A react-only turn still suppresses smart mode — there is no text
+			// response to deliver, so suppression is correct behaviour.
+			name:       "reacted does not prevent suppression",
+			mode:       "smart",
+			hasContent: true,
+			reacted:    true,
+			want:       true,
+		},
+		{
 			name: "no content not suppressed",
 			mode: "smart",
 			want: false,
@@ -788,6 +799,7 @@ func TestShouldSuppressSmartMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reg := tools.NewRegistry()
 			reg.Replied = tt.replied
+			reg.Reacted = tt.reacted
 			reg.WebSearchCalled = tt.webSearch
 			reg.ImageGenCalled = tt.imageGen
 			got := shouldSuppressSmartMode(tt.mode, tt.hasContent, reg, tt.visionResponse, tt.addressed, tt.internal)

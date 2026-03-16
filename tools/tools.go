@@ -72,6 +72,7 @@ func (r *Registry) Definitions() []llm.ToolDefinition {
 func (r *Registry) Dispatch(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	t, ok := r.tools[name]
 	if !ok {
+		slog.Warn("dispatch: unknown tool", "tool", name)
 		return fmt.Sprintf("Tool %q is not available. Respond to the user without it.", name), nil
 	}
 	return t.Call(ctx, args)

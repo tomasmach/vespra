@@ -901,7 +901,7 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	}
 	if mode == "smart" {
 		if addressed {
-			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` tool.")
+			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` or `react` tools.")
 		} else {
 			sb.WriteString("\n\nYou are in smart mode. Decide whether to respond:\n- RESPOND (via `reply` or `react` tools) when: someone asks a question to the channel, continues a conversation with you, mentions your name, shares something interesting or relevant to you\n- STAY SILENT (produce no output at all) when: people are clearly talking to each other, the message is not directed at you, it's a side conversation you're not part of\nDo NOT write meta-commentary about why you are staying silent.")
 		}
@@ -1286,6 +1286,11 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 //   - the message was addressed (@mention),
 //   - it's an internal turn (e.g. web search result delivery),
 //   - the web_search or generate_image tool was invoked.
+//
+// Note: reg.Reacted is intentionally NOT an exemption. If the LLM only reacted
+// (emoji reaction) without calling the reply tool, any trailing plain-text is
+// still suppressed — the model should not leak text alongside a bare reaction
+// in smart mode.
 func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, visionResponse, addressed, internal bool) bool {
 	return mode == "smart" && hasContent && !reg.Replied &&
 		!visionResponse && !addressed && !internal &&
