@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,7 @@ type Registry struct {
 	ReplyText       string // the content argument passed to the reply tool
 	WebSearchCalled bool   // set to true when web_search is invoked
 	ImageGenCalled  bool   // set to true when generate_image is invoked
+	Reacted         bool   // set to true when the react tool is called
 }
 
 // NewRegistry creates an empty registry.
@@ -70,7 +72,8 @@ func (r *Registry) Definitions() []llm.ToolDefinition {
 func (r *Registry) Dispatch(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	t, ok := r.tools[name]
 	if !ok {
-		return "", fmt.Errorf("unknown tool: %s", name)
+		slog.Warn("dispatch: unknown tool", "tool", name)
+		return fmt.Sprintf("Tool %q is not available. Respond to the user without it.", name), nil
 	}
 	return t.Call(ctx, args)
 }
@@ -311,8 +314,13 @@ func SplitMessage(s string, limit int) []string {
 	return parts
 }
 
+// customEmojiRe matches Discord custom emoji markup like <:name:id> or <a:name:id>
+// and captures the "name:id" portion.
+var customEmojiRe = regexp.MustCompile(`^<a?:(\w+:\d+)>$`)
+
 type reactTool struct {
-	react ReactFunc
+	react   ReactFunc
+	reacted *bool
 }
 
 func (t *reactTool) Name() string { return "react" }
@@ -335,7 +343,15 @@ func (t *reactTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
 	}
-	return "Reacted.", t.react(p.Emoji)
+	emoji := p.Emoji
+	if m := customEmojiRe.FindStringSubmatch(emoji); m != nil {
+		emoji = m[1]
+	}
+	if err := t.react(emoji); err != nil {
+		return "", err
+	}
+	*t.reacted = true
+	return "Reacted.", nil
 }
 
 // WebSearchDeps groups dependencies for the async web search tool.
@@ -448,7 +464,7 @@ func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold flo
 	r.Register(&memoryRecallTool{store: store, serverID: serverID, defaultTopN: defaultRecallLimit})
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
 	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText})
-	r.Register(&reactTool{react: react})
+	r.Register(&reactTool{react: react, reacted: &r.Reacted})
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps, searchCalled: &r.WebSearchCalled})
 		r.Register(&webFetchTool{timeoutSeconds: searchDeps.TimeoutSeconds})

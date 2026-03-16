@@ -564,7 +564,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	memories := a.recallMemories(ctx, cfg, userID, msg.Content)
 
 	botName := a.resources.Session.State.User.Username
-	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
@@ -714,7 +714,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	memories := a.recallMemories(ctx, cfg, lastAuthorID, recallQuery)
 
 	botName := a.resources.Session.State.User.Username
-	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
@@ -858,16 +858,16 @@ func mergeMemories(userMems, contentMems []memory.MemoryRow, limit int) []memory
 
 // buildSystemPrompt assembles the system prompt from the soul text, memories,
 // language override, and response mode.
-func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string) string {
+func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string, addressed bool) string {
 	var sb strings.Builder
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
 	}
-	fmt.Fprintf(&sb, "Today's date is %s.\n\n", time.Now().Format("Monday, January 2, 2006"))
+	now := time.Now()
+	fmt.Fprintf(&sb, "Today's date is %s.\n\n", now.Format("Monday, January 2, 2006"))
 	sb.WriteString(a.soulText)
 	if len(memories) > 0 {
 		sb.WriteString("\n\n## Relevant Memories\n")
-		now := time.Now()
 		for _, m := range memories {
 			age := now.Sub(m.CreatedAt)
 			var ageStr string
@@ -900,7 +900,11 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 	if mode == "smart" {
-		sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
+		if addressed {
+			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` or `react` tools.")
+		} else {
+			sb.WriteString("\n\nYou are in smart mode. Decide whether to respond:\n- RESPOND (via `reply` or `react` tools) when: someone asks a question to the channel, continues a conversation with you, mentions your name, shares something interesting or relevant to you\n- STAY SILENT (produce no output at all) when: people are clearly talking to each other, the message is not directed at you, it's a side conversation you're not part of\nDo NOT write meta-commentary about why you are staying silent.")
+		}
 	}
 	return sb.String()
 }
@@ -1195,6 +1199,10 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 	}
 
+	if tp.mode == "smart" && !tp.reg.Replied && !tp.reg.Reacted && assistantContent == "" {
+		a.logger.Debug("smart mode: LLM chose not to respond", "addressed", tp.addressed)
+	}
+
 	if assistantContent != "" && looksLikeToolCall(assistantContent, tp.reg.Definitions()) {
 		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
 		assistantContent = ""
@@ -1207,10 +1215,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	// In smart mode the model should only communicate via reply/react tools.
 	// Suppress any leftover plain-text content that was not sent through a tool.
-	// Exception 1: vision model responses are always plain text (tools are omitted for GLM vision).
-	// Exception 2: when the user directly @mentioned the bot, let any non-empty content through
-	//   as a fallback — the LLM occasionally forgets to use the reply tool despite the instruction.
-	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse && !tp.addressed {
+	if shouldSuppressSmartMode(tp.mode, assistantContent != "", tp.reg, visionResponse, tp.addressed, tp.internal) {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
 		assistantContent = ""
 	}
@@ -1251,7 +1256,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	// Fallback: if the bot produced no reply at all and the user directly addressed it,
 	// send an error nudge rather than going silent. This catches cases where the LLM
 	// returns empty content with no tool calls (e.g. confused by malformed history).
-	if !tp.internal && !tp.reg.Replied && !tp.reg.ImageGenCalled && assistantContent == "" && tp.addressed {
+	if shouldSendFallback(tp.internal, tp.reg, assistantContent != "", tp.addressed) {
 		a.logger.Warn("LLM produced no output for addressed message; sending fallback")
 		if err := tp.sendFn("I'm having trouble responding. Please try again."); err != nil {
 			a.logger.Error("send message", "error", err)
@@ -1272,6 +1277,32 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			a.runMemoryExtraction(ctx, a.history)
 		}
 	}
+}
+
+// shouldSuppressSmartMode reports whether plain-text content from the LLM should
+// be dropped in smart mode. Content is preserved when:
+//   - the reply tool was already used,
+//   - it's a vision response (tools omitted for GLM vision),
+//   - the message was addressed (@mention),
+//   - it's an internal turn (e.g. web search result delivery),
+//   - the web_search or generate_image tool was invoked.
+//
+// Note: reg.Reacted is intentionally NOT an exemption. If the LLM only reacted
+// (emoji reaction) without calling the reply tool, any trailing plain-text is
+// still suppressed — the model should not leak text alongside a bare reaction
+// in smart mode.
+func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, visionResponse, addressed, internal bool) bool {
+	return mode == "smart" && hasContent && !reg.Replied &&
+		!visionResponse && !addressed && !internal &&
+		!reg.WebSearchCalled && !reg.ImageGenCalled
+}
+
+// shouldSendFallback reports whether the error fallback ("I'm having trouble
+// responding") should be sent. It fires only when the bot was directly addressed
+// but produced no visible output at all — no reply, no image, no reaction, and
+// no plain-text content.
+func shouldSendFallback(internal bool, reg *tools.Registry, hasContent, addressed bool) bool {
+	return !internal && !reg.Replied && !reg.ImageGenCalled && !reg.Reacted && !hasContent && addressed
 }
 
 // runMemoryExtraction launches a background goroutine that reviews recent history
