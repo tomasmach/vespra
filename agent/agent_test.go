@@ -863,11 +863,12 @@ func TestBuildSystemPromptSmartAddressedOverridesDirectedAtOther(t *testing.T) {
 
 func TestIsDirectedAtOther(t *testing.T) {
 	const botID = "bot123"
+	const botName = "Machmonstrum"
 
 	tests := []struct {
-		name    string
-		msg     *discordgo.MessageCreate
-		want    bool
+		name string
+		msg  *discordgo.MessageCreate
+		want bool
 	}{
 		{
 			name: "Discord mention of other user only",
@@ -919,6 +920,30 @@ func TestIsDirectedAtOther(t *testing.T) {
 				Content: "@Petr what time?",
 			}},
 			want: true,
+		},
+		{
+			name: "plain text @BotName vocative form",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Machmonstře, řekni vtip",
+			}},
+			want: false,
+		},
+		{
+			name: "plain text @BotName exact match",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Machmonstrum řekni vtip",
+			}},
+			want: false,
+		},
+		{
+			name: "plain text @BotName case insensitive",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@machmonstrum hello",
+			}},
+			want: false,
 		},
 		{
 			name: "no mentions general question",
@@ -988,9 +1013,37 @@ func TestIsDirectedAtOther(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isDirectedAtOther(tt.msg, botID)
+			got := isDirectedAtOther(tt.msg, botID, botName)
 			if got != tt.want {
 				t.Errorf("isDirectedAtOther() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLooksLikeBotName(t *testing.T) {
+	tests := []struct {
+		name, botName string
+		want          bool
+	}{
+		{"machmonstře", "machmonstrum", true},   // vocative (10/12 = 83%)
+		{"machmonstrum", "machmonstrum", true},  // exact
+		{"machmonstrume", "machmonstrum", true}, // another declension (12/13 = 92%)
+		{"petr", "machmonstrum", false},         // completely different
+		{"mac", "machmonstrum", false},          // too short (shared 3 < min 4)
+		{"ma", "machmonstrum", false},           // too short
+		{"machmon", "machmonstrum", false},      // only 58% of longer
+		{"vespro", "vespra", true},              // vocative feminine (5/6 = 83%)
+		{"vespra", "vespra", true},              // exact
+		{"botname", "botname", true},            // exact short name
+		{"botnam", "botname", true},             // 1 rune off (6/7 = 86%)
+		{"botn", "botname", false},              // only 57% of longer
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+"_vs_"+tt.botName, func(t *testing.T) {
+			got := looksLikeBotName(tt.name, tt.botName)
+			if got != tt.want {
+				t.Errorf("looksLikeBotName(%q, %q) = %v, want %v", tt.name, tt.botName, got, tt.want)
 			}
 		})
 	}

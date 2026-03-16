@@ -520,7 +520,7 @@ var plainTextMentionRe = regexp.MustCompile(`^@(\pL[\pL\pN_]*)[\s,:]`)
 // isDirectedAtOther reports whether a Discord message is clearly directed at
 // another specific user (not the bot). It checks for Discord @mentions of
 // other users and plain-text @Name patterns at the start of the message.
-func isDirectedAtOther(msg *discordgo.MessageCreate, botID string) bool {
+func isDirectedAtOther(msg *discordgo.MessageCreate, botID, botName string) bool {
 	if msg.GuildID == "" {
 		return false // DMs are never directed at "other"
 	}
@@ -544,7 +544,37 @@ func isDirectedAtOther(msg *discordgo.MessageCreate, botID string) bool {
 		return false
 	}
 	name := strings.ToLower(m[1])
-	return name != "everyone" && name != "here"
+	if name == "everyone" || name == "here" {
+		return false
+	}
+
+	// If the name closely matches the bot's name, this is addressing the bot,
+	// not another user. Prefix matching handles morphological forms common in
+	// inflected languages (e.g. Czech: Machmonstrum → Machmonstře).
+	if looksLikeBotName(name, strings.ToLower(botName)) {
+		return false
+	}
+
+	return true
+}
+
+// looksLikeBotName reports whether name is likely a morphological variant of
+// botName by checking that the two share a long common prefix (≥75% of the
+// longer string, minimum 4 runes). This handles declensions in inflected
+// languages (e.g. Czech: Machmonstrum → Machmonstře) without false-positiving
+// on short coincidental prefixes.
+func looksLikeBotName(name, botName string) bool {
+	nr := []rune(name)
+	br := []rune(botName)
+	var shared int
+	for shared < len(nr) && shared < len(br) && nr[shared] == br[shared] {
+		shared++
+	}
+	longer := len(nr)
+	if len(br) > longer {
+		longer = len(br)
+	}
+	return shared >= 4 && shared*4 >= longer*3
 }
 
 // turnParams holds the inputs needed by processTurn, allowing handleMessage and
@@ -568,8 +598,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	cfg := a.cfgStore.Get()
 	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
 	botID := a.resources.Session.State.User.ID
+	botName := a.resources.Session.State.User.Username
 	addressed := isAddressedToBot(msg, botID)
-	directedAtOther := !addressed && isDirectedAtOther(msg, botID)
+	directedAtOther := !addressed && isDirectedAtOther(msg, botID, botName)
 
 	switch mode {
 	case "none":
@@ -599,8 +630,6 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		userID = msg.Author.ID
 	}
 	memories := a.recallMemories(ctx, cfg, userID, msg.Content)
-
-	botName := a.resources.Session.State.User.Username
 	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed, directedAtOther)
 
 	sendFn := func(content string) error {
@@ -706,6 +735,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	cfg := a.cfgStore.Get()
 	botID := a.resources.Session.State.User.ID
+	botName := a.resources.Session.State.User.Username
 	lastMsg := msgs[len(msgs)-1]
 	mode := cfg.ResolveResponseMode(a.serverID, lastMsg.ChannelID)
 
@@ -720,7 +750,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	var anyDirectedAtOther bool
 	if !anyAddressed {
 		for _, m := range msgs {
-			if isDirectedAtOther(m, botID) {
+			if isDirectedAtOther(m, botID, botName) {
 				anyDirectedAtOther = true
 				break
 			}
@@ -761,7 +791,6 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 	memories := a.recallMemories(ctx, cfg, lastAuthorID, recallQuery)
 
-	botName := a.resources.Session.State.User.Username
 	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed, anyDirectedAtOther)
 
 	sendFn := func(content string) error {
