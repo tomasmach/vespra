@@ -813,7 +813,7 @@ func TestShouldSuppressSmartMode(t *testing.T) {
 func TestBuildSystemPromptSmartAddressed(t *testing.T) {
 	a := &ChannelAgent{soulText: "You are a test bot."}
 	cfg := &config.Config{}
-	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", true)
+	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", true, false)
 	if !strings.Contains(got, "MUST respond") {
 		t.Errorf("expected smart+addressed prompt to contain 'MUST respond', got:\n%s", got)
 	}
@@ -822,7 +822,7 @@ func TestBuildSystemPromptSmartAddressed(t *testing.T) {
 func TestBuildSystemPromptSmartNotAddressed(t *testing.T) {
 	a := &ChannelAgent{soulText: "You are a test bot."}
 	cfg := &config.Config{}
-	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", false)
+	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", false, false)
 	if !strings.Contains(got, "Decide whether to respond") {
 		t.Errorf("expected smart+not-addressed prompt to contain 'Decide whether to respond', got:\n%s", got)
 	}
@@ -831,9 +831,168 @@ func TestBuildSystemPromptSmartNotAddressed(t *testing.T) {
 func TestBuildSystemPromptNonSmart(t *testing.T) {
 	a := &ChannelAgent{soulText: "You are a test bot."}
 	cfg := &config.Config{}
-	got := a.buildSystemPrompt(cfg, "always", "test-chan", nil, "TestBot", false)
+	got := a.buildSystemPrompt(cfg, "always", "test-chan", nil, "TestBot", false, false)
 	if strings.Contains(got, "smart mode") {
 		t.Errorf("non-smart prompt should not contain 'smart mode', got:\n%s", got)
+	}
+}
+
+func TestBuildSystemPromptSmartDirectedAtOther(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	cfg := &config.Config{}
+	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", false, true)
+	if !strings.Contains(got, "MUST stay silent") {
+		t.Errorf("expected directed-at-other prompt to contain 'MUST stay silent', got:\n%s", got)
+	}
+	if !strings.Contains(got, "directed at another") {
+		t.Errorf("expected directed-at-other prompt to contain 'directed at another', got:\n%s", got)
+	}
+}
+
+func TestBuildSystemPromptSmartAddressedOverridesDirectedAtOther(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	cfg := &config.Config{}
+	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", true, true)
+	if !strings.Contains(got, "MUST respond") {
+		t.Errorf("addressed should override directedAtOther, expected 'MUST respond', got:\n%s", got)
+	}
+	if strings.Contains(got, "MUST stay silent") {
+		t.Errorf("addressed should override directedAtOther, should not contain 'MUST stay silent', got:\n%s", got)
+	}
+}
+
+func TestIsDirectedAtOther(t *testing.T) {
+	const botID = "bot123"
+
+	tests := []struct {
+		name    string
+		msg     *discordgo.MessageCreate
+		want    bool
+	}{
+		{
+			name: "Discord mention of other user only",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID:  "g1",
+				Content:  "<@999> dáme fotbálek?",
+				Mentions: []*discordgo.User{{ID: "999"}},
+			}},
+			want: true,
+		},
+		{
+			name: "Discord mention of bot only",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID:  "g1",
+				Content:  "<@bot123> help",
+				Mentions: []*discordgo.User{{ID: botID}},
+			}},
+			want: false,
+		},
+		{
+			name: "both bot and other mentioned",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID:  "g1",
+				Content:  "<@bot123> <@999> what?",
+				Mentions: []*discordgo.User{{ID: botID}, {ID: "999"}},
+			}},
+			want: false,
+		},
+		{
+			name: "plain text @Name, at start",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Petře, dáme fotbálek?",
+			}},
+			want: true,
+		},
+		{
+			name: "plain text @Name: at start",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Petr: kdy máš čas?",
+			}},
+			want: true,
+		},
+		{
+			name: "plain text @Name space at start",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Petr what time?",
+			}},
+			want: true,
+		},
+		{
+			name: "no mentions general question",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "Ví někdo jaký je počasí?",
+			}},
+			want: false,
+		},
+		{
+			name: "no mentions statement",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "Dal jsem si guláš",
+			}},
+			want: false,
+		},
+		{
+			name: "DM with other mention",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID:  "",
+				Content:  "<@999> hey",
+				Mentions: []*discordgo.User{{ID: "999"}},
+			}},
+			want: false,
+		},
+		{
+			name: "lone @ with space",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@ something",
+			}},
+			want: false,
+		},
+		{
+			name: "email mid-message",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "send to user@example.com",
+			}},
+			want: false,
+		},
+		{
+			name: "@everyone",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@everyone check this",
+			}},
+			want: false,
+		},
+		{
+			name: "@here",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@here meeting now",
+			}},
+			want: false,
+		},
+		{
+			name: "mid-message @name",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "Hey @Petr, co říkáš?",
+			}},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isDirectedAtOther(tt.msg, botID)
+			if got != tt.want {
+				t.Errorf("isDirectedAtOther() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -512,18 +513,53 @@ func isAddressedToBot(m *discordgo.MessageCreate, botID string) bool {
 		m.ReferencedMessage.Author.ID == botID
 }
 
+// plainTextMentionRe matches a @Username-like pattern at the start of a message.
+// The name must begin with a letter and can contain letters, digits, and underscores.
+var plainTextMentionRe = regexp.MustCompile(`^@(\pL[\pL\pN_]*)[\s,:]`)
+
+// isDirectedAtOther reports whether a Discord message is clearly directed at
+// another specific user (not the bot). It checks for Discord @mentions of
+// other users and plain-text @Name patterns at the start of the message.
+func isDirectedAtOther(msg *discordgo.MessageCreate, botID string) bool {
+	if msg.GuildID == "" {
+		return false // DMs are never directed at "other"
+	}
+
+	// Discord @mentions: other users mentioned but NOT the bot.
+	if len(msg.Mentions) > 0 {
+		var hasBotMention, hasOtherMention bool
+		for _, u := range msg.Mentions {
+			if u.ID == botID {
+				hasBotMention = true
+			} else {
+				hasOtherMention = true
+			}
+		}
+		return hasOtherMention && !hasBotMention
+	}
+
+	// No Discord mentions — check for plain-text @Name at start.
+	m := plainTextMentionRe.FindStringSubmatch(msg.Content)
+	if m == nil {
+		return false
+	}
+	name := strings.ToLower(m[1])
+	return name != "everyone" && name != "here"
+}
+
 // turnParams holds the inputs needed by processTurn, allowing handleMessage and
 // handleMessages to share the tool-call loop and post-processing logic.
 type turnParams struct {
-	mode         string
-	systemPrompt string
-	sendFn       func(string) error
-	reg          *tools.Registry
-	llmMsgs      []llm.Message
-	userMsgText  string // human-readable user input for conversation logging
-	internal     bool   // true for system-generated turns (e.g., web search results); skips LogConversation
-	maxIter      int    // override cfg.Agent.MaxToolIterations; 0 = use config default
-	addressed    bool   // true when the user directly @mentioned the bot
+	mode            string
+	systemPrompt    string
+	sendFn          func(string) error
+	reg             *tools.Registry
+	llmMsgs         []llm.Message
+	userMsgText     string // human-readable user input for conversation logging
+	internal        bool   // true for system-generated turns (e.g., web search results); skips LogConversation
+	maxIter         int    // override cfg.Agent.MaxToolIterations; 0 = use config default
+	addressed       bool   // true when the user directly @mentioned the bot
+	directedAtOther bool   // true when the message targets a specific other user (not the bot)
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
@@ -533,6 +569,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
 	botID := a.resources.Session.State.User.ID
 	addressed := isAddressedToBot(msg, botID)
+	directedAtOther := !addressed && isDirectedAtOther(msg, botID)
 
 	switch mode {
 	case "none":
@@ -564,7 +601,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	memories := a.recallMemories(ctx, cfg, userID, msg.Content)
 
 	botName := a.resources.Session.State.User.Username
-	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed, directedAtOther)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
@@ -585,13 +622,14 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	llmMsgs = append(llmMsgs, userMsg)
 
 	a.processTurn(ctx, cfg, turnParams{
-		mode:         mode,
-		systemPrompt: systemPrompt,
-		sendFn:       sendFn,
-		reg:          reg,
-		llmMsgs:      llmMsgs,
-		userMsgText:  historyUserContent(msg.Message, botID, botName),
-		addressed:    addressed,
+		mode:            mode,
+		systemPrompt:    systemPrompt,
+		sendFn:          sendFn,
+		reg:             reg,
+		llmMsgs:         llmMsgs,
+		userMsgText:     historyUserContent(msg.Message, botID, botName),
+		addressed:       addressed,
+		directedAtOther: directedAtOther,
 	})
 }
 
@@ -679,6 +717,16 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		}
 	}
 
+	var anyDirectedAtOther bool
+	if !anyAddressed {
+		for _, m := range msgs {
+			if isDirectedAtOther(m, botID) {
+				anyDirectedAtOther = true
+				break
+			}
+		}
+	}
+
 	switch mode {
 	case "none":
 		return
@@ -714,7 +762,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	memories := a.recallMemories(ctx, cfg, lastAuthorID, recallQuery)
 
 	botName := a.resources.Session.State.User.Username
-	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed, anyDirectedAtOther)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
@@ -741,13 +789,14 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 
 	a.processTurn(ctx, cfg, turnParams{
-		mode:         mode,
-		systemPrompt: systemPrompt,
-		sendFn:       sendFn,
-		reg:          reg,
-		llmMsgs:      llmMsgs,
-		userMsgText:  strings.Join(userLogLines, "\n"),
-		addressed:    anyAddressed,
+		mode:            mode,
+		systemPrompt:    systemPrompt,
+		sendFn:          sendFn,
+		reg:             reg,
+		llmMsgs:         llmMsgs,
+		userMsgText:     strings.Join(userLogLines, "\n"),
+		addressed:       anyAddressed,
+		directedAtOther: anyDirectedAtOther,
 	})
 }
 
@@ -858,7 +907,7 @@ func mergeMemories(userMems, contentMems []memory.MemoryRow, limit int) []memory
 
 // buildSystemPrompt assembles the system prompt from the soul text, memories,
 // language override, and response mode.
-func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string, addressed bool) string {
+func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string, addressed, directedAtOther bool) string {
 	var sb strings.Builder
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
@@ -902,6 +951,8 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	if mode == "smart" {
 		if addressed {
 			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` or `react` tools.")
+		} else if directedAtOther {
+			sb.WriteString("\n\nYou are in smart mode. This message is directed at another specific user — you MUST stay silent. Do NOT reply, react, or produce any output.")
 		} else {
 			sb.WriteString("\n\nYou are in smart mode. Decide whether to respond:\n- RESPOND (via `reply` or `react` tools) when: someone asks a question to the channel, continues a conversation with you, mentions your name, shares something interesting or relevant to you\n- STAY SILENT (produce no output at all) when: people are clearly talking to each other, the message is not directed at you, it's a side conversation you're not part of\nDo NOT write meta-commentary about why you are staying silent.")
 		}
@@ -1217,6 +1268,17 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	// Suppress any leftover plain-text content that was not sent through a tool.
 	if shouldSuppressSmartMode(tp.mode, assistantContent != "", tp.reg, visionResponse, tp.addressed, tp.internal) {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
+		assistantContent = ""
+	}
+
+	// Hard suppression: when a message is directed at another user, suppress any
+	// plain-text content the LLM produced. Reply-tool messages are already sent
+	// to Discord by the tool itself, so the prompt layer is the primary defense
+	// there; this catches plain-text leaks.
+	if tp.mode == "smart" && tp.directedAtOther && !tp.addressed && !tp.internal {
+		if assistantContent != "" {
+			a.logger.Debug("hard-suppressed response to message directed at another user", "content", assistantContent)
+		}
 		assistantContent = ""
 	}
 
