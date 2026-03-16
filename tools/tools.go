@@ -38,6 +38,7 @@ type Registry struct {
 	ReplyText       string // the content argument passed to the reply tool
 	WebSearchCalled bool   // set to true when web_search is invoked
 	ImageGenCalled  bool   // set to true when generate_image is invoked
+	Reacted         bool   // set to true when the react tool is called
 }
 
 // NewRegistry creates an empty registry.
@@ -312,7 +313,8 @@ func SplitMessage(s string, limit int) []string {
 }
 
 type reactTool struct {
-	react ReactFunc
+	react   ReactFunc
+	reacted *bool
 }
 
 func (t *reactTool) Name() string { return "react" }
@@ -335,7 +337,11 @@ func (t *reactTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
 	}
-	return "Reacted.", t.react(p.Emoji)
+	if err := t.react(p.Emoji); err != nil {
+		return "", err
+	}
+	*t.reacted = true
+	return "Reacted.", nil
 }
 
 // WebSearchDeps groups dependencies for the async web search tool.
@@ -448,7 +454,7 @@ func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold flo
 	r.Register(&memoryRecallTool{store: store, serverID: serverID, defaultTopN: defaultRecallLimit})
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
 	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText})
-	r.Register(&reactTool{react: react})
+	r.Register(&reactTool{react: react, reacted: &r.Reacted})
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps, searchCalled: &r.WebSearchCalled})
 		r.Register(&webFetchTool{timeoutSeconds: searchDeps.TimeoutSeconds})

@@ -13,6 +13,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/tools"
 )
 
 func msg(content string, attachments ...*discordgo.MessageAttachment) *discordgo.MessageCreate {
@@ -704,6 +705,157 @@ func TestSanitizeHistory(t *testing.T) {
 				if got[i].Role != tt.want[i].Role || got[i].Content != tt.want[i].Content {
 					t.Errorf("got[%d]=%+v, want[%d]=%+v", i, got[i], i, tt.want[i])
 				}
+			}
+		})
+	}
+}
+
+func TestShouldSuppressSmartMode(t *testing.T) {
+	tests := []struct {
+		name           string
+		mode           string
+		hasContent     bool
+		replied        bool
+		visionResponse bool
+		addressed      bool
+		internal       bool
+		webSearch      bool
+		imageGen       bool
+		want           bool
+	}{
+		{
+			name:       "normal suppression: smart, non-addressed, no flags",
+			mode:       "smart",
+			hasContent: true,
+			want:       true,
+		},
+		{
+			name:       "internal messages not suppressed",
+			mode:       "smart",
+			hasContent: true,
+			internal:   true,
+			want:       false,
+		},
+		{
+			name:       "web search not suppressed",
+			mode:       "smart",
+			hasContent: true,
+			webSearch:  true,
+			want:       false,
+		},
+		{
+			name:       "image gen not suppressed",
+			mode:       "smart",
+			hasContent: true,
+			imageGen:   true,
+			want:       false,
+		},
+		{
+			name:       "addressed not suppressed",
+			mode:       "smart",
+			hasContent: true,
+			addressed:  true,
+			want:       false,
+		},
+		{
+			name:           "vision response not suppressed",
+			mode:           "smart",
+			hasContent:     true,
+			visionResponse: true,
+			want:           false,
+		},
+		{
+			name:       "non-smart mode not suppressed",
+			mode:       "always",
+			hasContent: true,
+			want:       false,
+		},
+		{
+			name:       "replied not suppressed",
+			mode:       "smart",
+			hasContent: true,
+			replied:    true,
+			want:       false,
+		},
+		{
+			name: "no content not suppressed",
+			mode: "smart",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := tools.NewRegistry()
+			reg.Replied = tt.replied
+			reg.WebSearchCalled = tt.webSearch
+			reg.ImageGenCalled = tt.imageGen
+			got := shouldSuppressSmartMode(tt.mode, tt.hasContent, reg, tt.visionResponse, tt.addressed, tt.internal)
+			if got != tt.want {
+				t.Errorf("shouldSuppressSmartMode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldSendFallback(t *testing.T) {
+	tests := []struct {
+		name       string
+		internal   bool
+		replied    bool
+		imageGen   bool
+		reacted    bool
+		hasContent bool
+		addressed  bool
+		want       bool
+	}{
+		{
+			name:      "addressed with no response sends fallback",
+			addressed: true,
+			want:      true,
+		},
+		{
+			name:      "react-only addressed turn does NOT send fallback",
+			addressed: true,
+			reacted:   true,
+			want:      false,
+		},
+		{
+			name:      "replied does not send fallback",
+			addressed: true,
+			replied:   true,
+			want:      false,
+		},
+		{
+			name:      "image gen does not send fallback",
+			addressed: true,
+			imageGen:  true,
+			want:      false,
+		},
+		{
+			name:       "has content does not send fallback",
+			addressed:  true,
+			hasContent: true,
+			want:       false,
+		},
+		{
+			name:     "internal does not send fallback",
+			internal: true,
+			want:     false,
+		},
+		{
+			name: "non-addressed does not send fallback",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := tools.NewRegistry()
+			reg.Replied = tt.replied
+			reg.ImageGenCalled = tt.imageGen
+			reg.Reacted = tt.reacted
+			got := shouldSendFallback(tt.internal, reg, tt.hasContent, tt.addressed)
+			if got != tt.want {
+				t.Errorf("shouldSendFallback() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package tools_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -359,6 +360,41 @@ func TestRegistryWebSearchCalledIsStickyLatch(t *testing.T) {
 
 	if !r.WebSearchCalled {
 		t.Error("WebSearchCalled must remain true (sticky latch) after other tool calls")
+	}
+}
+
+func TestReactToolSetsReactedFlag(t *testing.T) {
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil)
+
+	if r.Reacted {
+		t.Fatal("Reacted should be false before any tool call")
+	}
+
+	result, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"👍"}`))
+	if err != nil {
+		t.Fatalf("Dispatch() returned unexpected error: %v", err)
+	}
+	if result != "Reacted." {
+		t.Errorf("expected %q, got %q", "Reacted.", result)
+	}
+	if !r.Reacted {
+		t.Error("Reacted should be true after a successful react call")
+	}
+}
+
+func TestReactToolDoesNotSetReactedOnError(t *testing.T) {
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { return fmt.Errorf("discord error") }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil)
+
+	_, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"👍"}`))
+	if err == nil {
+		t.Fatal("expected error from react tool")
+	}
+	if r.Reacted {
+		t.Error("Reacted should remain false when react returns an error")
 	}
 }
 

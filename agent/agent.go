@@ -1207,10 +1207,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	// In smart mode the model should only communicate via reply/react tools.
 	// Suppress any leftover plain-text content that was not sent through a tool.
-	// Exception 1: vision model responses are always plain text (tools are omitted for GLM vision).
-	// Exception 2: when the user directly @mentioned the bot, let any non-empty content through
-	//   as a fallback — the LLM occasionally forgets to use the reply tool despite the instruction.
-	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse && !tp.addressed {
+	if shouldSuppressSmartMode(tp.mode, assistantContent != "", tp.reg, visionResponse, tp.addressed, tp.internal) {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
 		assistantContent = ""
 	}
@@ -1251,7 +1248,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	// Fallback: if the bot produced no reply at all and the user directly addressed it,
 	// send an error nudge rather than going silent. This catches cases where the LLM
 	// returns empty content with no tool calls (e.g. confused by malformed history).
-	if !tp.internal && !tp.reg.Replied && !tp.reg.ImageGenCalled && assistantContent == "" && tp.addressed {
+	if shouldSendFallback(tp.internal, tp.reg, assistantContent != "", tp.addressed) {
 		a.logger.Warn("LLM produced no output for addressed message; sending fallback")
 		if err := tp.sendFn("I'm having trouble responding. Please try again."); err != nil {
 			a.logger.Error("send message", "error", err)
@@ -1272,6 +1269,27 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			a.runMemoryExtraction(ctx, a.history)
 		}
 	}
+}
+
+// shouldSuppressSmartMode reports whether plain-text content from the LLM should
+// be dropped in smart mode. Content is preserved when:
+//   - the reply tool was already used,
+//   - it's a vision response (tools omitted for GLM vision),
+//   - the message was addressed (@mention),
+//   - it's an internal turn (e.g. web search result delivery),
+//   - the web_search or generate_image tool was invoked.
+func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, visionResponse, addressed, internal bool) bool {
+	return mode == "smart" && hasContent && !reg.Replied &&
+		!visionResponse && !addressed && !internal &&
+		!reg.WebSearchCalled && !reg.ImageGenCalled
+}
+
+// shouldSendFallback reports whether the error fallback ("I'm having trouble
+// responding") should be sent. It fires only when the bot was directly addressed
+// but produced no visible output at all — no reply, no image, no reaction, and
+// no plain-text content.
+func shouldSendFallback(internal bool, reg *tools.Registry, hasContent, addressed bool) bool {
+	return !internal && !reg.Replied && !reg.ImageGenCalled && !reg.Reacted && !hasContent && addressed
 }
 
 // runMemoryExtraction launches a background goroutine that reviews recent history
