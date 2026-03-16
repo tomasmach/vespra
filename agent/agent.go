@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
@@ -564,8 +565,8 @@ func isDirectedAtOther(msg *discordgo.MessageCreate, botID, botName string) bool
 // languages (e.g. Czech: Machmonstrum → Machmonstře) without false-positiving
 // on short coincidental prefixes.
 func looksLikeBotName(name, botName string) bool {
-	nr := []rune(name)
-	br := []rune(botName)
+	nr := []rune(norm.NFC.String(name))
+	br := []rune(norm.NFC.String(botName))
 	var shared int
 	for shared < len(nr) && shared < len(br) && nr[shared] == br[shared] {
 		shared++
@@ -589,7 +590,7 @@ type turnParams struct {
 	internal        bool   // true for system-generated turns (e.g., web search results); skips LogConversation
 	maxIter         int    // override cfg.Agent.MaxToolIterations; 0 = use config default
 	addressed       bool   // true when the user directly @mentioned the bot
-	directedAtOther bool   // true when the message targets a specific other user (not the bot)
+	directedAtOther bool   // true when the message targets a specific other user (not the bot); zero-value (false) is safe for internal paths
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
@@ -757,11 +758,12 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		}
 	}
 
-	var anyDirectedAtOther bool
+	var allDirectedAtOther bool
 	if !anyAddressed && mode == "smart" {
+		allDirectedAtOther = true
 		for _, m := range msgs {
-			if isDirectedAtOther(m, botID, botName) {
-				anyDirectedAtOther = true
+			if !isDirectedAtOther(m, botID, botName) {
+				allDirectedAtOther = false
 				break
 			}
 		}
@@ -792,7 +794,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 	memories := a.recallMemories(ctx, cfg, lastAuthorID, recallQuery)
 
-	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed, anyDirectedAtOther)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed, allDirectedAtOther)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
@@ -826,7 +828,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		llmMsgs:         llmMsgs,
 		userMsgText:     strings.Join(userLogLines, "\n"),
 		addressed:       anyAddressed,
-		directedAtOther: anyDirectedAtOther,
+		directedAtOther: allDirectedAtOther,
 	})
 }
 

@@ -1035,6 +1035,16 @@ func TestIsDirectedAtOther(t *testing.T) {
 			}},
 			want: false,
 		},
+		{
+			// plainTextMentionRe requires a trailing [\s,:] so a bare @Name at
+			// end-of-message (no trailing character) does NOT match.
+			name: "bare @Name at end of message",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Petr",
+			}},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1063,6 +1073,7 @@ func TestLooksLikeBotName(t *testing.T) {
 		{"botname", "botname", true},            // exact short name
 		{"botnam", "botname", true},             // 1 rune off (6/7 = 86%)
 		{"botn", "botname", false},              // only 57% of longer
+		{"ve\u0301spra", "véspra", true},        // NFD decomposed é vs NFC precomposed é — exact match after normalization
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"_vs_"+tt.botName, func(t *testing.T) {
