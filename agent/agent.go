@@ -600,7 +600,6 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	botID := a.resources.Session.State.User.ID
 	botName := a.resources.Session.State.User.Username
 	addressed := isAddressedToBot(msg, botID)
-	directedAtOther := !addressed && isDirectedAtOther(msg, botID, botName)
 
 	switch mode {
 	case "none":
@@ -610,6 +609,8 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 			return
 		}
 	}
+
+	directedAtOther := !addressed && mode == "smart" && isDirectedAtOther(msg, botID, botName)
 
 	stopTyping := func() {}
 	if mode != "smart" || addressed {
@@ -747,22 +748,22 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		}
 	}
 
-	var anyDirectedAtOther bool
-	if !anyAddressed {
-		for _, m := range msgs {
-			if isDirectedAtOther(m, botID, botName) {
-				anyDirectedAtOther = true
-				break
-			}
-		}
-	}
-
 	switch mode {
 	case "none":
 		return
 	case "mention":
 		if !anyAddressed {
 			return
+		}
+	}
+
+	var anyDirectedAtOther bool
+	if !anyAddressed && mode == "smart" {
+		for _, m := range msgs {
+			if isDirectedAtOther(m, botID, botName) {
+				anyDirectedAtOther = true
+				break
+			}
 		}
 	}
 
@@ -1295,19 +1296,10 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	// In smart mode the model should only communicate via reply/react tools.
 	// Suppress any leftover plain-text content that was not sent through a tool.
-	if shouldSuppressSmartMode(tp.mode, assistantContent != "", tp.reg, visionResponse, tp.addressed, tp.internal) {
-		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
-		assistantContent = ""
-	}
-
-	// Hard suppression: when a message is directed at another user, suppress any
-	// plain-text content the LLM produced. Reply-tool messages are already sent
-	// to Discord by the tool itself, so the prompt layer is the primary defense
-	// there; this catches plain-text leaks.
-	if tp.mode == "smart" && tp.directedAtOther && !tp.addressed && !tp.internal {
-		if assistantContent != "" {
-			a.logger.Debug("hard-suppressed response to message directed at another user", "content", assistantContent)
-		}
+	// Messages directed at another user are always suppressed, even if the LLM
+	// called web_search or image_gen.
+	if shouldSuppressSmartMode(tp.mode, assistantContent != "", tp.reg, visionResponse, tp.addressed, tp.internal, tp.directedAtOther) {
+		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent, "directedAtOther", tp.directedAtOther)
 		assistantContent = ""
 	}
 
@@ -1382,10 +1374,16 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 // (emoji reaction) without calling the reply tool, any trailing plain-text is
 // still suppressed — the model should not leak text alongside a bare reaction
 // in smart mode.
-func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, visionResponse, addressed, internal bool) bool {
-	return mode == "smart" && hasContent && !reg.Replied &&
-		!visionResponse && !addressed && !internal &&
-		!reg.WebSearchCalled && !reg.ImageGenCalled
+func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, visionResponse, addressed, internal, directedAtOther bool) bool {
+	if mode != "smart" || !hasContent || reg.Replied || addressed || internal {
+		return false
+	}
+	// Messages directed at another user are always suppressed, even if the LLM
+	// happened to call web_search or image_gen.
+	if directedAtOther {
+		return true
+	}
+	return !visionResponse && !reg.WebSearchCalled && !reg.ImageGenCalled
 }
 
 // shouldSendFallback reports whether the error fallback ("I'm having trouble

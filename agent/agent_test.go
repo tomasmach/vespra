@@ -713,17 +713,18 @@ func TestSanitizeHistory(t *testing.T) {
 
 func TestShouldSuppressSmartMode(t *testing.T) {
 	tests := []struct {
-		name           string
-		mode           string
-		hasContent     bool
-		replied        bool
-		reacted        bool
-		visionResponse bool
-		addressed      bool
-		internal       bool
-		webSearch      bool
-		imageGen       bool
-		want           bool
+		name            string
+		mode            string
+		hasContent      bool
+		replied         bool
+		reacted         bool
+		visionResponse  bool
+		addressed       bool
+		internal        bool
+		webSearch       bool
+		imageGen        bool
+		directedAtOther bool
+		want            bool
 	}{
 		{
 			name:       "normal suppression: smart, non-addressed, no flags",
@@ -794,6 +795,30 @@ func TestShouldSuppressSmartMode(t *testing.T) {
 			mode: "smart",
 			want: false,
 		},
+		{
+			name:            "directed at other suppresses even with web search",
+			mode:            "smart",
+			hasContent:      true,
+			webSearch:       true,
+			directedAtOther: true,
+			want:            true,
+		},
+		{
+			name:            "directed at other suppresses even with image gen",
+			mode:            "smart",
+			hasContent:      true,
+			imageGen:        true,
+			directedAtOther: true,
+			want:            true,
+		},
+		{
+			name:            "directed at other does not override addressed",
+			mode:            "smart",
+			hasContent:      true,
+			addressed:       true,
+			directedAtOther: true,
+			want:            false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -802,7 +827,7 @@ func TestShouldSuppressSmartMode(t *testing.T) {
 			reg.Reacted = tt.reacted
 			reg.WebSearchCalled = tt.webSearch
 			reg.ImageGenCalled = tt.imageGen
-			got := shouldSuppressSmartMode(tt.mode, tt.hasContent, reg, tt.visionResponse, tt.addressed, tt.internal)
+			got := shouldSuppressSmartMode(tt.mode, tt.hasContent, reg, tt.visionResponse, tt.addressed, tt.internal, tt.directedAtOther)
 			if got != tt.want {
 				t.Errorf("shouldSuppressSmartMode() = %v, want %v", got, tt.want)
 			}
