@@ -13,6 +13,8 @@ import (
 	"github.com/tomasmach/vespra/web"
 )
 
+const wizardTimeout = 10 * time.Minute
+
 type wizardStep int
 
 const (
@@ -77,7 +79,7 @@ func (w *wizardHandler) startInit(s *discordgo.Session, i *discordgo.Interaction
 	now := time.Now()
 	w.mu.Lock()
 	for k, st := range w.sessions {
-		if now.Sub(st.createdAt) > 10*time.Minute {
+		if now.Sub(st.createdAt) > wizardTimeout {
 			delete(w.sessions, k)
 		}
 	}
@@ -134,17 +136,15 @@ func (w *wizardHandler) handleComponent(s *discordgo.Session, i *discordgo.Inter
 	key := wizardKey(i.GuildID, i.Member.User.ID)
 	w.mu.Lock()
 	state, ok := w.sessions[key]
-	w.mu.Unlock()
-
-	if !ok || time.Since(state.createdAt) > 10*time.Minute {
+	if !ok || time.Since(state.createdAt) > wizardTimeout {
 		if ok {
-			w.mu.Lock()
 			delete(w.sessions, key)
-			w.mu.Unlock()
 		}
+		w.mu.Unlock()
 		respondEphemeralUpdate(s, i, "Your setup wizard expired. Run `/init` again.")
 		return
 	}
+	w.mu.Unlock()
 
 	switch customID {
 	case "vespra:init:mode":

@@ -31,14 +31,22 @@ func (s *Server) UpsertAgent(input config.AgentConfig) error {
 	if findAgentIndex(cfg.Agents, input.ID) != -1 {
 		return fmt.Errorf("agent id already exists")
 	}
-	for _, a := range cfg.Agents {
-		if a.ServerID == input.ServerID {
-			return fmt.Errorf("server_id already configured")
-		}
+	if findAgentByServerID(cfg.Agents, input.ServerID) != -1 {
+		return fmt.Errorf("server_id already configured")
 	}
 
 	newAgents := append(slices.Clone(cfg.Agents), input)
 	return s.writeAgents(newAgents)
+}
+
+// newAutoAgent returns a default AgentConfig for auto-creation when a slash
+// command targets a server with no existing agent entry.
+func newAutoAgent(serverID string) config.AgentConfig {
+	return config.AgentConfig{
+		ID:           serverID,
+		ServerID:     serverID,
+		ResponseMode: "none",
+	}
 }
 
 // UpdateAgentMode updates the response_mode for the agent matching serverID.
@@ -50,12 +58,8 @@ func (s *Server) UpdateAgentMode(serverID, mode string) error {
 	cfg := s.cfgStore.Get()
 	idx := findAgentByServerID(cfg.Agents, serverID)
 	if idx == -1 {
-		// Auto-create agent entry.
-		input := config.AgentConfig{
-			ID:           serverID,
-			ServerID:     serverID,
-			ResponseMode: mode,
-		}
+		input := newAutoAgent(serverID)
+		input.ResponseMode = mode
 		newAgents := append(slices.Clone(cfg.Agents), input)
 		return s.writeAgents(newAgents)
 	}
@@ -82,13 +86,8 @@ func (s *Server) UpdateAgentChannel(serverID, channelID, mode string) error {
 		if mode == "" {
 			return fmt.Errorf("no agent configured for this server")
 		}
-		// Auto-create agent entry with channel override.
-		input := config.AgentConfig{
-			ID:           serverID,
-			ServerID:     serverID,
-			ResponseMode: "none",
-			Channels:     []config.ChannelConfig{{ID: channelID, ResponseMode: mode}},
-		}
+		input := newAutoAgent(serverID)
+		input.Channels = []config.ChannelConfig{{ID: channelID, ResponseMode: mode}}
 		newAgents := append(slices.Clone(cfg.Agents), input)
 		return s.writeAgents(newAgents)
 	}
@@ -133,13 +132,8 @@ func (s *Server) UpdateAgentLanguage(serverID, language string) error {
 	cfg := s.cfgStore.Get()
 	idx := findAgentByServerID(cfg.Agents, serverID)
 	if idx == -1 {
-		// Auto-create agent entry.
-		input := config.AgentConfig{
-			ID:           serverID,
-			ServerID:     serverID,
-			ResponseMode: "none",
-			Language:     language,
-		}
+		input := newAutoAgent(serverID)
+		input.Language = language
 		newAgents := append(slices.Clone(cfg.Agents), input)
 		return s.writeAgents(newAgents)
 	}

@@ -992,18 +992,25 @@ func (s *Server) handlePutAgentSoulByName(w http.ResponseWriter, r *http.Request
 		return
 	}
 	soulPath := filepath.Join(soulDir, name+".md")
-	if _, err := os.Stat(soulPath); err != nil {
+	f, err := os.OpenFile(soulPath, os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
 		if os.IsNotExist(err) {
 			http.Error(w, "soul not found", http.StatusNotFound)
 		} else {
-			slog.Error("stat soul file", "error", err)
-			http.Error(w, "failed to stat soul file", http.StatusInternalServerError)
+			slog.Error("open soul file", "error", err)
+			http.Error(w, "failed to open soul file", http.StatusInternalServerError)
 		}
 		return
 	}
-
-	if err := os.WriteFile(soulPath, []byte(body.Content), 0o644); err != nil {
-		slog.Error("write soul file", "error", err)
+	_, writeErr := f.WriteString(body.Content)
+	closeErr := f.Close()
+	if writeErr != nil {
+		slog.Error("write soul file", "error", writeErr)
+		http.Error(w, "failed to write soul file", http.StatusInternalServerError)
+		return
+	}
+	if closeErr != nil {
+		slog.Error("close soul file", "error", closeErr)
 		http.Error(w, "failed to write soul file", http.StatusInternalServerError)
 		return
 	}
