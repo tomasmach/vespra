@@ -10,7 +10,6 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/tomasmach/vespra/config"
-	"github.com/tomasmach/vespra/web"
 )
 
 const wizardTimeout = 10 * time.Minute
@@ -37,11 +36,11 @@ type wizardState struct {
 type wizardHandler struct {
 	mu       sync.Mutex
 	sessions map[string]*wizardState // key: "guildID:userID"
-	ops      *web.Server
+	ops      AgentOps
 }
 
 // newWizardHandler returns a new wizardHandler backed by ops for config writes.
-func newWizardHandler(ops *web.Server) *wizardHandler {
+func newWizardHandler(ops AgentOps) *wizardHandler {
 	return &wizardHandler{
 		sessions: make(map[string]*wizardState),
 		ops:      ops,
@@ -105,10 +104,10 @@ func (w *wizardHandler) startInit(s *discordgo.Session, i *discordgo.Interaction
 							CustomID:    "vespra:init:mode",
 							Placeholder: "Select response mode...",
 							Options: []discordgo.SelectMenuOption{
-								{Label: "Smart", Value: "smart", Description: "AI decides when to respond based on context"},
-								{Label: "Mention only", Value: "mention", Description: "Only respond when @mentioned or replied to"},
-								{Label: "All messages", Value: "all", Description: "Respond to every message"},
-								{Label: "None", Value: "none", Description: "Silent by default, enable per-channel"},
+								{Label: "Smart", Value: config.ModeSmart, Description: "AI decides when to respond based on context"},
+								{Label: "Mention only", Value: config.ModeMention, Description: "Only respond when @mentioned or replied to"},
+								{Label: "All messages", Value: config.ModeAll, Description: "Respond to every message"},
+								{Label: "None", Value: config.ModeNone, Description: "Silent by default, enable per-channel"},
 							},
 						},
 					},
@@ -167,15 +166,26 @@ func (w *wizardHandler) handleModeSelect(s *discordgo.Session, i *discordgo.Inte
 	}
 	state.mode = values[0]
 	state.step = wizardStepChannels
-	w.showChannelStep(s, i, state)
+
+	// Acknowledge immediately so the 3-second Discord deadline is met
+	// before the GuildChannels REST call in showChannelStepDeferred.
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredMessageUpdate,
+	}); err != nil {
+		slog.Error("wizard: defer step 2", "error", err, "guild_id", state.guildID)
+		return
+	}
+
+	w.showChannelStepDeferred(s, i, state)
 }
 
-// showChannelStep fetches guild channels and renders the channel-selection step.
-func (w *wizardHandler) showChannelStep(s *discordgo.Session, i *discordgo.InteractionCreate, state *wizardState) {
+// showChannelStepDeferred fetches guild channels and edits the deferred
+// interaction response with the channel-selection step.
+func (w *wizardHandler) showChannelStepDeferred(s *discordgo.Session, i *discordgo.InteractionCreate, state *wizardState) {
 	channels, err := s.GuildChannels(state.guildID)
 	if err != nil {
 		slog.Error("wizard: fetch guild channels", "error", err, "guild_id", state.guildID)
-		respondEphemeralUpdate(s, i, "Failed to fetch channels. Run `/init` again.")
+		editDeferredMessage(s, i, "Failed to fetch channels. Run `/init` again.")
 		return
 	}
 
@@ -190,7 +200,7 @@ func (w *wizardHandler) showChannelStep(s *discordgo.Session, i *discordgo.Inter
 	if len(textChannels) == 0 {
 		// No text channels — skip straight to language step.
 		state.step = wizardStepLanguage
-		w.showLanguageStep(s, i)
+		showLanguageEdit(s, i)
 		return
 	}
 
@@ -214,35 +224,33 @@ func (w *wizardHandler) showChannelStep(s *discordgo.Session, i *discordgo.Inter
 
 	maxValues := len(textChannels)
 
-	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-			Flags:   discordgo.MessageFlagsEphemeral,
+	components := []discordgo.MessageComponent{
+		discordgo.ActionsRow{
 			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						discordgo.SelectMenu{
-							CustomID:  "vespra:init:channels",
-							MinValues: intPtr(0),
-							MaxValues: maxValues,
-							Options:   options,
-						},
-					},
-				},
-				discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						discordgo.Button{
-							CustomID: "vespra:init:channels_skip",
-							Label:    "Skip",
-							Style:    discordgo.SecondaryButton,
-						},
-					},
+				discordgo.SelectMenu{
+					CustomID:  "vespra:init:channels",
+					MinValues: intPtr(0),
+					MaxValues: maxValues,
+					Options:   options,
 				},
 			},
 		},
+		discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.Button{
+					CustomID: "vespra:init:channels_skip",
+					Label:    "Skip",
+					Style:    discordgo.SecondaryButton,
+				},
+			},
+		},
+	}
+
+	if _, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Content:    &content,
+		Components: &components,
 	}); err != nil {
-		slog.Error("wizard: send step 2", "error", err, "guild_id", state.guildID)
+		slog.Error("wizard: edit step 2", "error", err, "guild_id", state.guildID)
 	}
 }
 
@@ -260,7 +268,8 @@ func (w *wizardHandler) handleChannelSkip(s *discordgo.Session, i *discordgo.Int
 	w.showLanguageStep(s, i)
 }
 
-// showLanguageStep renders the language-selection step.
+// showLanguageStep renders the language-selection step via a normal InteractionRespond.
+// Used by handleChannelSelect and handleChannelSkip, which have not been deferred.
 func (w *wizardHandler) showLanguageStep(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
@@ -307,10 +316,10 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 	// chosen, create "smart" overrides for those channels so the bot responds there.
 	// For any other server mode, channel overrides are unnecessary.
 	var channels []config.ChannelConfig
-	if state.mode == "none" && len(state.channelIDs) > 0 {
+	if state.mode == config.ModeNone && len(state.channelIDs) > 0 {
 		channels = make([]config.ChannelConfig, len(state.channelIDs))
 		for idx, chID := range state.channelIDs {
-			channels[idx] = config.ChannelConfig{ID: chID, ResponseMode: "smart"}
+			channels[idx] = config.ChannelConfig{ID: chID, ResponseMode: config.ModeSmart}
 		}
 	}
 
@@ -371,5 +380,51 @@ func respondEphemeralUpdate(s *discordgo.Session, i *discordgo.InteractionCreate
 		},
 	}); err != nil {
 		slog.Error("wizard: update message", "error", err)
+	}
+}
+
+// editDeferredMessage edits a deferred interaction response with plain text and no components.
+func editDeferredMessage(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
+	empty := []discordgo.MessageComponent{}
+	if _, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Content:    &content,
+		Components: &empty,
+	}); err != nil {
+		slog.Error("wizard: edit deferred message", "error", err)
+	}
+}
+
+// showLanguageEdit edits a deferred interaction response with the language-selection step.
+// Used when skipping from showChannelStepDeferred, where the interaction has already been deferred.
+func showLanguageEdit(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	content := "**Step 3/3 — Language**\nWhat language should I reply in?"
+	components := []discordgo.MessageComponent{
+		discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.SelectMenu{
+					CustomID:    "vespra:init:language",
+					Placeholder: "Select language...",
+					Options: []discordgo.SelectMenuOption{
+						{Label: "Default (English)", Value: "", Description: "No language preference"},
+						{Label: "Czech", Value: "Czech"},
+						{Label: "Slovak", Value: "Slovak"},
+						{Label: "Spanish", Value: "Spanish"},
+						{Label: "French", Value: "French"},
+						{Label: "German", Value: "German"},
+						{Label: "Portuguese", Value: "Portuguese"},
+						{Label: "Italian", Value: "Italian"},
+						{Label: "Japanese", Value: "Japanese"},
+						{Label: "Chinese", Value: "Chinese"},
+						{Label: "Korean", Value: "Korean"},
+					},
+				},
+			},
+		},
+	}
+	if _, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Content:    &content,
+		Components: &components,
+	}); err != nil {
+		slog.Error("wizard: edit step 3", "error", err)
 	}
 }

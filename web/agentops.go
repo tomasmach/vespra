@@ -21,7 +21,7 @@ func (s *Server) UpsertAgent(input config.AgentConfig) error {
 		return fmt.Errorf("server_id is required")
 	}
 	if input.ResponseMode == "" {
-		input.ResponseMode = "none"
+		input.ResponseMode = config.ModeNone
 	}
 
 	s.writeMu.Lock()
@@ -45,7 +45,7 @@ func newAutoAgent(serverID string) config.AgentConfig {
 	return config.AgentConfig{
 		ID:           serverID,
 		ServerID:     serverID,
-		ResponseMode: "none",
+		ResponseMode: config.ModeNone,
 	}
 }
 

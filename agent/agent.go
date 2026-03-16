@@ -535,16 +535,16 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	addressed := isAddressedToBot(msg, botID)
 
 	switch mode {
-	case "none":
+	case config.ModeNone:
 		return
-	case "mention":
+	case config.ModeMention:
 		if !addressed {
 			return
 		}
 	}
 
 	stopTyping := func() {}
-	if mode != "smart" || addressed {
+	if mode != config.ModeSmart || addressed {
 		stopTyping = a.startTyping(ctx)
 	}
 	defer stopTyping()
@@ -680,16 +680,16 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 
 	switch mode {
-	case "none":
+	case config.ModeNone:
 		return
-	case "mention":
+	case config.ModeMention:
 		if !anyAddressed {
 			return
 		}
 	}
 
 	stopTyping := func() {}
-	if mode != "smart" || anyAddressed {
+	if mode != config.ModeSmart || anyAddressed {
 		stopTyping = a.startTyping(ctx)
 	}
 	defer stopTyping()
@@ -899,7 +899,7 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
-	if mode == "smart" {
+	if mode == config.ModeSmart {
 		sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
 	}
 	return sb.String()
@@ -1198,7 +1198,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	if assistantContent != "" && looksLikeToolCall(assistantContent, tp.reg.Definitions()) {
 		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
 		assistantContent = ""
-		if !tp.reg.Replied && tp.mode != "smart" {
+		if !tp.reg.Replied && tp.mode != config.ModeSmart {
 			if err := tp.sendFn("I'm not sure how to respond. Please try again."); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
@@ -1210,7 +1210,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	// Exception 1: vision model responses are always plain text (tools are omitted for GLM vision).
 	// Exception 2: when the user directly @mentioned the bot, let any non-empty content through
 	//   as a fallback — the LLM occasionally forgets to use the reply tool despite the instruction.
-	if tp.mode == "smart" && assistantContent != "" && !tp.reg.Replied && !visionResponse && !tp.addressed {
+	if tp.mode == config.ModeSmart && assistantContent != "" && !tp.reg.Replied && !visionResponse && !tp.addressed {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
 		assistantContent = ""
 	}

@@ -3,19 +3,31 @@ package bot
 
 import (
 	"log/slog"
+	"sync"
 
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/tomasmach/vespra/agent"
-	"github.com/tomasmach/vespra/web"
+	"github.com/tomasmach/vespra/config"
 )
+
+// AgentOps abstracts agent configuration operations so the bot package
+// does not depend on the web package directly.
+type AgentOps interface {
+	UpsertAgent(input config.AgentConfig) error
+	UpdateAgentMode(serverID, mode string) error
+	UpdateAgentChannel(serverID, channelID, mode string) error
+	UpdateAgentLanguage(serverID, language string) error
+	CfgStore() *config.Store
+}
 
 // Bot wraps the Discord session and message routing.
 type Bot struct {
-	session *discordgo.Session
-	router  *agent.Router
-	ops     *web.Server
-	wizard  *wizardHandler
+	session          *discordgo.Session
+	router           *agent.Router
+	ops              AgentOps
+	wizard           *wizardHandler
+	registeredGuilds sync.Map // tracks guild IDs that have had commands registered
 }
 
 // New creates a new Bot, configures intents, and registers message handlers.
@@ -49,16 +61,22 @@ func (b *Bot) SetRouter(r *agent.Router) {
 	b.router = r
 }
 
-// SetOps wires the web server into the bot, enabling slash command handling.
+// SetOps wires an AgentOps implementation into the bot, enabling slash command handling.
 // Must be called before the bot starts receiving interactions.
-func (b *Bot) SetOps(ops *web.Server) {
+func (b *Bot) SetOps(ops AgentOps) {
 	b.ops = ops
 	b.wizard = newWizardHandler(ops)
 }
 
-// onGuildCreate registers slash commands whenever the bot joins a guild or reconnects.
+// onGuildCreate registers slash commands when the bot joins a guild for the first time
+// in this process lifetime. Unavailable guilds (Discord outages or unresolved stubs)
+// are skipped, and already-registered guilds are skipped to avoid redundant API calls
+// on reconnect (command definitions are static so BulkOverwrite need not be repeated).
 func (b *Bot) onGuildCreate(s *discordgo.Session, g *discordgo.GuildCreate) {
-	if b.ops == nil {
+	if b.ops == nil || g.Unavailable {
+		return
+	}
+	if _, loaded := b.registeredGuilds.LoadOrStore(g.ID, struct{}{}); loaded {
 		return
 	}
 	RegisterCommands(s, g.ID)

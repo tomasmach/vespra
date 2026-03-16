@@ -8,6 +8,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
+	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/memory"
 )
 
@@ -15,10 +16,10 @@ var manageGuildPerm = int64(discordgo.PermissionManageServer)
 
 // modechoices are the valid response mode values shared across commands.
 var modeChoices = []*discordgo.ApplicationCommandOptionChoice{
-	{Name: "smart", Value: "smart"},
-	{Name: "mention", Value: "mention"},
-	{Name: "all", Value: "all"},
-	{Name: "none", Value: "none"},
+	{Name: "smart", Value: config.ModeSmart},
+	{Name: "mention", Value: config.ModeMention},
+	{Name: "all", Value: config.ModeAll},
+	{Name: "none", Value: config.ModeNone},
 }
 
 // commandDefinitions is the full set of slash commands registered for each guild.

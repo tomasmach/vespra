@@ -12,6 +12,22 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// Response mode constants.
+const (
+	ModeNone    = "none"
+	ModeSmart   = "smart"
+	ModeMention = "mention"
+	ModeAll     = "all"
+)
+
+// ValidModes is the set of valid response mode values.
+var ValidModes = map[string]bool{
+	ModeSmart:   true,
+	ModeMention: true,
+	ModeAll:     true,
+	ModeNone:    true,
+}
+
 type Config struct {
 	Bot      BotConfig
 	LLM      LLMConfig
@@ -222,7 +238,7 @@ func Load(path string) (*Config, error) {
 		cfg.Tools.Image.TimeoutSeconds = 60
 	}
 	if cfg.Response.DefaultMode == "" {
-		cfg.Response.DefaultMode = "smart"
+		cfg.Response.DefaultMode = ModeSmart
 	}
 
 	// Validate required fields
@@ -234,8 +250,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Validate response mode values
-	validModes := map[string]bool{"smart": true, "mention": true, "all": true, "none": true}
-	if !validModes[cfg.Response.DefaultMode] {
+	if !ValidModes[cfg.Response.DefaultMode] {
 		return nil, fmt.Errorf("response.default_mode %q is invalid (must be smart, mention, all, or none)", cfg.Response.DefaultMode)
 	}
 	validProviders := map[string]bool{"openrouter": true, "glm": true}
@@ -243,7 +258,7 @@ func Load(path string) (*Config, error) {
 		if agent.ServerID == "" {
 			return nil, fmt.Errorf("agent %q: server_id is required", agent.ID)
 		}
-		if agent.ResponseMode != "" && !validModes[agent.ResponseMode] {
+		if agent.ResponseMode != "" && !ValidModes[agent.ResponseMode] {
 			return nil, fmt.Errorf("agent %s response_mode %q is invalid (must be smart, mention, all, or none)", agent.ID, agent.ResponseMode)
 		}
 		if agent.Provider != "" && !validProviders[agent.Provider] {
@@ -253,7 +268,7 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("agent %s uses provider %q but llm.glm_key is not configured", agent.ID, agent.Provider)
 		}
 		for _, ch := range agent.Channels {
-			if ch.ResponseMode != "" && !validModes[ch.ResponseMode] {
+			if ch.ResponseMode != "" && !ValidModes[ch.ResponseMode] {
 				return nil, fmt.Errorf("agent %s channel %s response_mode %q is invalid (must be smart, mention, all, or none)", agent.ID, ch.ID, ch.ResponseMode)
 			}
 		}
