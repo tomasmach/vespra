@@ -12,6 +12,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
+	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
 	"github.com/tomasmach/vespra/tools"
 )
@@ -794,6 +795,33 @@ func TestShouldSuppressSmartMode(t *testing.T) {
 				t.Errorf("shouldSuppressSmartMode() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildSystemPromptSmartAddressed(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	cfg := &config.Config{}
+	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", true)
+	if !strings.Contains(got, "MUST respond") {
+		t.Errorf("expected smart+addressed prompt to contain 'MUST respond', got:\n%s", got)
+	}
+}
+
+func TestBuildSystemPromptSmartNotAddressed(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	cfg := &config.Config{}
+	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", false)
+	if !strings.Contains(got, "Decide whether to respond") {
+		t.Errorf("expected smart+not-addressed prompt to contain 'Decide whether to respond', got:\n%s", got)
+	}
+}
+
+func TestBuildSystemPromptNonSmart(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	cfg := &config.Config{}
+	got := a.buildSystemPrompt(cfg, "always", "test-chan", nil, "TestBot", false)
+	if strings.Contains(got, "smart mode") {
+		t.Errorf("non-smart prompt should not contain 'smart mode', got:\n%s", got)
 	}
 }
 

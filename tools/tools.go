@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,7 +72,7 @@ func (r *Registry) Definitions() []llm.ToolDefinition {
 func (r *Registry) Dispatch(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	t, ok := r.tools[name]
 	if !ok {
-		return "", fmt.Errorf("unknown tool: %s", name)
+		return fmt.Sprintf("Tool %q is not available. Respond to the user without it.", name), nil
 	}
 	return t.Call(ctx, args)
 }
@@ -312,6 +313,10 @@ func SplitMessage(s string, limit int) []string {
 	return parts
 }
 
+// customEmojiRe matches Discord custom emoji markup like <:name:id> or <a:name:id>
+// and captures the "name:id" portion.
+var customEmojiRe = regexp.MustCompile(`^<a?:(\w+:\d+)>$`)
+
 type reactTool struct {
 	react   ReactFunc
 	reacted *bool
@@ -337,7 +342,11 @@ func (t *reactTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
 	}
-	if err := t.react(p.Emoji); err != nil {
+	emoji := p.Emoji
+	if m := customEmojiRe.FindStringSubmatch(emoji); m != nil {
+		emoji = m[1]
+	}
+	if err := t.react(emoji); err != nil {
 		return "", err
 	}
 	*t.reacted = true

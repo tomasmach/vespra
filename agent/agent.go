@@ -564,7 +564,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	memories := a.recallMemories(ctx, cfg, userID, msg.Content)
 
 	botName := a.resources.Session.State.User.Username
-	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
@@ -714,7 +714,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	memories := a.recallMemories(ctx, cfg, lastAuthorID, recallQuery)
 
 	botName := a.resources.Session.State.User.Username
-	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed)
 
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
@@ -858,7 +858,7 @@ func mergeMemories(userMems, contentMems []memory.MemoryRow, limit int) []memory
 
 // buildSystemPrompt assembles the system prompt from the soul text, memories,
 // language override, and response mode.
-func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string) string {
+func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string, addressed bool) string {
 	var sb strings.Builder
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
@@ -900,7 +900,11 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 	if mode == "smart" {
-		sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
+		if addressed {
+			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` tool.")
+		} else {
+			sb.WriteString("\n\nYou are in smart mode. Decide whether to respond:\n- RESPOND (via `reply` or `react` tools) when: someone asks a question to the channel, continues a conversation with you, mentions your name, shares something interesting or relevant to you\n- STAY SILENT (produce no output at all) when: people are clearly talking to each other, the message is not directed at you, it's a side conversation you're not part of\nDo NOT write meta-commentary about why you are staying silent.")
+		}
 	}
 	return sb.String()
 }
@@ -1193,6 +1197,10 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		if postReplyIter >= 0 && iter > postReplyIter+1 {
 			break
 		}
+	}
+
+	if tp.mode == "smart" && !tp.reg.Replied && !tp.reg.Reacted && assistantContent == "" {
+		a.logger.Debug("smart mode: LLM chose not to respond", "addressed", tp.addressed)
 	}
 
 	if assistantContent != "" && looksLikeToolCall(assistantContent, tp.reg.Definitions()) {
