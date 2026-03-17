@@ -647,6 +647,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if hasMediaParts(userMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
 		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
 		a.annotateMediaDescription(ctx, cfg, &userMsg)
+		stripMediaParts(&userMsg)
 	}
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
@@ -672,6 +673,20 @@ func hasMediaParts(parts []llm.ContentPart) bool {
 		}
 	}
 	return false
+}
+
+// stripMediaParts removes image and video content parts from msg, keeping only
+// text parts. Called after annotateMediaDescription so that the main chat model
+// sees the injected text description without the raw media blobs — preventing
+// Chat() from switching to the vision model for the main completion.
+func stripMediaParts(msg *llm.Message) {
+	filtered := msg.ContentParts[:0]
+	for _, p := range msg.ContentParts {
+		if p.Type != "image_url" && p.Type != "video_url" {
+			filtered = append(filtered, p)
+		}
+	}
+	msg.ContentParts = filtered
 }
 
 // annotateMediaDescription calls the vision model to produce a short text description
@@ -809,6 +824,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	if hasMediaParts(combinedUserMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
 		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
 		a.annotateMediaDescription(ctx, cfg, &combinedUserMsg)
+		stripMediaParts(&combinedUserMsg)
 	}
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
