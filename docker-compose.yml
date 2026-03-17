@@ -8,4 +8,7 @@ services:
       - ./config:/config
     environment:
       - VESPRA_DB_PATH=/data/vespra.db
+    command: ["/app/vespra", "--config", "/config/config.toml", "--log-level", "debug"]
+    dns:
+      - 192.168.1.1
     restart: unless-stopped
