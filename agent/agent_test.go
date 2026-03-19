@@ -1157,6 +1157,18 @@ func TestIsAddressedToBotNameMention(t *testing.T) {
 			}},
 			want: true,
 		},
+		{
+			name: "reply to bot in guild",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "yes exactly",
+				MessageReference: &discordgo.MessageReference{MessageID: "ref1"},
+				ReferencedMessage: &discordgo.Message{
+					Author: &discordgo.User{ID: botID},
+				},
+			}},
+			want: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

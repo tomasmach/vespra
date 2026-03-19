@@ -589,20 +589,28 @@ func matchesBotNameRunes(name string, botRunes []rune) bool {
 
 // containsBotName reports whether any word in content looks like a
 // morphological variant of botName (handles @-prefixed and punctuation-suffixed
-// tokens).
+// tokens). Note: bot names shorter than 4 runes will never match because the
+// morphological matching threshold requires at least 4 shared leading runes.
 func containsBotName(content, botName string) bool {
 	if botName == "" {
 		return false
 	}
 	botRunes := []rune(norm.NFC.String(strings.ToLower(botName)))
 	for _, token := range strings.Fields(content) {
-		word := strings.TrimLeft(token, "@")
-		word = strings.TrimRight(word, ".,!?;:)")
-		if word == "" {
-			continue
-		}
-		if matchesBotNameRunes(strings.ToLower(word), botRunes) {
-			return true
+		// Secondary split on punctuation that users commonly omit spaces after
+		// (e.g. "Botname,how are you?" → ["Botname", "how are you?"]).
+		subTokens := strings.FieldsFunc(token, func(r rune) bool {
+			return r == ',' || r == ';' || r == ':'
+		})
+		for _, sub := range subTokens {
+			word := strings.TrimLeft(sub, "@")
+			word = strings.TrimRight(word, `.,!?;:)'">\]}`)
+			if word == "" {
+				continue
+			}
+			if matchesBotNameRunes(strings.ToLower(word), botRunes) {
+				return true
+			}
 		}
 	}
 	return false
@@ -729,7 +737,7 @@ func stripMediaParts(msg *llm.Message) {
 
 // annotateMediaDescription calls the vision model to produce a short text description
 // of the media in msg.ContentParts and injects it into the text content part.
-// This description survives stripImages() so the main model can reference it later.
+// This description survives stripMediaParts() so the main model can reference it later.
 // The full msg.ContentParts slice (including any user text) is passed to DescribeMedia
 // intentionally — this gives the vision model context about what the user said.
 func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, cfg *config.Config, msg *llm.Message) {
