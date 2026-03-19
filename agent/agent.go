@@ -500,18 +500,21 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 }
 
 // isAddressedToBot reports whether a Discord message is directly addressed to
-// the bot via DM, @mention, or reply.
-func isAddressedToBot(m *discordgo.MessageCreate, botID string) bool {
+// the bot via DM, @mention, reply, or plain-text name mention.
+func isAddressedToBot(m *discordgo.MessageCreate, botID, botName string) bool {
 	if m.GuildID == "" {
 		return true // DMs are always addressed
 	}
 	if strings.Contains(m.Content, "<@"+botID+">") || strings.Contains(m.Content, "<@!"+botID+">") {
 		return true
 	}
-	return m.MessageReference != nil &&
+	if m.MessageReference != nil &&
 		m.ReferencedMessage != nil &&
 		m.ReferencedMessage.Author != nil &&
-		m.ReferencedMessage.Author.ID == botID
+		m.ReferencedMessage.Author.ID == botID {
+		return true
+	}
+	return containsBotName(m.Content, botName)
 }
 
 // plainTextMentionRe matches a @Username-like pattern at the start of a message.
@@ -565,17 +568,52 @@ func isDirectedAtOther(msg *discordgo.MessageCreate, botID, botName string) bool
 // languages (e.g. Czech: Machmonstrum → Machmonstře) without false-positiving
 // on short coincidental prefixes.
 func looksLikeBotName(name, botName string) bool {
+	return matchesBotNameRunes(name, []rune(norm.NFC.String(botName)))
+}
+
+// matchesBotNameRunes is the rune-level implementation of looksLikeBotName.
+// Accepting pre-computed botRunes lets callers that compare many names against
+// the same botName (e.g. containsBotName) avoid re-normalising it every iteration.
+func matchesBotNameRunes(name string, botRunes []rune) bool {
 	nr := []rune(norm.NFC.String(name))
-	br := []rune(norm.NFC.String(botName))
 	var shared int
-	for shared < len(nr) && shared < len(br) && nr[shared] == br[shared] {
+	for shared < len(nr) && shared < len(botRunes) && nr[shared] == botRunes[shared] {
 		shared++
 	}
 	longer := len(nr)
-	if len(br) > longer {
-		longer = len(br)
+	if len(botRunes) > longer {
+		longer = len(botRunes)
 	}
 	return shared >= 4 && shared*4 >= longer*3
+}
+
+// containsBotName reports whether any word in content looks like a
+// morphological variant of botName (handles @-prefixed and punctuation-suffixed
+// tokens). Note: bot names shorter than 4 runes will never match because the
+// morphological matching threshold requires at least 4 shared leading runes.
+func containsBotName(content, botName string) bool {
+	if botName == "" {
+		return false
+	}
+	botRunes := []rune(norm.NFC.String(strings.ToLower(botName)))
+	for _, token := range strings.Fields(content) {
+		// Secondary split on punctuation that users commonly omit spaces after
+		// (e.g. "Botname,how are you?" → ["Botname", "how are you?"]).
+		subTokens := strings.FieldsFunc(token, func(r rune) bool {
+			return r == ',' || r == ';' || r == ':'
+		})
+		for _, sub := range subTokens {
+			word := strings.TrimLeft(sub, "@")
+			word = strings.TrimRight(word, `.,!?;:)'">\]}`)
+			if word == "" {
+				continue
+			}
+			if matchesBotNameRunes(strings.ToLower(word), botRunes) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // turnParams holds the inputs needed by processTurn, allowing handleMessage and
@@ -600,7 +638,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
 	botID := a.resources.Session.State.User.ID
 	botName := a.resources.Session.State.User.Username
-	addressed := isAddressedToBot(msg, botID)
+	addressed := isAddressedToBot(msg, botID, botName)
 
 	switch mode {
 	case "none":
@@ -644,11 +682,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn))
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
-	if hasMediaParts(userMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
-		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
-		a.annotateMediaDescription(ctx, cfg, &userMsg)
-		stripMediaParts(&userMsg)
-	}
+	a.annotateAndStripMedia(ctx, cfg, &userMsg)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
 	llmMsgs = append(llmMsgs, userMsg)
@@ -663,6 +697,17 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		addressed:       addressed,
 		directedAtOther: directedAtOther,
 	})
+}
+
+// annotateAndStripMedia calls the vision model to describe any media in msg,
+// then removes the raw media blobs so the main chat model only sees the text
+// description.
+func (a *ChannelAgent) annotateAndStripMedia(ctx context.Context, cfg *config.Config, msg *llm.Message) {
+	if hasMediaParts(msg.ContentParts) && cfg.LLM.VisionModel != "" &&
+		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
+		a.annotateMediaDescription(ctx, cfg, msg)
+		stripMediaParts(msg)
+	}
 }
 
 // hasMediaParts reports whether parts contains at least one image or video part.
@@ -686,12 +731,13 @@ func stripMediaParts(msg *llm.Message) {
 			filtered = append(filtered, p)
 		}
 	}
+	clear(msg.ContentParts[len(filtered):])
 	msg.ContentParts = filtered
 }
 
 // annotateMediaDescription calls the vision model to produce a short text description
 // of the media in msg.ContentParts and injects it into the text content part.
-// This description survives stripImages() so the main model can reference it later.
+// This description survives stripMediaParts() so the main model can reference it later.
 // The full msg.ContentParts slice (including any user text) is passed to DescribeMedia
 // intentionally — this gives the vision model context about what the user said.
 func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, cfg *config.Config, msg *llm.Message) {
@@ -758,7 +804,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	var anyAddressed bool
 	for _, m := range msgs {
-		if isAddressedToBot(m, botID) {
+		if isAddressedToBot(m, botID, botName) {
 			anyAddressed = true
 			break
 		}
@@ -821,11 +867,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn))
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
-	if hasMediaParts(combinedUserMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
-		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
-		a.annotateMediaDescription(ctx, cfg, &combinedUserMsg)
-		stripMediaParts(&combinedUserMsg)
-	}
+	a.annotateAndStripMedia(ctx, cfg, &combinedUserMsg)
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
