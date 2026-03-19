@@ -1085,6 +1085,89 @@ func TestLooksLikeBotName(t *testing.T) {
 	}
 }
 
+func TestContainsBotName(t *testing.T) {
+	tests := []struct {
+		content, botName string
+		want             bool
+	}{
+		{"Machmonstře, řekni vtip", "Machmonstrum", true},
+		{"Hey Machmonstrum!", "Machmonstrum", true},
+		{"@Machmonstře hello", "Machmonstrum", true},
+		{"petr dáme fotbálek", "Machmonstrum", false},
+		{"mac co je?", "Machmonstrum", false},
+		{"", "Machmonstrum", false},
+		{"hello", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.content+"_"+tt.botName, func(t *testing.T) {
+			got := containsBotName(tt.content, tt.botName)
+			if got != tt.want {
+				t.Errorf("containsBotName(%q, %q) = %v, want %v", tt.content, tt.botName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsAddressedToBotNameMention(t *testing.T) {
+	const botID = "bot123"
+	const botName = "Machmonstrum"
+
+	tests := []struct {
+		name string
+		msg  *discordgo.MessageCreate
+		want bool
+	}{
+		{
+			name: "plain-text vocative in guild",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "Machmonstře, řekni vtip",
+			}},
+			want: true,
+		},
+		{
+			name: "exact name in guild",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "Hey Machmonstrum!",
+			}},
+			want: true,
+		},
+		{
+			name: "unrelated message in guild",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "petr dáme fotbálek",
+			}},
+			want: false,
+		},
+		{
+			name: "DM always true",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "",
+				Content: "random message",
+			}},
+			want: true,
+		},
+		{
+			name: "Discord @mention still works",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "<@bot123> help",
+			}},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isAddressedToBot(tt.msg, botID, botName)
+			if got != tt.want {
+				t.Errorf("isAddressedToBot() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShouldSendFallback(t *testing.T) {
 	tests := []struct {
 		name       string

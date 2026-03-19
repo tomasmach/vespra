@@ -500,18 +500,21 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 }
 
 // isAddressedToBot reports whether a Discord message is directly addressed to
-// the bot via DM, @mention, or reply.
-func isAddressedToBot(m *discordgo.MessageCreate, botID string) bool {
+// the bot via DM, @mention, reply, or plain-text name mention.
+func isAddressedToBot(m *discordgo.MessageCreate, botID, botName string) bool {
 	if m.GuildID == "" {
 		return true // DMs are always addressed
 	}
 	if strings.Contains(m.Content, "<@"+botID+">") || strings.Contains(m.Content, "<@!"+botID+">") {
 		return true
 	}
-	return m.MessageReference != nil &&
+	if m.MessageReference != nil &&
 		m.ReferencedMessage != nil &&
 		m.ReferencedMessage.Author != nil &&
-		m.ReferencedMessage.Author.ID == botID
+		m.ReferencedMessage.Author.ID == botID {
+		return true
+	}
+	return containsBotName(m.Content, botName)
 }
 
 // plainTextMentionRe matches a @Username-like pattern at the start of a message.
@@ -578,6 +581,27 @@ func looksLikeBotName(name, botName string) bool {
 	return shared >= 4 && shared*4 >= longer*3
 }
 
+// containsBotName reports whether any word in content looks like a
+// morphological variant of botName (handles @-prefixed and punctuation-suffixed
+// tokens).
+func containsBotName(content, botName string) bool {
+	if botName == "" {
+		return false
+	}
+	lowerBotName := strings.ToLower(botName)
+	for _, token := range strings.Fields(content) {
+		word := strings.TrimLeft(token, "@")
+		word = strings.TrimRight(word, ".,!?;:)")
+		if word == "" {
+			continue
+		}
+		if looksLikeBotName(strings.ToLower(word), lowerBotName) {
+			return true
+		}
+	}
+	return false
+}
+
 // turnParams holds the inputs needed by processTurn, allowing handleMessage and
 // handleMessages to share the tool-call loop and post-processing logic.
 type turnParams struct {
@@ -600,7 +624,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
 	botID := a.resources.Session.State.User.ID
 	botName := a.resources.Session.State.User.Username
-	addressed := isAddressedToBot(msg, botID)
+	addressed := isAddressedToBot(msg, botID, botName)
 
 	switch mode {
 	case "none":
@@ -758,7 +782,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	var anyAddressed bool
 	for _, m := range msgs {
-		if isAddressedToBot(m, botID) {
+		if isAddressedToBot(m, botID, botName) {
 			anyAddressed = true
 			break
 		}
