@@ -568,15 +568,21 @@ func isDirectedAtOther(msg *discordgo.MessageCreate, botID, botName string) bool
 // languages (e.g. Czech: Machmonstrum → Machmonstře) without false-positiving
 // on short coincidental prefixes.
 func looksLikeBotName(name, botName string) bool {
+	return matchesBotNameRunes(name, []rune(norm.NFC.String(botName)))
+}
+
+// matchesBotNameRunes is the rune-level implementation of looksLikeBotName.
+// Accepting pre-computed botRunes lets callers that compare many names against
+// the same botName (e.g. containsBotName) avoid re-normalising it every iteration.
+func matchesBotNameRunes(name string, botRunes []rune) bool {
 	nr := []rune(norm.NFC.String(name))
-	br := []rune(norm.NFC.String(botName))
 	var shared int
-	for shared < len(nr) && shared < len(br) && nr[shared] == br[shared] {
+	for shared < len(nr) && shared < len(botRunes) && nr[shared] == botRunes[shared] {
 		shared++
 	}
 	longer := len(nr)
-	if len(br) > longer {
-		longer = len(br)
+	if len(botRunes) > longer {
+		longer = len(botRunes)
 	}
 	return shared >= 4 && shared*4 >= longer*3
 }
@@ -588,14 +594,14 @@ func containsBotName(content, botName string) bool {
 	if botName == "" {
 		return false
 	}
-	lowerBotName := strings.ToLower(botName)
+	botRunes := []rune(norm.NFC.String(strings.ToLower(botName)))
 	for _, token := range strings.Fields(content) {
 		word := strings.TrimLeft(token, "@")
 		word = strings.TrimRight(word, ".,!?;:)")
 		if word == "" {
 			continue
 		}
-		if looksLikeBotName(strings.ToLower(word), lowerBotName) {
+		if matchesBotNameRunes(strings.ToLower(word), botRunes) {
 			return true
 		}
 	}
@@ -668,11 +674,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn))
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
-	if hasMediaParts(userMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
-		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
-		a.annotateMediaDescription(ctx, cfg, &userMsg)
-		stripMediaParts(&userMsg)
-	}
+	a.annotateAndStripMedia(ctx, cfg, &userMsg)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
 	llmMsgs = append(llmMsgs, userMsg)
@@ -687,6 +689,17 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		addressed:       addressed,
 		directedAtOther: directedAtOther,
 	})
+}
+
+// annotateAndStripMedia calls the vision model to describe any media in msg,
+// then removes the raw media blobs so the main chat model only sees the text
+// description.
+func (a *ChannelAgent) annotateAndStripMedia(ctx context.Context, cfg *config.Config, msg *llm.Message) {
+	if hasMediaParts(msg.ContentParts) && cfg.LLM.VisionModel != "" &&
+		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
+		a.annotateMediaDescription(ctx, cfg, msg)
+		stripMediaParts(msg)
+	}
 }
 
 // hasMediaParts reports whether parts contains at least one image or video part.
@@ -710,6 +723,7 @@ func stripMediaParts(msg *llm.Message) {
 			filtered = append(filtered, p)
 		}
 	}
+	clear(msg.ContentParts[len(filtered):])
 	msg.ContentParts = filtered
 }
 
@@ -845,11 +859,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn))
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
-	if hasMediaParts(combinedUserMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
-		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
-		a.annotateMediaDescription(ctx, cfg, &combinedUserMsg)
-		stripMediaParts(&combinedUserMsg)
-	}
+	a.annotateAndStripMedia(ctx, cfg, &combinedUserMsg)
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
