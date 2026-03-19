@@ -37,6 +37,7 @@ type Registry struct {
 	tools           map[string]Tool
 	Replied         bool   // set to true when the reply tool is called
 	ReplyText       string // the content argument passed to the reply tool
+	ReplyCount      int    // number of reply tool calls in this turn
 	WebSearchCalled bool   // set to true when web_search is invoked
 	ImageGenCalled  bool   // set to true when generate_image is invoked
 	Reacted         bool   // set to true when the react tool is called
@@ -218,9 +219,10 @@ func (t *memoryForgetTool) Call(ctx context.Context, args json.RawMessage) (stri
 }
 
 type replyTool struct {
-	send      SendFunc
-	replied   *bool
-	replyText *string
+	send       SendFunc
+	replied    *bool
+	replyText  *string
+	replyCount *int
 }
 
 func (t *replyTool) Name() string { return "reply" }
@@ -247,11 +249,10 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if isStageDirection(p.Content) {
 		return "Replied.", nil
 	}
-	// Guardrail: only one visible reply per turn.
-	// Models occasionally call reply multiple times in one loop iteration chain,
-	// which leads to duplicate or near-duplicate Discord messages.
-	if *t.replied {
-		return "Reply already sent in this turn.", nil
+	// Guardrail: cap replies per turn to prevent runaway loops while still
+	// allowing a status message followed by the real answer (max 3).
+	if *t.replyCount >= 2 {
+		return "Reply limit reached for this turn.", nil
 	}
 	parts := SplitMessage(p.Content, 2000)
 	for _, part := range parts {
@@ -260,6 +261,7 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 		}
 	}
 	*t.replied = true
+	*t.replyCount++
 	*t.replyText = p.Content
 	return "Replied.", nil
 }
@@ -463,7 +465,7 @@ func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold flo
 	r.Register(&memorySaveTool{store: store, serverID: serverID, dedupThreshold: dedupThreshold})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID, defaultTopN: defaultRecallLimit})
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
-	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText})
+	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount})
 	r.Register(&reactTool{react: react, reacted: &r.Reacted})
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps, searchCalled: &r.WebSearchCalled})

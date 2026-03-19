@@ -113,7 +113,7 @@ func TestSplitMessageExactLimit(t *testing.T) {
 	}
 }
 
-func TestReplyToolDeduplication(t *testing.T) {
+func TestReplyToolRateLimit(t *testing.T) {
 	sendCount := 0
 	send := func(content string) error {
 		sendCount++
@@ -124,7 +124,7 @@ func TestReplyToolDeduplication(t *testing.T) {
 	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil)
 	ctx := context.Background()
 
-	// First call: should send and return "Replied."
+	// First call: should send.
 	result, err := r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"hello"}`))
 	if err != nil {
 		t.Fatalf("first Dispatch() returned unexpected error: %v", err)
@@ -136,16 +136,28 @@ func TestReplyToolDeduplication(t *testing.T) {
 		t.Errorf("first call: expected send count 1, got %d", sendCount)
 	}
 
-	// Second call: dedup guard should fire, send must not be called again.
-	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"hello again"}`))
+	// Second call: should also send (limit is 2).
+	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"the real answer"}`))
 	if err != nil {
 		t.Fatalf("second Dispatch() returned unexpected error: %v", err)
 	}
-	if result != "Reply already sent in this turn." {
-		t.Errorf("second call: expected %q, got %q", "Reply already sent in this turn.", result)
+	if result != "Replied." {
+		t.Errorf("second call: expected %q, got %q", "Replied.", result)
 	}
-	if sendCount != 1 {
-		t.Errorf("second call: expected send count still 1, got %d", sendCount)
+	if sendCount != 2 {
+		t.Errorf("second call: expected send count 2, got %d", sendCount)
+	}
+
+	// Third call: should be blocked.
+	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"too many"}`))
+	if err != nil {
+		t.Fatalf("third Dispatch() returned unexpected error: %v", err)
+	}
+	if result != "Reply limit reached for this turn." {
+		t.Errorf("third call: expected %q, got %q", "Reply limit reached for this turn.", result)
+	}
+	if sendCount != 2 {
+		t.Errorf("third call: expected send count still 2, got %d", sendCount)
 	}
 }
 
