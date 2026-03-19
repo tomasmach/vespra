@@ -1186,6 +1186,7 @@ func TestShouldSendFallback(t *testing.T) {
 		internal   bool
 		replied    bool
 		imageGen   bool
+		webSearch  bool
 		reacted    bool
 		hasContent bool
 		addressed  bool
@@ -1215,6 +1216,12 @@ func TestShouldSendFallback(t *testing.T) {
 			want:      false,
 		},
 		{
+			name:      "web search does not send fallback",
+			addressed: true,
+			webSearch: true,
+			want:      false,
+		},
+		{
 			name:       "has content does not send fallback",
 			addressed:  true,
 			hasContent: true,
@@ -1235,6 +1242,7 @@ func TestShouldSendFallback(t *testing.T) {
 			reg := tools.NewRegistry()
 			reg.Replied = tt.replied
 			reg.ImageGenCalled = tt.imageGen
+			reg.WebSearchCalled = tt.webSearch
 			reg.Reacted = tt.reacted
 			got := shouldSendFallback(tt.internal, reg, tt.hasContent, tt.addressed)
 			if got != tt.want {

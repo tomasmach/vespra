@@ -1451,7 +1451,7 @@ func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, 
 // but produced no visible output at all — no reply, no image, no reaction, and
 // no plain-text content.
 func shouldSendFallback(internal bool, reg *tools.Registry, hasContent, addressed bool) bool {
-	return !internal && !reg.Replied && !reg.ImageGenCalled && !reg.Reacted && !hasContent && addressed
+	return !internal && !reg.Replied && !reg.ImageGenCalled && !reg.WebSearchCalled && !reg.Reacted && !hasContent && addressed
 }
 
 // runMemoryExtraction launches a background goroutine that reviews recent history
