@@ -908,7 +908,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
 	}
-	sb.WriteString("You are receiving web search results. If the results contain URLs with specific data you need, you may call web_fetch to read a page for more precise information. Then summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Do NOT reference or claim to have previously told the user anything — you have not spoken to them yet in this context. Focus on presenting only the new information clearly, with relevant sources and links. Keep it concise: max 5 short bullets or ~700 characters.")
+	sb.WriteString("You are receiving web search results. Summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Do NOT reference or claim to have previously told the user anything — you have not spoken to them yet in this context. Focus on presenting only the new information clearly, with relevant sources and links. Reply IMMEDIATELY with the data — do NOT send a status message first. You MUST call the reply tool exactly once with the complete answer.")
 	if lang := cfg.ResolveLanguage(a.serverID, a.channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
@@ -918,10 +918,9 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 		return err
 	}
 	reactFn := func(emoji string) error { return nil }
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, nil, nil)
-	// Do NOT register web_search (infinite loops) or web_fetch (burns iterations
-	// on cookie walls / 403s without reaching a final answer). The search result
-	// snippets from Brave are sufficient to produce a concise reply.
+	// Minimal registry: only reply + react. No memory tools, no web_search/web_fetch.
+	// The LLM's only job is to summarize the search snippets and reply.
+	reg := tools.NewReplyOnlyRegistry(sendFn, reactFn)
 
 	userMsg := llm.Message{Role: "user", Content: content}
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)

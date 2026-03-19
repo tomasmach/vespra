@@ -458,6 +458,16 @@ func (t *webSearchTool) runSearch(query string) {
 	t.deps.DeliverResult(fmt.Sprintf("[SYSTEM:web_search_results]\nSearch results for %q:\n\n%s", query, result))
 }
 
+// NewReplyOnlyRegistry creates a minimal registry with only the reply and react tools.
+// Used for internal turns (e.g. web search result summarization) where the LLM
+// should just summarize and reply without calling memory or search tools.
+func NewReplyOnlyRegistry(send SendFunc, react ReactFunc) *Registry {
+	r := NewRegistry()
+	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount})
+	r.Register(&reactTool{react: react, reacted: &r.Reacted})
+	return r
+}
+
 // NewDefaultRegistry creates a registry with standard tools.
 // If searchDeps is non-nil, the async web_search and web_fetch tools are also registered.
 func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps, imageGenDeps *ImageGenDeps) *Registry {
