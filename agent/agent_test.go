@@ -718,7 +718,6 @@ func TestShouldSuppressSmartMode(t *testing.T) {
 		hasContent      bool
 		replied         bool
 		reacted         bool
-		visionResponse  bool
 		addressed       bool
 		internal        bool
 		webSearch       bool
@@ -761,11 +760,12 @@ func TestShouldSuppressSmartMode(t *testing.T) {
 			want:       false,
 		},
 		{
-			name:           "vision response not suppressed",
-			mode:           "smart",
-			hasContent:     true,
-			visionResponse: true,
-			want:           false,
+			// Vision responses no longer bypass suppression — the vision model
+			// is a pre-processing step, not the main chat model.
+			name:       "image message suppressed in smart mode like any other",
+			mode:       "smart",
+			hasContent: true,
+			want:       true,
 		},
 		{
 			name:       "non-smart mode not suppressed",
@@ -827,11 +827,59 @@ func TestShouldSuppressSmartMode(t *testing.T) {
 			reg.Reacted = tt.reacted
 			reg.WebSearchCalled = tt.webSearch
 			reg.ImageGenCalled = tt.imageGen
-			got := shouldSuppressSmartMode(tt.mode, tt.hasContent, reg, tt.visionResponse, tt.addressed, tt.internal, tt.directedAtOther)
+			got := shouldSuppressSmartMode(tt.mode, tt.hasContent, reg, tt.addressed, tt.internal, tt.directedAtOther)
 			if got != tt.want {
 				t.Errorf("shouldSuppressSmartMode() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSendAllowed(t *testing.T) {
+	cfgStore := config.NewStoreFromConfig(&config.Config{
+		Agent: config.TurnConfig{
+			SendRateLimit:         3,
+			SendRateWindowSeconds: 60,
+		},
+	})
+	a := &ChannelAgent{cfgStore: cfgStore}
+
+	// First 3 sends are allowed.
+	for i := 0; i < 3; i++ {
+		if !a.sendAllowed() {
+			t.Fatalf("send %d should be allowed", i+1)
+		}
+	}
+
+	// 4th send exceeds the limit.
+	if a.sendAllowed() {
+		t.Error("4th send should be rate-limited")
+	}
+}
+
+func TestSendAllowedWindowExpiry(t *testing.T) {
+	cfgStore := config.NewStoreFromConfig(&config.Config{
+		Agent: config.TurnConfig{
+			SendRateLimit:         2,
+			SendRateWindowSeconds: 1,
+		},
+	})
+	a := &ChannelAgent{cfgStore: cfgStore}
+
+	// Fill the window.
+	a.sendAllowed()
+	a.sendAllowed()
+	if a.sendAllowed() {
+		t.Fatal("should be rate-limited after 2 sends")
+	}
+
+	// Backdate timestamps to simulate window expiry.
+	for i := range a.sendTimestamps {
+		a.sendTimestamps[i] = a.sendTimestamps[i].Add(-2 * time.Second)
+	}
+
+	if !a.sendAllowed() {
+		t.Error("send should be allowed after window expires")
 	}
 }
 

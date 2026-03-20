@@ -113,6 +113,28 @@ func TestSplitMessageExactLimit(t *testing.T) {
 	}
 }
 
+func TestReplyToolSplitMessageCap(t *testing.T) {
+	var sent []string
+	send := func(content string) error {
+		sent = append(sent, content)
+		return nil
+	}
+	react := func(emoji string) error { return nil }
+
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil)
+
+	// Build a message that will produce 4 parts when split at 2000 chars.
+	longContent := strings.Repeat("a", 7000)
+	args, _ := json.Marshal(map[string]string{"content": longContent})
+	_, err := r.Dispatch(context.Background(), "reply", args)
+	if err != nil {
+		t.Fatalf("Dispatch() returned unexpected error: %v", err)
+	}
+	if len(sent) > 2 {
+		t.Errorf("expected at most 2 messages sent (SplitMessage cap), got %d", len(sent))
+	}
+}
+
 func TestReplyToolRateLimit(t *testing.T) {
 	sendCount := 0
 	send := func(content string) error {

@@ -44,6 +44,7 @@ type LLMConfig struct {
 	BaseURL               string `toml:"base_url" json:"-"`
 	EmbeddingBaseURL      string `toml:"embedding_base_url" json:"-"`
 	MediaDescriptions     *bool  `toml:"media_descriptions"` // nil = enabled when vision_model set
+	MaxTokens             int    `toml:"max_tokens"`
 }
 
 type MemoryConfig struct {
@@ -62,6 +63,8 @@ type TurnConfig struct {
 	MemoryRecallLimit        int     `toml:"memory_recall_limit"`
 	MemoryDedupThreshold     float64 `toml:"memory_dedup_threshold"`
 	MemoryRecallThreshold    float64 `toml:"memory_recall_threshold"`
+	SendRateLimit            int     `toml:"send_rate_limit"`
+	SendRateWindowSeconds    int     `toml:"send_rate_window_seconds"`
 }
 
 type ResponseConfig struct {
@@ -208,6 +211,15 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Agent.MemoryRecallThreshold <= 0 {
 		cfg.Agent.MemoryRecallThreshold = 0.35
+	}
+	if cfg.Agent.SendRateLimit <= 0 {
+		cfg.Agent.SendRateLimit = 4
+	}
+	if cfg.Agent.SendRateWindowSeconds <= 0 {
+		cfg.Agent.SendRateWindowSeconds = 60
+	}
+	if cfg.LLM.MaxTokens <= 0 {
+		cfg.LLM.MaxTokens = 1024
 	}
 	if cfg.Tools.WebTimeoutSeconds <= 0 {
 		cfg.Tools.WebTimeoutSeconds = 120

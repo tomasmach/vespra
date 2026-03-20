@@ -100,6 +100,7 @@ type ChannelAgent struct {
 	searchWg          sync.WaitGroup // tracks in-flight web search goroutines
 	imageRunning      atomic.Bool    // prevents concurrent image generations
 	imageWg           sync.WaitGroup // tracks in-flight image generation goroutines
+	sendTimestamps    []time.Time    // sliding window for outgoing rate limit
 
 	ctx        context.Context    // agent's own context; set at the start of run()
 	msgCh      chan *discordgo.MessageCreate // buffered 100
@@ -331,6 +332,42 @@ func downloadImageAsDataURL(ctx context.Context, client *http.Client, a *discord
 		ct = "image/jpeg"
 	}
 	return downloadURLAsDataURL(ctx, client, a.URL, ct)
+}
+
+// sendAllowed checks whether sending a message is within the configured rate
+// limit. It prunes expired timestamps and records the current send if allowed.
+// Only called from the agent's serial run loop, so no mutex is needed.
+func (a *ChannelAgent) sendAllowed() bool {
+	cfg := a.cfgStore.Get()
+	limit := cfg.Agent.SendRateLimit
+	window := time.Duration(cfg.Agent.SendRateWindowSeconds) * time.Second
+
+	now := time.Now()
+	cutoff := now.Add(-window)
+	valid := a.sendTimestamps[:0]
+	for _, ts := range a.sendTimestamps {
+		if ts.After(cutoff) {
+			valid = append(valid, ts)
+		}
+	}
+	a.sendTimestamps = valid
+
+	if len(a.sendTimestamps) >= limit {
+		return false
+	}
+	a.sendTimestamps = append(a.sendTimestamps, now)
+	return true
+}
+
+// rateLimitedSendFn wraps a raw send function with the per-channel rate limiter.
+func (a *ChannelAgent) rateLimitedSendFn(raw func(string) error) func(string) error {
+	return func(content string) error {
+		if !a.sendAllowed() {
+			a.logger.Warn("outgoing rate limit exceeded, dropping message", "channel_id", a.channelID)
+			return nil
+		}
+		return raw(content)
+	}
 }
 
 func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClient *llm.Client, resources *AgentResources) *ChannelAgent {
@@ -672,10 +709,10 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	memories := a.recallMemories(ctx, cfg, userID, msg.Content)
 	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed, directedAtOther)
 
-	sendFn := func(content string) error {
+	sendFn := a.rateLimitedSendFn(func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
 		return err
-	}
+	})
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
@@ -857,10 +894,10 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed, allDirectedAtOther)
 
-	sendFn := func(content string) error {
+	sendFn := a.rateLimitedSendFn(func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
 		return err
-	}
+	})
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
@@ -913,10 +950,10 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 
-	sendFn := func(text string) error {
+	sendFn := a.rateLimitedSendFn(func(text string) error {
 		_, err := a.resources.Session.ChannelMessageSend(a.channelID, text)
 		return err
-	}
+	})
 	reactFn := func(emoji string) error { return nil }
 	// Minimal registry: only reply + react. No memory tools, no web_search/web_fetch.
 	// The LLM's only job is to summarize the search snippets and reply.
@@ -1228,10 +1265,6 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp turnParams) {
 	chatOpts := a.chatOptions()
 
-	// Capture visionResponse before the tool-call loop so that tool-call messages
-	// appended to tp.llmMsgs don't corrupt the check.
-	visionResponse := len(tp.llmMsgs) > 0 && len(tp.llmMsgs[len(tp.llmMsgs)-1].ContentParts) > 0
-
 	maxIter := cfg.Agent.MaxToolIterations
 	if tp.maxIter > 0 {
 		maxIter = tp.maxIter
@@ -1357,7 +1390,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	// Suppress any leftover plain-text content that was not sent through a tool.
 	// Messages directed at another user are always suppressed, even if the LLM
 	// called web_search or image_gen.
-	if shouldSuppressSmartMode(tp.mode, assistantContent != "", tp.reg, visionResponse, tp.addressed, tp.internal, tp.directedAtOther) {
+	if shouldSuppressSmartMode(tp.mode, assistantContent != "", tp.reg, tp.addressed, tp.internal, tp.directedAtOther) {
 		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent, "directedAtOther", tp.directedAtOther)
 		assistantContent = ""
 	}
@@ -1388,6 +1421,10 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	if assistantContent != "" && !tp.reg.Replied {
 		parts := tools.SplitMessage(assistantContent, 2000)
+		if len(parts) > 2 {
+			a.logger.Warn("truncated SplitMessage output", "original_parts", len(parts))
+			parts = parts[:2]
+		}
 		for _, p := range parts {
 			if err := tp.sendFn(p); err != nil {
 				a.logger.Error("send message", "error", err)
@@ -1424,7 +1461,6 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 // shouldSuppressSmartMode reports whether plain-text content from the LLM should
 // be dropped in smart mode. Content is preserved when:
 //   - the reply tool was already used,
-//   - it's a vision response (tools omitted for GLM vision),
 //   - the message was addressed (@mention),
 //   - it's an internal turn (e.g. web search result delivery),
 //   - the web_search or generate_image tool was invoked.
@@ -1433,7 +1469,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 // (emoji reaction) without calling the reply tool, any trailing plain-text is
 // still suppressed — the model should not leak text alongside a bare reaction
 // in smart mode.
-func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, visionResponse, addressed, internal, directedAtOther bool) bool {
+func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, addressed, internal, directedAtOther bool) bool {
 	if mode != "smart" || !hasContent || reg.Replied || addressed || internal {
 		return false
 	}
@@ -1442,7 +1478,7 @@ func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, 
 	if directedAtOther {
 		return true
 	}
-	return !visionResponse && !reg.WebSearchCalled && !reg.ImageGenCalled
+	return !reg.WebSearchCalled && !reg.ImageGenCalled
 }
 
 // shouldSendFallback reports whether the error fallback ("I'm having trouble

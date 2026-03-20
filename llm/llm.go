@@ -226,6 +226,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		"model":    model,
 		"messages": messages,
 	}
+	if maxTok := cfg.MaxTokens; maxTok > 0 {
+		body["max_tokens"] = maxTok
+	}
 
 	// GLM vision models don't support function-calling tools alongside
 	// multimodal content. Omit tools when the request goes to GLM with images.

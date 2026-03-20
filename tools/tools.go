@@ -255,6 +255,10 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 		return "Reply limit reached for this turn.", nil
 	}
 	parts := SplitMessage(p.Content, 2000)
+	if len(parts) > 2 {
+		slog.Warn("truncated reply tool SplitMessage output", "original_parts", len(parts))
+		parts = parts[:2]
+	}
 	for _, part := range parts {
 		if err := t.send(part); err != nil {
 			return "", err
