@@ -219,10 +219,11 @@ func (t *memoryForgetTool) Call(ctx context.Context, args json.RawMessage) (stri
 }
 
 type replyTool struct {
-	send       SendFunc
-	replied    *bool
-	replyText  *string
-	replyCount *int
+	send          SendFunc
+	replied       *bool
+	replyText     *string
+	replyCount    *int
+	maxReplyParts int
 }
 
 func (t *replyTool) Name() string { return "reply" }
@@ -254,7 +255,7 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if *t.replyCount >= 2 {
 		return "Reply limit reached for this turn.", nil
 	}
-	parts := SplitAndCapMessage(p.Content, 2000)
+	parts := SplitAndCapMessage(p.Content, 2000, t.maxReplyParts)
 	for _, part := range parts {
 		if err := t.send(part); err != nil {
 			return "", err
@@ -316,16 +317,15 @@ func SplitMessage(s string, limit int) []string {
 	return parts
 }
 
-// maxReplyParts is the maximum number of Discord message chunks sent per reply.
-// Caps output length to ~4000 UTF-16 units (2 × 2000) to prevent flooding.
-const maxReplyParts = 2
-
-// SplitAndCapMessage splits s into chunks and caps at maxReplyParts.
-func SplitAndCapMessage(s string, limit int) []string {
+// SplitAndCapMessage splits s into chunks and caps at maxParts.
+// When parts are truncated, "…" is appended to the last kept part so
+// Discord users can see that content was cut off.
+func SplitAndCapMessage(s string, limit int, maxParts int) []string {
 	parts := SplitMessage(s, limit)
-	if len(parts) > maxReplyParts {
+	if len(parts) > maxParts {
 		slog.Warn("truncated SplitMessage output", "original_parts", len(parts))
-		parts = parts[:maxReplyParts]
+		parts = parts[:maxParts]
+		parts[len(parts)-1] += "…"
 	}
 	return parts
 }
@@ -475,21 +475,21 @@ func (t *webSearchTool) runSearch(query string) {
 // NewReplyOnlyRegistry creates a minimal registry with only the reply and react tools.
 // Used for internal turns (e.g. web search result summarization) where the LLM
 // should just summarize and reply without calling memory or search tools.
-func NewReplyOnlyRegistry(send SendFunc, react ReactFunc) *Registry {
+func NewReplyOnlyRegistry(send SendFunc, react ReactFunc, maxReplyParts int) *Registry {
 	r := NewRegistry()
-	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount})
+	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount, maxReplyParts: maxReplyParts})
 	r.Register(&reactTool{react: react, reacted: &r.Reacted})
 	return r
 }
 
 // NewDefaultRegistry creates a registry with standard tools.
 // If searchDeps is non-nil, the async web_search and web_fetch tools are also registered.
-func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps, imageGenDeps *ImageGenDeps) *Registry {
+func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps, imageGenDeps *ImageGenDeps, maxReplyParts int) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID, dedupThreshold: dedupThreshold})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID, defaultTopN: defaultRecallLimit})
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
-	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount})
+	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount, maxReplyParts: maxReplyParts})
 	r.Register(&reactTool{react: react, reacted: &r.Reacted})
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps, searchCalled: &r.WebSearchCalled})

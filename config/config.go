@@ -65,6 +65,7 @@ type TurnConfig struct {
 	MemoryRecallThreshold    float64 `toml:"memory_recall_threshold"`
 	SendRateLimit            int     `toml:"send_rate_limit"`
 	SendRateWindowSeconds    int     `toml:"send_rate_window_seconds"`
+	MaxReplyParts            int     `toml:"max_reply_parts"`
 }
 
 type ResponseConfig struct {
@@ -217,6 +218,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Agent.SendRateWindowSeconds <= 0 {
 		cfg.Agent.SendRateWindowSeconds = 60
+	}
+	if cfg.Agent.MaxReplyParts <= 0 {
+		cfg.Agent.MaxReplyParts = 2
 	}
 	if cfg.LLM.MaxTokens <= 0 {
 		cfg.LLM.MaxTokens = 1024

@@ -337,6 +337,11 @@ func downloadImageAsDataURL(ctx context.Context, client *http.Client, a *discord
 // sendAllowed checks whether sending a message is within the configured rate
 // limit. It prunes expired timestamps and records the current send if allowed.
 // Only called from the agent's serial run loop, so no mutex is needed.
+//
+// Budget note: a single turn can consume up to 4 slots (2 reply-tool calls ×
+// 2 Discord message parts each). With the default limit of 4 per 60s, a
+// follow-up turn within the same window may have its reply dropped — this
+// tight budget is intentional to prevent bot flooding.
 func (a *ChannelAgent) sendAllowed() bool {
 	cfg := a.cfgStore.Get()
 	limit := cfg.Agent.SendRateLimit
@@ -364,6 +369,9 @@ func (a *ChannelAgent) rateLimitedSendFn(raw func(string) error) func(string) er
 	return func(content string) error {
 		if !a.sendAllowed() {
 			a.logger.Warn("outgoing rate limit exceeded, dropping message", "channel_id", a.channelID)
+			// Return nil so the LLM does not see an error and retry — the LLM
+			// may believe it communicated successfully, which is acceptable because
+			// surfacing an error would trigger retry loops that worsen flooding.
 			return nil
 		}
 		return raw(content)
@@ -716,7 +724,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn))
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn), cfg.Agent.MaxReplyParts)
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	a.annotateAndStripMedia(ctx, cfg, &userMsg)
@@ -901,7 +909,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn))
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn), cfg.Agent.MaxReplyParts)
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 	a.annotateAndStripMedia(ctx, cfg, &combinedUserMsg)
@@ -957,7 +965,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	reactFn := func(emoji string) error { return nil }
 	// Minimal registry: only reply + react. No memory tools, no web_search/web_fetch.
 	// The LLM's only job is to summarize the search snippets and reply.
-	reg := tools.NewReplyOnlyRegistry(sendFn, reactFn)
+	reg := tools.NewReplyOnlyRegistry(sendFn, reactFn, cfg.Agent.MaxReplyParts)
 
 	userMsg := llm.Message{Role: "user", Content: content}
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
@@ -1156,14 +1164,23 @@ func (a *ChannelAgent) currentAgentConfig() *config.AgentConfig {
 	return nil
 }
 
-// chatOptions returns per-agent ChatOptions when the agent has a provider or
-// model override configured, or nil to use global defaults.
+// chatOptions returns ChatOptions for main chat completion calls, carrying the
+// configured max_tokens cap and any per-agent provider/model overrides.
+// Auxiliary calls (vision descriptions, web search summarization) must NOT use
+// this function — they should construct their own ChatOptions without MaxTokens.
 func (a *ChannelAgent) chatOptions() *llm.ChatOptions {
-	cfg := a.currentAgentConfig()
-	if cfg == nil || (cfg.Provider == "" && cfg.Model == "") {
-		return nil
+	globalCfg := a.cfgStore.Get()
+	agentCfg := a.currentAgentConfig()
+
+	maxTokens := globalCfg.LLM.MaxTokens
+
+	if agentCfg == nil || (agentCfg.Provider == "" && agentCfg.Model == "") {
+		if maxTokens <= 0 {
+			return nil
+		}
+		return &llm.ChatOptions{MaxTokens: maxTokens}
 	}
-	return &llm.ChatOptions{Provider: cfg.Provider, Model: cfg.Model}
+	return &llm.ChatOptions{Provider: agentCfg.Provider, Model: agentCfg.Model, MaxTokens: maxTokens}
 }
 
 // webSearchDeps returns the dependency bundle for the async web search tool,
@@ -1420,7 +1437,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	}
 
 	if assistantContent != "" && !tp.reg.Replied {
-		parts := tools.SplitAndCapMessage(assistantContent, 2000)
+		parts := tools.SplitAndCapMessage(assistantContent, 2000, cfg.Agent.MaxReplyParts)
 		for _, p := range parts {
 			if err := tp.sendFn(p); err != nil {
 				a.logger.Error("send message", "error", err)
