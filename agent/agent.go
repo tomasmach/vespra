@@ -1420,11 +1420,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	}
 
 	if assistantContent != "" && !tp.reg.Replied {
-		parts := tools.SplitMessage(assistantContent, 2000)
-		if len(parts) > 2 {
-			a.logger.Warn("truncated SplitMessage output", "original_parts", len(parts))
-			parts = parts[:2]
-		}
+		parts := tools.SplitAndCapMessage(assistantContent, 2000)
 		for _, p := range parts {
 			if err := tp.sendFn(p); err != nil {
 				a.logger.Error("send message", "error", err)

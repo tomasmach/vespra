@@ -254,11 +254,7 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if *t.replyCount >= 2 {
 		return "Reply limit reached for this turn.", nil
 	}
-	parts := SplitMessage(p.Content, 2000)
-	if len(parts) > 2 {
-		slog.Warn("truncated reply tool SplitMessage output", "original_parts", len(parts))
-		parts = parts[:2]
-	}
+	parts := SplitAndCapMessage(p.Content, 2000)
 	for _, part := range parts {
 		if err := t.send(part); err != nil {
 			return "", err
@@ -316,6 +312,20 @@ func SplitMessage(s string, limit int) []string {
 	}
 	if buf.Len() > 0 {
 		parts = append(parts, buf.String())
+	}
+	return parts
+}
+
+// maxReplyParts is the maximum number of Discord message chunks sent per reply.
+// Caps output length to ~4000 UTF-16 units (2 × 2000) to prevent flooding.
+const maxReplyParts = 2
+
+// SplitAndCapMessage splits s into chunks and caps at maxReplyParts.
+func SplitAndCapMessage(s string, limit int) []string {
+	parts := SplitMessage(s, limit)
+	if len(parts) > maxReplyParts {
+		slog.Warn("truncated SplitMessage output", "original_parts", len(parts))
+		parts = parts[:maxReplyParts]
 	}
 	return parts
 }
