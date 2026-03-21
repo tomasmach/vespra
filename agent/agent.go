@@ -686,9 +686,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	addressed := isAddressedToBot(msg, botID, botName)
 
 	switch mode {
-	case "none":
+	case config.ModeNone:
 		return
-	case "mention":
+	case config.ModeMention:
 		if !addressed {
 			return
 		}
@@ -697,7 +697,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	directedAtOther := !addressed && mode == "smart" && isDirectedAtOther(msg, botID, botName)
 
 	stopTyping := func() {}
-	if mode != "smart" || addressed {
+	if mode != config.ModeSmart || addressed {
 		stopTyping = a.startTyping(ctx)
 	}
 	defer stopTyping()
@@ -856,9 +856,9 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 
 	switch mode {
-	case "none":
+	case config.ModeNone:
 		return
-	case "mention":
+	case config.ModeMention:
 		if !anyAddressed {
 			return
 		}
@@ -876,7 +876,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 
 	stopTyping := func() {}
-	if mode != "smart" || anyAddressed {
+	if mode != config.ModeSmart || anyAddressed {
 		stopTyping = a.startTyping(ctx)
 	}
 	defer stopTyping()
@@ -1082,7 +1082,7 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
-	if mode == "smart" {
+	if mode == config.ModeSmart {
 		if addressed {
 			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` or `react` tools.")
 		} else if directedAtOther {
@@ -1396,7 +1396,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	if assistantContent != "" && looksLikeToolCall(assistantContent, tp.reg.Definitions()) {
 		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
 		assistantContent = ""
-		if !tp.reg.Replied && tp.mode != "smart" {
+		if !tp.reg.Replied && tp.mode != config.ModeSmart {
 			if err := tp.sendFn("I'm not sure how to respond. Please try again."); err != nil {
 				a.logger.Error("send message", "error", err)
 			}
@@ -1483,7 +1483,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 // still suppressed — the model should not leak text alongside a bare reaction
 // in smart mode.
 func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, addressed, internal, directedAtOther bool) bool {
-	if mode != "smart" || !hasContent || reg.Replied || addressed || internal {
+	if mode != config.ModeSmart || !hasContent || reg.Replied || addressed || internal {
 		return false
 	}
 	// Messages directed at another user are always suppressed, even if the LLM

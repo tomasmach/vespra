@@ -115,6 +115,15 @@ func main() {
 		b.SetRouter(router)
 	}
 
+	// Create web server and wire ops before starting bots so that GuildCreate
+	// events (which fire during session.Open) can register slash commands.
+	webAddr := cfgStore.Get().Web.Addr
+	webServer := web.New(webAddr, cfgStore, cfgPath, router, ls)
+	defaultBot.SetOps(webServer)
+	for _, b := range customBots {
+		b.SetOps(webServer)
+	}
+
 	// Start all bots
 	if err := defaultBot.Start(); err != nil {
 		slog.Error("failed to start default bot", "error", err)
@@ -132,8 +141,6 @@ func main() {
 		slog.Info("custom bots started", "count", len(customBots))
 	}
 
-	webAddr := cfgStore.Get().Web.Addr
-	webServer := web.New(webAddr, cfgStore, cfgPath, router, ls)
 	webServer.StartStatusPoller(ctx)
 	go func() {
 		if err := webServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
