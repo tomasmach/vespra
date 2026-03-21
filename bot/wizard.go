@@ -314,15 +314,6 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 		state.language = values[0]
 	}
 
-	// Acknowledge immediately so the 3-second Discord deadline is met
-	// before the config file I/O in UpsertAgent.
-	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredMessageUpdate,
-	}); err != nil {
-		slog.Error("wizard: defer final step", "error", err, "guild_id", state.guildID)
-		return
-	}
-
 	// Build channel overrides. When specific channels were selected, restrict
 	// the bot to only those channels by setting the agent mode to "none" and
 	// creating per-channel overrides with the user's chosen mode.
@@ -352,7 +343,7 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 
 	if err := w.ops.UpsertAgent(agentCfg); err != nil {
 		slog.Error("wizard: upsert agent", "error", err, "guild_id", state.guildID)
-		editDeferredMessage(s, i, fmt.Sprintf("Setup failed: %v. Run `/init` again.", err))
+		respondEphemeralUpdate(s, i, fmt.Sprintf("Setup failed: %v. Run `/init` again.", err))
 		return
 	}
 
@@ -381,11 +372,26 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 	}
 
 	summary := fmt.Sprintf(
-		"✅ **Setup Complete!**\n\nResponse mode: **%s**\nLanguage: **%s**\nChannels: %s\n\nUse `/mode`, `/channel`, `/language` to adjust settings anytime.",
+		"**Setup Complete!**\n\nResponse mode: **%s**\nLanguage: **%s**\nChannels: %s\n\nUse `/mode`, `/channel`, `/language` to adjust settings anytime.",
 		modeDisplay, langDisplay, channelDisplay,
 	)
 
-	editDeferredMessage(s, i, summary)
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content:    summary,
+			Components: []discordgo.MessageComponent{},
+		},
+	}); err != nil {
+		slog.Error("wizard: final response failed", "error", err, "guild_id", state.guildID)
+		// Fall back to a follow-up message if updating fails.
+		s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Content: summary,
+			Flags:   discordgo.MessageFlagsEphemeral,
+		})
+	} else {
+		slog.Info("wizard: setup complete", "guild_id", state.guildID)
+	}
 }
 
 // respondEphemeralUpdate updates the existing ephemeral wizard message with a plain text reply
