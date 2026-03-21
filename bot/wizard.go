@@ -283,7 +283,7 @@ func (w *wizardHandler) showLanguageStep(s *discordgo.Session, i *discordgo.Inte
 							CustomID:    "vespra:init:language",
 							Placeholder: "Select language...",
 							Options: []discordgo.SelectMenuOption{
-								{Label: "Default (English)", Value: "", Description: "No language preference"},
+								{Label: "Default (English)", Value: "default", Description: "No language preference"},
 								{Label: "Czech", Value: "Czech"},
 								{Label: "Slovak", Value: "Slovak"},
 								{Label: "Spanish", Value: "Spanish"},
@@ -308,7 +308,7 @@ func (w *wizardHandler) showLanguageStep(s *discordgo.Session, i *discordgo.Inte
 // handleLanguageSelect completes the wizard, persists the agent config, and shows a summary.
 func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.InteractionCreate, state *wizardState) {
 	values := i.MessageComponentData().Values
-	if len(values) > 0 {
+	if len(values) > 0 && values[0] != "default" {
 		state.language = values[0]
 	}
 
@@ -405,7 +405,7 @@ func showLanguageEdit(s *discordgo.Session, i *discordgo.InteractionCreate) {
 					CustomID:    "vespra:init:language",
 					Placeholder: "Select language...",
 					Options: []discordgo.SelectMenuOption{
-						{Label: "Default (English)", Value: "", Description: "No language preference"},
+						{Label: "Default (English)", Value: "default", Description: "No language preference"},
 						{Label: "Czech", Value: "Czech"},
 						{Label: "Slovak", Value: "Slovak"},
 						{Label: "Spanish", Value: "Spanish"},
