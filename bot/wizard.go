@@ -59,8 +59,6 @@ func intPtr(v int) *int {
 
 // startInit begins the /init setup wizard for the invoking guild.
 func (w *wizardHandler) startInit(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	slog.Info("wizard: /init invoked", "guild_id", i.GuildID)
-
 	// Only run in guild context; DMs have no GuildID.
 	if i.GuildID == "" || i.Member == nil {
 		respondEphemeral(s, i, "This command can only be used inside a server.")
@@ -71,7 +69,6 @@ func (w *wizardHandler) startInit(s *discordgo.Session, i *discordgo.Interaction
 	cfg := w.ops.CfgStore().Get()
 	for _, a := range cfg.Agents {
 		if a.ServerID == i.GuildID {
-			slog.Info("wizard: server already configured", "guild_id", i.GuildID)
 			respondEphemeral(s, i, "This server is already configured. Use `/mode`, `/channel`, `/language` to adjust settings, or `/status` to view current config.")
 			return
 		}
@@ -333,11 +330,19 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 		}
 	}
 
+	// Inherit provider from global config so the agent uses the correct LLM endpoint.
+	var provider string
+	globalCfg := w.ops.CfgStore().Get()
+	if globalCfg.LLM.GLMKey != "" && strings.HasPrefix(globalCfg.LLM.Model, "glm-") {
+		provider = "glm"
+	}
+
 	agentCfg := config.AgentConfig{
 		ID:           state.guildID,
 		ServerID:     state.guildID,
 		ResponseMode: agentMode,
 		Language:     state.language,
+		Provider:     provider,
 		Channels:     channels,
 	}
 
@@ -376,22 +381,8 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 		modeDisplay, langDisplay, channelDisplay,
 	)
 
-	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{
-			Content:    summary,
-			Components: []discordgo.MessageComponent{},
-		},
-	}); err != nil {
-		slog.Error("wizard: final response failed", "error", err, "guild_id", state.guildID)
-		// Fall back to a follow-up message if updating fails.
-		s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-			Content: summary,
-			Flags:   discordgo.MessageFlagsEphemeral,
-		})
-	} else {
-		slog.Info("wizard: setup complete", "guild_id", state.guildID)
-	}
+	respondEphemeralUpdate(s, i, summary)
+	slog.Info("wizard: setup complete", "guild_id", state.guildID)
 }
 
 // respondEphemeralUpdate updates the existing ephemeral wizard message with a plain text reply
