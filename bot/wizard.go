@@ -278,7 +278,6 @@ func (w *wizardHandler) showLanguageStep(s *discordgo.Session, i *discordgo.Inte
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
 			Content: "**Step 3/3 — Language**\nWhat language should I reply in?",
-			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{
 					Components: []discordgo.MessageComponent{
