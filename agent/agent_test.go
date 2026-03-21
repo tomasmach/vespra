@@ -12,7 +12,9 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
+	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/tools"
 )
 
 func msg(content string, attachments ...*discordgo.MessageAttachment) *discordgo.MessageCreate {
@@ -704,6 +706,595 @@ func TestSanitizeHistory(t *testing.T) {
 				if got[i].Role != tt.want[i].Role || got[i].Content != tt.want[i].Content {
 					t.Errorf("got[%d]=%+v, want[%d]=%+v", i, got[i], i, tt.want[i])
 				}
+			}
+		})
+	}
+}
+
+func TestShouldSuppressSmartMode(t *testing.T) {
+	tests := []struct {
+		name            string
+		mode            string
+		hasContent      bool
+		replied         bool
+		reacted         bool
+		addressed       bool
+		internal        bool
+		webSearch       bool
+		imageGen        bool
+		directedAtOther bool
+		want            bool
+	}{
+		{
+			name:       "normal suppression: smart, non-addressed, no flags",
+			mode:       "smart",
+			hasContent: true,
+			want:       true,
+		},
+		{
+			name:       "internal messages not suppressed",
+			mode:       "smart",
+			hasContent: true,
+			internal:   true,
+			want:       false,
+		},
+		{
+			name:       "web search not suppressed",
+			mode:       "smart",
+			hasContent: true,
+			webSearch:  true,
+			want:       false,
+		},
+		{
+			name:       "image gen not suppressed",
+			mode:       "smart",
+			hasContent: true,
+			imageGen:   true,
+			want:       false,
+		},
+		{
+			name:       "addressed not suppressed",
+			mode:       "smart",
+			hasContent: true,
+			addressed:  true,
+			want:       false,
+		},
+		{
+			// Vision responses no longer bypass suppression — the vision model
+			// is a pre-processing step, not the main chat model.
+			name:       "image message suppressed in smart mode like any other",
+			mode:       "smart",
+			hasContent: true,
+			want:       true,
+		},
+		{
+			name:       "non-smart mode not suppressed",
+			mode:       "always",
+			hasContent: true,
+			want:       false,
+		},
+		{
+			name:       "replied not suppressed",
+			mode:       "smart",
+			hasContent: true,
+			replied:    true,
+			want:       false,
+		},
+		{
+			// Reacted=true means the bot only reacted (emoji) and did not reply.
+			// A react-only turn still suppresses smart mode — there is no text
+			// response to deliver, so suppression is correct behaviour.
+			name:       "reacted does not prevent suppression",
+			mode:       "smart",
+			hasContent: true,
+			reacted:    true,
+			want:       true,
+		},
+		{
+			name: "no content not suppressed",
+			mode: "smart",
+			want: false,
+		},
+		{
+			name:            "directed at other suppresses even with web search",
+			mode:            "smart",
+			hasContent:      true,
+			webSearch:       true,
+			directedAtOther: true,
+			want:            true,
+		},
+		{
+			name:            "directed at other suppresses even with image gen",
+			mode:            "smart",
+			hasContent:      true,
+			imageGen:        true,
+			directedAtOther: true,
+			want:            true,
+		},
+		{
+			name:            "directed at other does not override addressed",
+			mode:            "smart",
+			hasContent:      true,
+			addressed:       true,
+			directedAtOther: true,
+			want:            false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := tools.NewRegistry()
+			reg.Replied = tt.replied
+			reg.Reacted = tt.reacted
+			reg.WebSearchCalled = tt.webSearch
+			reg.ImageGenCalled = tt.imageGen
+			got := shouldSuppressSmartMode(tt.mode, tt.hasContent, reg, tt.addressed, tt.internal, tt.directedAtOther)
+			if got != tt.want {
+				t.Errorf("shouldSuppressSmartMode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSendAllowed(t *testing.T) {
+	cfgStore := config.NewStoreFromConfig(&config.Config{
+		Agent: config.TurnConfig{
+			SendRateLimit:         3,
+			SendRateWindowSeconds: 60,
+		},
+	})
+	a := &ChannelAgent{cfgStore: cfgStore}
+
+	// First 3 sends are allowed.
+	for i := 0; i < 3; i++ {
+		if !a.sendAllowed() {
+			t.Fatalf("send %d should be allowed", i+1)
+		}
+	}
+
+	// 4th send exceeds the limit.
+	if a.sendAllowed() {
+		t.Error("4th send should be rate-limited")
+	}
+}
+
+func TestSendAllowedWindowExpiry(t *testing.T) {
+	cfgStore := config.NewStoreFromConfig(&config.Config{
+		Agent: config.TurnConfig{
+			SendRateLimit:         2,
+			SendRateWindowSeconds: 1,
+		},
+	})
+	a := &ChannelAgent{cfgStore: cfgStore}
+
+	// Fill the window.
+	a.sendAllowed()
+	a.sendAllowed()
+	if a.sendAllowed() {
+		t.Fatal("should be rate-limited after 2 sends")
+	}
+
+	// Backdate timestamps to simulate window expiry.
+	for i := range a.sendTimestamps {
+		a.sendTimestamps[i] = a.sendTimestamps[i].Add(-2 * time.Second)
+	}
+
+	if !a.sendAllowed() {
+		t.Error("send should be allowed after window expires")
+	}
+}
+
+func TestBuildSystemPromptSmartAddressed(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	cfg := &config.Config{}
+	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", true, false)
+	if !strings.Contains(got, "MUST respond") {
+		t.Errorf("expected smart+addressed prompt to contain 'MUST respond', got:\n%s", got)
+	}
+}
+
+func TestBuildSystemPromptSmartNotAddressed(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	cfg := &config.Config{}
+	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", false, false)
+	if !strings.Contains(got, "Decide whether to respond") {
+		t.Errorf("expected smart+not-addressed prompt to contain 'Decide whether to respond', got:\n%s", got)
+	}
+}
+
+func TestBuildSystemPromptNonSmart(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	cfg := &config.Config{}
+	got := a.buildSystemPrompt(cfg, "always", "test-chan", nil, "TestBot", false, false)
+	if strings.Contains(got, "smart mode") {
+		t.Errorf("non-smart prompt should not contain 'smart mode', got:\n%s", got)
+	}
+}
+
+func TestBuildSystemPromptSmartDirectedAtOther(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	cfg := &config.Config{}
+	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", false, true)
+	if !strings.Contains(got, "MUST stay silent") {
+		t.Errorf("expected directed-at-other prompt to contain 'MUST stay silent', got:\n%s", got)
+	}
+	if !strings.Contains(got, "directed at another") {
+		t.Errorf("expected directed-at-other prompt to contain 'directed at another', got:\n%s", got)
+	}
+}
+
+func TestBuildSystemPromptSmartAddressedOverridesDirectedAtOther(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	cfg := &config.Config{}
+	got := a.buildSystemPrompt(cfg, "smart", "test-chan", nil, "TestBot", true, true)
+	if !strings.Contains(got, "MUST respond") {
+		t.Errorf("addressed should override directedAtOther, expected 'MUST respond', got:\n%s", got)
+	}
+	if strings.Contains(got, "MUST stay silent") {
+		t.Errorf("addressed should override directedAtOther, should not contain 'MUST stay silent', got:\n%s", got)
+	}
+}
+
+func TestIsDirectedAtOther(t *testing.T) {
+	const botID = "bot123"
+	const botName = "Machmonstrum"
+
+	tests := []struct {
+		name string
+		msg  *discordgo.MessageCreate
+		want bool
+	}{
+		{
+			name: "Discord mention of other user only",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID:  "g1",
+				Content:  "<@999> dáme fotbálek?",
+				Mentions: []*discordgo.User{{ID: "999"}},
+			}},
+			want: true,
+		},
+		{
+			name: "Discord mention of bot only",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID:  "g1",
+				Content:  "<@bot123> help",
+				Mentions: []*discordgo.User{{ID: botID}},
+			}},
+			want: false,
+		},
+		{
+			name: "both bot and other mentioned",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID:  "g1",
+				Content:  "<@bot123> <@999> what?",
+				Mentions: []*discordgo.User{{ID: botID}, {ID: "999"}},
+			}},
+			want: false,
+		},
+		{
+			name: "plain text @Name, at start",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Petře, dáme fotbálek?",
+			}},
+			want: true,
+		},
+		{
+			name: "plain text @Name: at start",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Petr: kdy máš čas?",
+			}},
+			want: true,
+		},
+		{
+			name: "plain text @Name space at start",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Petr what time?",
+			}},
+			want: true,
+		},
+		{
+			name: "plain text @BotName vocative form",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Machmonstře, řekni vtip",
+			}},
+			want: false,
+		},
+		{
+			name: "plain text @BotName exact match",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Machmonstrum řekni vtip",
+			}},
+			want: false,
+		},
+		{
+			name: "plain text @BotName case insensitive",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@machmonstrum hello",
+			}},
+			want: false,
+		},
+		{
+			name: "no mentions general question",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "Ví někdo jaký je počasí?",
+			}},
+			want: false,
+		},
+		{
+			name: "no mentions statement",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "Dal jsem si guláš",
+			}},
+			want: false,
+		},
+		{
+			name: "DM with other mention",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID:  "",
+				Content:  "<@999> hey",
+				Mentions: []*discordgo.User{{ID: "999"}},
+			}},
+			want: false,
+		},
+		{
+			name: "lone @ with space",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@ something",
+			}},
+			want: false,
+		},
+		{
+			name: "email mid-message",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "send to user@example.com",
+			}},
+			want: false,
+		},
+		{
+			name: "@everyone",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@everyone check this",
+			}},
+			want: false,
+		},
+		{
+			name: "@here",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@here meeting now",
+			}},
+			want: false,
+		},
+		{
+			name: "mid-message @name",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "Hey @Petr, co říkáš?",
+			}},
+			want: false,
+		},
+		{
+			// plainTextMentionRe requires a trailing [\s,:] so a bare @Name at
+			// end-of-message (no trailing character) does NOT match.
+			name: "bare @Name at end of message",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "@Petr",
+			}},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isDirectedAtOther(tt.msg, botID, botName)
+			if got != tt.want {
+				t.Errorf("isDirectedAtOther() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLooksLikeBotName(t *testing.T) {
+	tests := []struct {
+		name, botName string
+		want          bool
+	}{
+		{"machmonstře", "machmonstrum", true},   // vocative (10/12 = 83%)
+		{"machmonstrum", "machmonstrum", true},  // exact
+		{"machmonstrume", "machmonstrum", true}, // another declension (12/13 = 92%)
+		{"petr", "machmonstrum", false},         // completely different
+		{"mac", "machmonstrum", false},          // too short (shared 3 < min 4)
+		{"ma", "machmonstrum", false},           // too short
+		{"machmon", "machmonstrum", false},      // only 58% of longer
+		{"vespro", "vespra", true},              // vocative feminine (5/6 = 83%)
+		{"vespra", "vespra", true},              // exact
+		{"botname", "botname", true},            // exact short name
+		{"botnam", "botname", true},             // 1 rune off (6/7 = 86%)
+		{"botn", "botname", false},              // only 57% of longer
+		{"ve\u0301spra", "véspra", true},        // NFD decomposed é vs NFC precomposed é — exact match after normalization
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+"_vs_"+tt.botName, func(t *testing.T) {
+			got := looksLikeBotName(tt.name, tt.botName)
+			if got != tt.want {
+				t.Errorf("looksLikeBotName(%q, %q) = %v, want %v", tt.name, tt.botName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsBotName(t *testing.T) {
+	tests := []struct {
+		content, botName string
+		want             bool
+	}{
+		{"Machmonstře, řekni vtip", "Machmonstrum", true},
+		{"Hey Machmonstrum!", "Machmonstrum", true},
+		{"@Machmonstře hello", "Machmonstrum", true},
+		{"petr dáme fotbálek", "Machmonstrum", false},
+		{"mac co je?", "Machmonstrum", false},
+		{"", "Machmonstrum", false},
+		{"hello", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.content+"_"+tt.botName, func(t *testing.T) {
+			got := containsBotName(tt.content, tt.botName)
+			if got != tt.want {
+				t.Errorf("containsBotName(%q, %q) = %v, want %v", tt.content, tt.botName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsAddressedToBotNameMention(t *testing.T) {
+	const botID = "bot123"
+	const botName = "Machmonstrum"
+
+	tests := []struct {
+		name string
+		msg  *discordgo.MessageCreate
+		want bool
+	}{
+		{
+			name: "plain-text vocative in guild",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "Machmonstře, řekni vtip",
+			}},
+			want: true,
+		},
+		{
+			name: "exact name in guild",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "Hey Machmonstrum!",
+			}},
+			want: true,
+		},
+		{
+			name: "unrelated message in guild",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "petr dáme fotbálek",
+			}},
+			want: false,
+		},
+		{
+			name: "DM always true",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "",
+				Content: "random message",
+			}},
+			want: true,
+		},
+		{
+			name: "Discord @mention still works",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "<@bot123> help",
+			}},
+			want: true,
+		},
+		{
+			name: "reply to bot in guild",
+			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
+				GuildID: "g1",
+				Content: "yes exactly",
+				MessageReference: &discordgo.MessageReference{MessageID: "ref1"},
+				ReferencedMessage: &discordgo.Message{
+					Author: &discordgo.User{ID: botID},
+				},
+			}},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isAddressedToBot(tt.msg, botID, botName)
+			if got != tt.want {
+				t.Errorf("isAddressedToBot() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldSendFallback(t *testing.T) {
+	tests := []struct {
+		name       string
+		internal   bool
+		replied    bool
+		imageGen   bool
+		webSearch  bool
+		reacted    bool
+		hasContent bool
+		addressed  bool
+		want       bool
+	}{
+		{
+			name:      "addressed with no response sends fallback",
+			addressed: true,
+			want:      true,
+		},
+		{
+			name:      "react-only addressed turn does NOT send fallback",
+			addressed: true,
+			reacted:   true,
+			want:      false,
+		},
+		{
+			name:      "replied does not send fallback",
+			addressed: true,
+			replied:   true,
+			want:      false,
+		},
+		{
+			name:      "image gen does not send fallback",
+			addressed: true,
+			imageGen:  true,
+			want:      false,
+		},
+		{
+			name:      "web search does not send fallback",
+			addressed: true,
+			webSearch: true,
+			want:      false,
+		},
+		{
+			name:       "has content does not send fallback",
+			addressed:  true,
+			hasContent: true,
+			want:       false,
+		},
+		{
+			name:     "internal does not send fallback",
+			internal: true,
+			want:     false,
+		},
+		{
+			name: "non-addressed does not send fallback",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := tools.NewRegistry()
+			reg.Replied = tt.replied
+			reg.ImageGenCalled = tt.imageGen
+			reg.WebSearchCalled = tt.webSearch
+			reg.Reacted = tt.reacted
+			got := shouldSendFallback(tt.internal, reg, tt.hasContent, tt.addressed)
+			if got != tt.want {
+				t.Errorf("shouldSendFallback() = %v, want %v", got, tt.want)
 			}
 		})
 	}

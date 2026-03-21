@@ -3,6 +3,7 @@ package tools_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,14 +12,14 @@ import (
 	"github.com/tomasmach/vespra/tools"
 )
 
-func TestDispatchUnknownToolReturnsError(t *testing.T) {
+func TestDispatchUnknownToolReturnsGuidance(t *testing.T) {
 	r := tools.NewRegistry()
-	_, err := r.Dispatch(context.Background(), "nonexistent_tool", json.RawMessage(`{}`))
-	if err == nil {
-		t.Fatal("Dispatch() on unknown tool should return an error")
+	result, err := r.Dispatch(context.Background(), "nonexistent_tool", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Dispatch() on unknown tool should not return an error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "nonexistent_tool") {
-		t.Errorf("error should mention the tool name, got: %v", err)
+	if !strings.Contains(result, "not available") {
+		t.Errorf("result should contain %q, got: %q", "not available", result)
 	}
 }
 
@@ -112,7 +113,29 @@ func TestSplitMessageExactLimit(t *testing.T) {
 	}
 }
 
-func TestReplyToolDeduplication(t *testing.T) {
+func TestReplyToolSplitMessageCap(t *testing.T) {
+	var sent []string
+	send := func(content string) error {
+		sent = append(sent, content)
+		return nil
+	}
+	react := func(emoji string) error { return nil }
+
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+
+	// Build a message that will produce 4 parts when split at 2000 chars.
+	longContent := strings.Repeat("a", 7000)
+	args, _ := json.Marshal(map[string]string{"content": longContent})
+	_, err := r.Dispatch(context.Background(), "reply", args)
+	if err != nil {
+		t.Fatalf("Dispatch() returned unexpected error: %v", err)
+	}
+	if len(sent) > 2 {
+		t.Errorf("expected at most 2 messages sent (SplitMessage cap), got %d", len(sent))
+	}
+}
+
+func TestReplyToolRateLimit(t *testing.T) {
 	sendCount := 0
 	send := func(content string) error {
 		sendCount++
@@ -120,10 +143,10 @@ func TestReplyToolDeduplication(t *testing.T) {
 	}
 	react := func(emoji string) error { return nil }
 
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
 	ctx := context.Background()
 
-	// First call: should send and return "Replied."
+	// First call: should send.
 	result, err := r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"hello"}`))
 	if err != nil {
 		t.Fatalf("first Dispatch() returned unexpected error: %v", err)
@@ -135,16 +158,28 @@ func TestReplyToolDeduplication(t *testing.T) {
 		t.Errorf("first call: expected send count 1, got %d", sendCount)
 	}
 
-	// Second call: dedup guard should fire, send must not be called again.
-	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"hello again"}`))
+	// Second call: should also send (limit is 2).
+	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"the real answer"}`))
 	if err != nil {
 		t.Fatalf("second Dispatch() returned unexpected error: %v", err)
 	}
-	if result != "Reply already sent in this turn." {
-		t.Errorf("second call: expected %q, got %q", "Reply already sent in this turn.", result)
+	if result != "Replied." {
+		t.Errorf("second call: expected %q, got %q", "Replied.", result)
 	}
-	if sendCount != 1 {
-		t.Errorf("second call: expected send count still 1, got %d", sendCount)
+	if sendCount != 2 {
+		t.Errorf("second call: expected send count 2, got %d", sendCount)
+	}
+
+	// Third call: should be blocked.
+	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"too many"}`))
+	if err != nil {
+		t.Fatalf("third Dispatch() returned unexpected error: %v", err)
+	}
+	if result != "Reply limit reached for this turn." {
+		t.Errorf("third call: expected %q, got %q", "Reply limit reached for this turn.", result)
+	}
+	if sendCount != 2 {
+		t.Errorf("third call: expected send count still 2, got %d", sendCount)
 	}
 }
 
@@ -198,7 +233,7 @@ func TestWebSearchCalledFlagSetOnSuccessfulCAS(t *testing.T) {
 
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil, 2)
 
 	if r.WebSearchCalled {
 		t.Fatal("WebSearchCalled should be false before any tool call")
@@ -234,7 +269,7 @@ func TestWebSearchCalledFlagNotSetWhenAlreadyRunning(t *testing.T) {
 
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil, 2)
 
 	result, err := r.Dispatch(context.Background(), "web_search", json.RawMessage(`{"query":"concurrent query"}`))
 	if err != nil {
@@ -264,7 +299,7 @@ func TestWebSearchCalledFlagEmptyQueryReturnsEarly(t *testing.T) {
 
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil, 2)
 
 	result, err := r.Dispatch(context.Background(), "web_search", json.RawMessage(`{"query":""}`))
 	if err != nil {
@@ -289,7 +324,7 @@ func TestWebSearchCalledFlagEmptyQueryReturnsEarly(t *testing.T) {
 func TestRegistryLoopBreakConditionBothFlagsSet(t *testing.T) {
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
 
 	// Initially neither flag is set.
 	if r.WebSearchCalled || r.Replied {
@@ -359,6 +394,86 @@ func TestRegistryWebSearchCalledIsStickyLatch(t *testing.T) {
 
 	if !r.WebSearchCalled {
 		t.Error("WebSearchCalled must remain true (sticky latch) after other tool calls")
+	}
+}
+
+func TestReactToolSetsReactedFlag(t *testing.T) {
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+
+	if r.Reacted {
+		t.Fatal("Reacted should be false before any tool call")
+	}
+
+	result, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"👍"}`))
+	if err != nil {
+		t.Fatalf("Dispatch() returned unexpected error: %v", err)
+	}
+	if result != "Reacted." {
+		t.Errorf("expected %q, got %q", "Reacted.", result)
+	}
+	if !r.Reacted {
+		t.Error("Reacted should be true after a successful react call")
+	}
+}
+
+func TestReactToolDoesNotSetReactedOnError(t *testing.T) {
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { return fmt.Errorf("discord error") }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+
+	_, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"👍"}`))
+	if err == nil {
+		t.Fatal("expected error from react tool")
+	}
+	if r.Reacted {
+		t.Error("Reacted should remain false when react returns an error")
+	}
+}
+
+func TestReactToolSanitizesCustomEmoji(t *testing.T) {
+	var gotEmoji string
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { gotEmoji = emoji; return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+
+	_, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"<:fire:971088588706033684>"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotEmoji != "fire:971088588706033684" {
+		t.Errorf("expected sanitized emoji %q, got %q", "fire:971088588706033684", gotEmoji)
+	}
+}
+
+func TestReactToolSanitizesAnimatedEmoji(t *testing.T) {
+	var gotEmoji string
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { gotEmoji = emoji; return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+
+	_, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"<a:wave:456>"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotEmoji != "wave:456" {
+		t.Errorf("expected sanitized emoji %q, got %q", "wave:456", gotEmoji)
+	}
+}
+
+func TestReactToolPassesUnicodeEmojiThrough(t *testing.T) {
+	var gotEmoji string
+	send := func(content string) error { return nil }
+	react := func(emoji string) error { gotEmoji = emoji; return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+
+	_, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"👍"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotEmoji != "👍" {
+		t.Errorf("expected emoji %q to pass through unchanged, got %q", "👍", gotEmoji)
 	}
 }
 

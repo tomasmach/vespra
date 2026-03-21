@@ -9,12 +9,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
@@ -98,6 +100,7 @@ type ChannelAgent struct {
 	searchWg          sync.WaitGroup // tracks in-flight web search goroutines
 	imageRunning      atomic.Bool    // prevents concurrent image generations
 	imageWg           sync.WaitGroup // tracks in-flight image generation goroutines
+	sendTimestamps    []time.Time    // sliding window for outgoing rate limit
 
 	ctx        context.Context    // agent's own context; set at the start of run()
 	msgCh      chan *discordgo.MessageCreate // buffered 100
@@ -331,6 +334,50 @@ func downloadImageAsDataURL(ctx context.Context, client *http.Client, a *discord
 	return downloadURLAsDataURL(ctx, client, a.URL, ct)
 }
 
+// sendAllowed checks whether sending a message is within the configured rate
+// limit. It prunes expired timestamps and records the current send if allowed.
+// Only called from the agent's serial run loop, so no mutex is needed.
+//
+// Budget note: a single turn can consume up to 4 slots (2 reply-tool calls ×
+// 2 Discord message parts each). With the default limit of 4 per 60s, a
+// follow-up turn within the same window may have its reply dropped — this
+// tight budget is intentional to prevent bot flooding.
+func (a *ChannelAgent) sendAllowed() bool {
+	cfg := a.cfgStore.Get()
+	limit := cfg.Agent.SendRateLimit
+	window := time.Duration(cfg.Agent.SendRateWindowSeconds) * time.Second
+
+	now := time.Now()
+	cutoff := now.Add(-window)
+	valid := a.sendTimestamps[:0]
+	for _, ts := range a.sendTimestamps {
+		if ts.After(cutoff) {
+			valid = append(valid, ts)
+		}
+	}
+	a.sendTimestamps = valid
+
+	if len(a.sendTimestamps) >= limit {
+		return false
+	}
+	a.sendTimestamps = append(a.sendTimestamps, now)
+	return true
+}
+
+// rateLimitedSendFn wraps a raw send function with the per-channel rate limiter.
+func (a *ChannelAgent) rateLimitedSendFn(raw func(string) error) func(string) error {
+	return func(content string) error {
+		if !a.sendAllowed() {
+			a.logger.Warn("outgoing rate limit exceeded, dropping message", "channel_id", a.channelID)
+			// Return nil so the LLM does not see an error and retry — the LLM
+			// may believe it communicated successfully, which is acceptable because
+			// surfacing an error would trigger retry loops that worsen flooding.
+			return nil
+		}
+		return raw(content)
+	}
+}
+
 func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClient *llm.Client, resources *AgentResources) *ChannelAgent {
 	return &ChannelAgent{
 		channelID:  channelID,
@@ -498,32 +545,135 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 }
 
 // isAddressedToBot reports whether a Discord message is directly addressed to
-// the bot via DM, @mention, or reply.
-func isAddressedToBot(m *discordgo.MessageCreate, botID string) bool {
+// the bot via DM, @mention, reply, or plain-text name mention.
+func isAddressedToBot(m *discordgo.MessageCreate, botID, botName string) bool {
 	if m.GuildID == "" {
 		return true // DMs are always addressed
 	}
 	if strings.Contains(m.Content, "<@"+botID+">") || strings.Contains(m.Content, "<@!"+botID+">") {
 		return true
 	}
-	return m.MessageReference != nil &&
+	if m.MessageReference != nil &&
 		m.ReferencedMessage != nil &&
 		m.ReferencedMessage.Author != nil &&
-		m.ReferencedMessage.Author.ID == botID
+		m.ReferencedMessage.Author.ID == botID {
+		return true
+	}
+	return containsBotName(m.Content, botName)
+}
+
+// plainTextMentionRe matches a @Username-like pattern at the start of a message.
+// The name must begin with a letter and can contain letters, digits, and underscores.
+var plainTextMentionRe = regexp.MustCompile(`^@(\pL[\pL\pN_]*)[\s,:]`)
+
+// isDirectedAtOther reports whether a Discord message is clearly directed at
+// another specific user (not the bot). It checks for Discord @mentions of
+// other users and plain-text @Name patterns at the start of the message.
+func isDirectedAtOther(msg *discordgo.MessageCreate, botID, botName string) bool {
+	if msg.GuildID == "" {
+		return false // DMs are never directed at "other"
+	}
+
+	// Discord @mentions: other users mentioned but NOT the bot.
+	if len(msg.Mentions) > 0 {
+		var hasBotMention, hasOtherMention bool
+		for _, u := range msg.Mentions {
+			if u.ID == botID {
+				hasBotMention = true
+			} else {
+				hasOtherMention = true
+			}
+		}
+		return hasOtherMention && !hasBotMention
+	}
+
+	// No Discord mentions — check for plain-text @Name at start.
+	m := plainTextMentionRe.FindStringSubmatch(msg.Content)
+	if m == nil {
+		return false
+	}
+	name := strings.ToLower(m[1])
+	if name == "everyone" || name == "here" {
+		return false
+	}
+
+	// If the name closely matches the bot's name, this is addressing the bot,
+	// not another user. Prefix matching handles morphological forms common in
+	// inflected languages (e.g. Czech: Machmonstrum → Machmonstře).
+	if looksLikeBotName(name, strings.ToLower(botName)) {
+		return false
+	}
+
+	return true
+}
+
+// looksLikeBotName reports whether name is likely a morphological variant of
+// botName by checking that the two share a long common prefix (≥75% of the
+// longer string, minimum 4 runes). This handles declensions in inflected
+// languages (e.g. Czech: Machmonstrum → Machmonstře) without false-positiving
+// on short coincidental prefixes.
+func looksLikeBotName(name, botName string) bool {
+	return matchesBotNameRunes(name, []rune(norm.NFC.String(botName)))
+}
+
+// matchesBotNameRunes is the rune-level implementation of looksLikeBotName.
+// Accepting pre-computed botRunes lets callers that compare many names against
+// the same botName (e.g. containsBotName) avoid re-normalising it every iteration.
+func matchesBotNameRunes(name string, botRunes []rune) bool {
+	nr := []rune(norm.NFC.String(name))
+	var shared int
+	for shared < len(nr) && shared < len(botRunes) && nr[shared] == botRunes[shared] {
+		shared++
+	}
+	longer := len(nr)
+	if len(botRunes) > longer {
+		longer = len(botRunes)
+	}
+	return shared >= 4 && shared*4 >= longer*3
+}
+
+// containsBotName reports whether any word in content looks like a
+// morphological variant of botName (handles @-prefixed and punctuation-suffixed
+// tokens). Note: bot names shorter than 4 runes will never match because the
+// morphological matching threshold requires at least 4 shared leading runes.
+func containsBotName(content, botName string) bool {
+	if botName == "" {
+		return false
+	}
+	botRunes := []rune(norm.NFC.String(strings.ToLower(botName)))
+	for _, token := range strings.Fields(content) {
+		// Secondary split on punctuation that users commonly omit spaces after
+		// (e.g. "Botname,how are you?" → ["Botname", "how are you?"]).
+		subTokens := strings.FieldsFunc(token, func(r rune) bool {
+			return r == ',' || r == ';' || r == ':'
+		})
+		for _, sub := range subTokens {
+			word := strings.TrimLeft(sub, "@")
+			word = strings.TrimRight(word, `.,!?;:)'">\]}`)
+			if word == "" {
+				continue
+			}
+			if matchesBotNameRunes(strings.ToLower(word), botRunes) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // turnParams holds the inputs needed by processTurn, allowing handleMessage and
 // handleMessages to share the tool-call loop and post-processing logic.
 type turnParams struct {
-	mode         string
-	systemPrompt string
-	sendFn       func(string) error
-	reg          *tools.Registry
-	llmMsgs      []llm.Message
-	userMsgText  string // human-readable user input for conversation logging
-	internal     bool   // true for system-generated turns (e.g., web search results); skips LogConversation
-	maxIter      int    // override cfg.Agent.MaxToolIterations; 0 = use config default
-	addressed    bool   // true when the user directly @mentioned the bot
+	mode            string
+	systemPrompt    string
+	sendFn          func(string) error
+	reg             *tools.Registry
+	llmMsgs         []llm.Message
+	userMsgText     string // human-readable user input for conversation logging
+	internal        bool   // true for system-generated turns (e.g., web search results); skips LogConversation
+	maxIter         int    // override cfg.Agent.MaxToolIterations; 0 = use config default
+	addressed       bool   // true when the user directly @mentioned the bot
+	directedAtOther bool   // true when the message targets a specific other user (not the bot); zero-value (false) is safe for internal paths
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
@@ -532,7 +682,8 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	cfg := a.cfgStore.Get()
 	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
 	botID := a.resources.Session.State.User.ID
-	addressed := isAddressedToBot(msg, botID)
+	botName := a.resources.Session.State.User.Username
+	addressed := isAddressedToBot(msg, botID, botName)
 
 	switch mode {
 	case config.ModeNone:
@@ -542,6 +693,8 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 			return
 		}
 	}
+
+	directedAtOther := !addressed && mode == "smart" && isDirectedAtOther(msg, botID, botName)
 
 	stopTyping := func() {}
 	if mode != config.ModeSmart || addressed {
@@ -562,37 +715,44 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		userID = msg.Author.ID
 	}
 	memories := a.recallMemories(ctx, cfg, userID, msg.Content)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed, directedAtOther)
 
-	botName := a.resources.Session.State.User.Username
-	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName)
-
-	sendFn := func(content string) error {
+	sendFn := a.rateLimitedSendFn(func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
 		return err
-	}
+	})
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn))
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn), cfg.Agent.MaxReplyParts)
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
-	if hasMediaParts(userMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
-		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
-		a.annotateMediaDescription(ctx, cfg, &userMsg)
-	}
+	a.annotateAndStripMedia(ctx, cfg, &userMsg)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
 	llmMsgs = append(llmMsgs, userMsg)
 
 	a.processTurn(ctx, cfg, turnParams{
-		mode:         mode,
-		systemPrompt: systemPrompt,
-		sendFn:       sendFn,
-		reg:          reg,
-		llmMsgs:      llmMsgs,
-		userMsgText:  historyUserContent(msg.Message, botID, botName),
-		addressed:    addressed,
+		mode:            mode,
+		systemPrompt:    systemPrompt,
+		sendFn:          sendFn,
+		reg:             reg,
+		llmMsgs:         llmMsgs,
+		userMsgText:     historyUserContent(msg.Message, botID, botName),
+		addressed:       addressed,
+		directedAtOther: directedAtOther,
 	})
+}
+
+// annotateAndStripMedia calls the vision model to describe any media in msg,
+// then removes the raw media blobs so the main chat model only sees the text
+// description.
+func (a *ChannelAgent) annotateAndStripMedia(ctx context.Context, cfg *config.Config, msg *llm.Message) {
+	if hasMediaParts(msg.ContentParts) && cfg.LLM.VisionModel != "" &&
+		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
+		a.annotateMediaDescription(ctx, cfg, msg)
+		stripMediaParts(msg)
+	}
 }
 
 // hasMediaParts reports whether parts contains at least one image or video part.
@@ -605,9 +765,24 @@ func hasMediaParts(parts []llm.ContentPart) bool {
 	return false
 }
 
+// stripMediaParts removes image and video content parts from msg, keeping only
+// text parts. Called after annotateMediaDescription so that the main chat model
+// sees the injected text description without the raw media blobs — preventing
+// Chat() from switching to the vision model for the main completion.
+func stripMediaParts(msg *llm.Message) {
+	filtered := msg.ContentParts[:0]
+	for _, p := range msg.ContentParts {
+		if p.Type != "image_url" && p.Type != "video_url" {
+			filtered = append(filtered, p)
+		}
+	}
+	clear(msg.ContentParts[len(filtered):])
+	msg.ContentParts = filtered
+}
+
 // annotateMediaDescription calls the vision model to produce a short text description
 // of the media in msg.ContentParts and injects it into the text content part.
-// This description survives stripImages() so the main model can reference it later.
+// This description survives stripMediaParts() so the main model can reference it later.
 // The full msg.ContentParts slice (including any user text) is passed to DescribeMedia
 // intentionally — this gives the vision model context about what the user said.
 func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, cfg *config.Config, msg *llm.Message) {
@@ -668,12 +843,13 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	cfg := a.cfgStore.Get()
 	botID := a.resources.Session.State.User.ID
+	botName := a.resources.Session.State.User.Username
 	lastMsg := msgs[len(msgs)-1]
 	mode := cfg.ResolveResponseMode(a.serverID, lastMsg.ChannelID)
 
 	var anyAddressed bool
 	for _, m := range msgs {
-		if isAddressedToBot(m, botID) {
+		if isAddressedToBot(m, botID, botName) {
 			anyAddressed = true
 			break
 		}
@@ -685,6 +861,17 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	case config.ModeMention:
 		if !anyAddressed {
 			return
+		}
+	}
+
+	var allDirectedAtOther bool
+	if !anyAddressed && mode == "smart" {
+		allDirectedAtOther = true
+		for _, m := range msgs {
+			if !isDirectedAtOther(m, botID, botName) {
+				allDirectedAtOther = false
+				break
+			}
 		}
 	}
 
@@ -713,23 +900,19 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 	memories := a.recallMemories(ctx, cfg, lastAuthorID, recallQuery)
 
-	botName := a.resources.Session.State.User.Username
-	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed, allDirectedAtOther)
 
-	sendFn := func(content string) error {
+	sendFn := a.rateLimitedSendFn(func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
 		return err
-	}
+	})
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn))
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn), cfg.Agent.MaxReplyParts)
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
-	if hasMediaParts(combinedUserMsg.ContentParts) && cfg.LLM.VisionModel != "" &&
-		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
-		a.annotateMediaDescription(ctx, cfg, &combinedUserMsg)
-	}
+	a.annotateAndStripMedia(ctx, cfg, &combinedUserMsg)
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
@@ -741,13 +924,14 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 
 	a.processTurn(ctx, cfg, turnParams{
-		mode:         mode,
-		systemPrompt: systemPrompt,
-		sendFn:       sendFn,
-		reg:          reg,
-		llmMsgs:      llmMsgs,
-		userMsgText:  strings.Join(userLogLines, "\n"),
-		addressed:    anyAddressed,
+		mode:            mode,
+		systemPrompt:    systemPrompt,
+		sendFn:          sendFn,
+		reg:             reg,
+		llmMsgs:         llmMsgs,
+		userMsgText:     strings.Join(userLogLines, "\n"),
+		addressed:       anyAddressed,
+		directedAtOther: allDirectedAtOther,
 	})
 }
 
@@ -769,20 +953,19 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
 	}
-	sb.WriteString("You are receiving web search results. If the results contain URLs with specific data you need, you may call web_fetch to read a page for more precise information. Then summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Do NOT reference or claim to have previously told the user anything — you have not spoken to them yet in this context. Focus on presenting only the new information clearly, with relevant sources and links. Keep it concise: max 5 short bullets or ~700 characters.")
+	sb.WriteString("You are receiving web search results. Summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Do NOT reference or claim to have previously told the user anything — you have not spoken to them yet in this context. Focus on presenting only the new information clearly, with relevant sources and links. Reply IMMEDIATELY with the data — do NOT send a status message first. You MUST call the reply tool exactly once with the complete answer.")
 	if lang := cfg.ResolveLanguage(a.serverID, a.channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 
-	sendFn := func(text string) error {
+	sendFn := a.rateLimitedSendFn(func(text string) error {
 		_, err := a.resources.Session.ChannelMessageSend(a.channelID, text)
 		return err
-	}
+	})
 	reactFn := func(emoji string) error { return nil }
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, nil, nil)
-	// Do NOT register web_search (infinite loops) or web_fetch (burns iterations
-	// on cookie walls / 403s without reaching a final answer). The search result
-	// snippets from Brave are sufficient to produce a concise reply.
+	// Minimal registry: only reply + react. No memory tools, no web_search/web_fetch.
+	// The LLM's only job is to summarize the search snippets and reply.
+	reg := tools.NewReplyOnlyRegistry(sendFn, reactFn, cfg.Agent.MaxReplyParts)
 
 	userMsg := llm.Message{Role: "user", Content: content}
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
@@ -858,16 +1041,16 @@ func mergeMemories(userMems, contentMems []memory.MemoryRow, limit int) []memory
 
 // buildSystemPrompt assembles the system prompt from the soul text, memories,
 // language override, and response mode.
-func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string) string {
+func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID string, memories []memory.MemoryRow, botName string, addressed, directedAtOther bool) string {
 	var sb strings.Builder
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
 	}
-	fmt.Fprintf(&sb, "Today's date is %s.\n\n", time.Now().Format("Monday, January 2, 2006"))
+	now := time.Now()
+	fmt.Fprintf(&sb, "Today's date is %s.\n\n", now.Format("Monday, January 2, 2006"))
 	sb.WriteString(a.soulText)
 	if len(memories) > 0 {
 		sb.WriteString("\n\n## Relevant Memories\n")
-		now := time.Now()
 		for _, m := range memories {
 			age := now.Sub(m.CreatedAt)
 			var ageStr string
@@ -900,7 +1083,13 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 	if mode == config.ModeSmart {
-		sb.WriteString("\n\nYou are in smart mode. Only respond via the `reply` or `react` tools when the message genuinely warrants a response. If you choose not to respond, produce no output at all — do NOT write explanations or meta-commentary about why you are staying silent.")
+		if addressed {
+			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` or `react` tools.")
+		} else if directedAtOther {
+			sb.WriteString("\n\nYou are in smart mode. This message is directed at another specific user — you MUST stay silent. Do NOT reply, react, or produce any output.")
+		} else {
+			sb.WriteString("\n\nYou are in smart mode. Decide whether to respond:\n- RESPOND (via `reply` or `react` tools) when: someone asks a question to the channel, continues a conversation with you, mentions your name, shares something interesting or relevant to you\n- STAY SILENT (produce no output at all) when: people are clearly talking to each other, the message is not directed at you, it's a side conversation you're not part of\nDo NOT write meta-commentary about why you are staying silent.")
+		}
 	}
 	return sb.String()
 }
@@ -975,14 +1164,23 @@ func (a *ChannelAgent) currentAgentConfig() *config.AgentConfig {
 	return nil
 }
 
-// chatOptions returns per-agent ChatOptions when the agent has a provider or
-// model override configured, or nil to use global defaults.
+// chatOptions returns ChatOptions for main chat completion calls, carrying the
+// configured max_tokens cap and any per-agent provider/model overrides.
+// Auxiliary calls (vision descriptions, web search summarization) must NOT use
+// this function — they should construct their own ChatOptions without MaxTokens.
 func (a *ChannelAgent) chatOptions() *llm.ChatOptions {
-	cfg := a.currentAgentConfig()
-	if cfg == nil || (cfg.Provider == "" && cfg.Model == "") {
-		return nil
+	globalCfg := a.cfgStore.Get()
+	agentCfg := a.currentAgentConfig()
+
+	maxTokens := globalCfg.LLM.MaxTokens
+
+	if agentCfg == nil || (agentCfg.Provider == "" && agentCfg.Model == "") {
+		if maxTokens <= 0 {
+			return nil
+		}
+		return &llm.ChatOptions{MaxTokens: maxTokens}
 	}
-	return &llm.ChatOptions{Provider: cfg.Provider, Model: cfg.Model}
+	return &llm.ChatOptions{Provider: agentCfg.Provider, Model: agentCfg.Model, MaxTokens: maxTokens}
 }
 
 // webSearchDeps returns the dependency bundle for the async web search tool,
@@ -1083,10 +1281,6 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 // handleMessages delegate here after preparing their inputs.
 func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp turnParams) {
 	chatOpts := a.chatOptions()
-
-	// Capture visionResponse before the tool-call loop so that tool-call messages
-	// appended to tp.llmMsgs don't corrupt the check.
-	visionResponse := len(tp.llmMsgs) > 0 && len(tp.llmMsgs[len(tp.llmMsgs)-1].ContentParts) > 0
 
 	maxIter := cfg.Agent.MaxToolIterations
 	if tp.maxIter > 0 {
@@ -1195,6 +1389,10 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 	}
 
+	if tp.mode == "smart" && !tp.reg.Replied && !tp.reg.Reacted && assistantContent == "" {
+		a.logger.Debug("smart mode: LLM chose not to respond", "addressed", tp.addressed)
+	}
+
 	if assistantContent != "" && looksLikeToolCall(assistantContent, tp.reg.Definitions()) {
 		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
 		assistantContent = ""
@@ -1207,11 +1405,10 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	// In smart mode the model should only communicate via reply/react tools.
 	// Suppress any leftover plain-text content that was not sent through a tool.
-	// Exception 1: vision model responses are always plain text (tools are omitted for GLM vision).
-	// Exception 2: when the user directly @mentioned the bot, let any non-empty content through
-	//   as a fallback — the LLM occasionally forgets to use the reply tool despite the instruction.
-	if tp.mode == config.ModeSmart && assistantContent != "" && !tp.reg.Replied && !visionResponse && !tp.addressed {
-		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent)
+	// Messages directed at another user are always suppressed, even if the LLM
+	// called web_search or image_gen.
+	if shouldSuppressSmartMode(tp.mode, assistantContent != "", tp.reg, tp.addressed, tp.internal, tp.directedAtOther) {
+		a.logger.Debug("suppressed smart-mode plain-text non-reply", "content", assistantContent, "directedAtOther", tp.directedAtOther)
 		assistantContent = ""
 	}
 
@@ -1240,7 +1437,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	}
 
 	if assistantContent != "" && !tp.reg.Replied {
-		parts := tools.SplitMessage(assistantContent, 2000)
+		parts := tools.SplitAndCapMessage(assistantContent, 2000, cfg.Agent.MaxReplyParts)
 		for _, p := range parts {
 			if err := tp.sendFn(p); err != nil {
 				a.logger.Error("send message", "error", err)
@@ -1251,7 +1448,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	// Fallback: if the bot produced no reply at all and the user directly addressed it,
 	// send an error nudge rather than going silent. This catches cases where the LLM
 	// returns empty content with no tool calls (e.g. confused by malformed history).
-	if !tp.internal && !tp.reg.Replied && !tp.reg.ImageGenCalled && assistantContent == "" && tp.addressed {
+	if shouldSendFallback(tp.internal, tp.reg, assistantContent != "", tp.addressed) {
 		a.logger.Warn("LLM produced no output for addressed message; sending fallback")
 		if err := tp.sendFn("I'm having trouble responding. Please try again."); err != nil {
 			a.logger.Error("send message", "error", err)
@@ -1272,6 +1469,37 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			a.runMemoryExtraction(ctx, a.history)
 		}
 	}
+}
+
+// shouldSuppressSmartMode reports whether plain-text content from the LLM should
+// be dropped in smart mode. Content is preserved when:
+//   - the reply tool was already used,
+//   - the message was addressed (@mention),
+//   - it's an internal turn (e.g. web search result delivery),
+//   - the web_search or generate_image tool was invoked.
+//
+// Note: reg.Reacted is intentionally NOT an exemption. If the LLM only reacted
+// (emoji reaction) without calling the reply tool, any trailing plain-text is
+// still suppressed — the model should not leak text alongside a bare reaction
+// in smart mode.
+func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, addressed, internal, directedAtOther bool) bool {
+	if mode != config.ModeSmart || !hasContent || reg.Replied || addressed || internal {
+		return false
+	}
+	// Messages directed at another user are always suppressed, even if the LLM
+	// happened to call web_search or image_gen.
+	if directedAtOther {
+		return true
+	}
+	return !reg.WebSearchCalled && !reg.ImageGenCalled
+}
+
+// shouldSendFallback reports whether the error fallback ("I'm having trouble
+// responding") should be sent. It fires only when the bot was directly addressed
+// but produced no visible output at all — no reply, no image, no reaction, and
+// no plain-text content.
+func shouldSendFallback(internal bool, reg *tools.Registry, hasContent, addressed bool) bool {
+	return !internal && !reg.Replied && !reg.ImageGenCalled && !reg.WebSearchCalled && !reg.Reacted && !hasContent && addressed
 }
 
 // runMemoryExtraction launches a background goroutine that reviews recent history

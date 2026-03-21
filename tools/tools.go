@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,8 +37,10 @@ type Registry struct {
 	tools           map[string]Tool
 	Replied         bool   // set to true when the reply tool is called
 	ReplyText       string // the content argument passed to the reply tool
+	ReplyCount      int    // number of reply tool calls in this turn
 	WebSearchCalled bool   // set to true when web_search is invoked
 	ImageGenCalled  bool   // set to true when generate_image is invoked
+	Reacted         bool   // set to true when the react tool is called
 }
 
 // NewRegistry creates an empty registry.
@@ -70,7 +73,8 @@ func (r *Registry) Definitions() []llm.ToolDefinition {
 func (r *Registry) Dispatch(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	t, ok := r.tools[name]
 	if !ok {
-		return "", fmt.Errorf("unknown tool: %s", name)
+		slog.Warn("dispatch: unknown tool", "tool", name)
+		return fmt.Sprintf("Tool %q is not available. Respond to the user without it.", name), nil
 	}
 	return t.Call(ctx, args)
 }
@@ -215,9 +219,11 @@ func (t *memoryForgetTool) Call(ctx context.Context, args json.RawMessage) (stri
 }
 
 type replyTool struct {
-	send      SendFunc
-	replied   *bool
-	replyText *string
+	send          SendFunc
+	replied       *bool
+	replyText     *string
+	replyCount    *int
+	maxReplyParts int
 }
 
 func (t *replyTool) Name() string { return "reply" }
@@ -244,19 +250,19 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if isStageDirection(p.Content) {
 		return "Replied.", nil
 	}
-	// Guardrail: only one visible reply per turn.
-	// Models occasionally call reply multiple times in one loop iteration chain,
-	// which leads to duplicate or near-duplicate Discord messages.
-	if *t.replied {
-		return "Reply already sent in this turn.", nil
+	// Guardrail: cap replies per turn to prevent runaway loops while still
+	// allowing a status message followed by the real answer (max 3).
+	if *t.replyCount >= 2 {
+		return "Reply limit reached for this turn.", nil
 	}
-	parts := SplitMessage(p.Content, 2000)
+	parts := SplitAndCapMessage(p.Content, 2000, t.maxReplyParts)
 	for _, part := range parts {
 		if err := t.send(part); err != nil {
 			return "", err
 		}
 	}
 	*t.replied = true
+	*t.replyCount++
 	*t.replyText = p.Content
 	return "Replied.", nil
 }
@@ -311,8 +317,26 @@ func SplitMessage(s string, limit int) []string {
 	return parts
 }
 
+// SplitAndCapMessage splits s into chunks and caps at maxParts.
+// When parts are truncated, "…" is appended to the last kept part so
+// Discord users can see that content was cut off.
+func SplitAndCapMessage(s string, limit int, maxParts int) []string {
+	parts := SplitMessage(s, limit)
+	if len(parts) > maxParts {
+		slog.Warn("truncated SplitMessage output", "original_parts", len(parts))
+		parts = parts[:maxParts]
+		parts[len(parts)-1] += "…"
+	}
+	return parts
+}
+
+// customEmojiRe matches Discord custom emoji markup like <:name:id> or <a:name:id>
+// and captures the "name:id" portion.
+var customEmojiRe = regexp.MustCompile(`^<a?:(\w+:\d+)>$`)
+
 type reactTool struct {
-	react ReactFunc
+	react   ReactFunc
+	reacted *bool
 }
 
 func (t *reactTool) Name() string { return "react" }
@@ -335,7 +359,15 @@ func (t *reactTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
 	}
-	return "Reacted.", t.react(p.Emoji)
+	emoji := p.Emoji
+	if m := customEmojiRe.FindStringSubmatch(emoji); m != nil {
+		emoji = m[1]
+	}
+	if err := t.react(emoji); err != nil {
+		return "", err
+	}
+	*t.reacted = true
+	return "Reacted.", nil
 }
 
 // WebSearchDeps groups dependencies for the async web search tool.
@@ -440,15 +472,25 @@ func (t *webSearchTool) runSearch(query string) {
 	t.deps.DeliverResult(fmt.Sprintf("[SYSTEM:web_search_results]\nSearch results for %q:\n\n%s", query, result))
 }
 
+// NewReplyOnlyRegistry creates a minimal registry with only the reply and react tools.
+// Used for internal turns (e.g. web search result summarization) where the LLM
+// should just summarize and reply without calling memory or search tools.
+func NewReplyOnlyRegistry(send SendFunc, react ReactFunc, maxReplyParts int) *Registry {
+	r := NewRegistry()
+	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount, maxReplyParts: maxReplyParts})
+	r.Register(&reactTool{react: react, reacted: &r.Reacted})
+	return r
+}
+
 // NewDefaultRegistry creates a registry with standard tools.
 // If searchDeps is non-nil, the async web_search and web_fetch tools are also registered.
-func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps, imageGenDeps *ImageGenDeps) *Registry {
+func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps, imageGenDeps *ImageGenDeps, maxReplyParts int) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID, dedupThreshold: dedupThreshold})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID, defaultTopN: defaultRecallLimit})
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
-	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText})
-	r.Register(&reactTool{react: react})
+	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount, maxReplyParts: maxReplyParts})
+	r.Register(&reactTool{react: react, reacted: &r.Reacted})
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps, searchCalled: &r.WebSearchCalled})
 		r.Register(&webFetchTool{timeoutSeconds: searchDeps.TimeoutSeconds})
