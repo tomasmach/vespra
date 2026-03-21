@@ -312,6 +312,15 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 		state.language = values[0]
 	}
 
+	// Acknowledge immediately so the 3-second Discord deadline is met
+	// before the config file I/O in UpsertAgent.
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredMessageUpdate,
+	}); err != nil {
+		slog.Error("wizard: defer final step", "error", err, "guild_id", state.guildID)
+		return
+	}
+
 	// Build channel overrides. When specific channels were selected, restrict
 	// the bot to only those channels by setting the agent mode to "none" and
 	// creating per-channel overrides with the user's chosen mode.
@@ -341,7 +350,7 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 
 	if err := w.ops.UpsertAgent(agentCfg); err != nil {
 		slog.Error("wizard: upsert agent", "error", err, "guild_id", state.guildID)
-		respondEphemeralUpdate(s, i, fmt.Sprintf("Setup failed: %v. Run `/init` again.", err))
+		editDeferredMessage(s, i, fmt.Sprintf("Setup failed: %v. Run `/init` again.", err))
 		return
 	}
 
@@ -374,7 +383,7 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 		modeDisplay, langDisplay, channelDisplay,
 	)
 
-	respondEphemeralUpdate(s, i, summary)
+	editDeferredMessage(s, i, summary)
 }
 
 // respondEphemeralUpdate updates the existing ephemeral wizard message with a plain text reply
