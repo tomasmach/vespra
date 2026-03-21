@@ -59,6 +59,8 @@ func intPtr(v int) *int {
 
 // startInit begins the /init setup wizard for the invoking guild.
 func (w *wizardHandler) startInit(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	slog.Info("wizard: /init invoked", "guild_id", i.GuildID)
+
 	// Only run in guild context; DMs have no GuildID.
 	if i.GuildID == "" || i.Member == nil {
 		respondEphemeral(s, i, "This command can only be used inside a server.")
@@ -69,6 +71,7 @@ func (w *wizardHandler) startInit(s *discordgo.Session, i *discordgo.Interaction
 	cfg := w.ops.CfgStore().Get()
 	for _, a := range cfg.Agents {
 		if a.ServerID == i.GuildID {
+			slog.Info("wizard: server already configured", "guild_id", i.GuildID)
 			respondEphemeral(s, i, "This server is already configured. Use `/mode`, `/channel`, `/language` to adjust settings, or `/status` to view current config.")
 			return
 		}

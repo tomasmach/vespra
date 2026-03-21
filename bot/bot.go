@@ -84,11 +84,14 @@ func (b *Bot) onGuildCreate(s *discordgo.Session, g *discordgo.GuildCreate) {
 
 // onInteractionCreate dispatches incoming interactions to the appropriate handler.
 func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	slog.Debug("interaction received", "type", i.Type, "guild_id", i.GuildID)
 	if b.ops == nil {
+		slog.Warn("interaction dropped: ops not set", "type", i.Type, "guild_id", i.GuildID)
 		return
 	}
 	switch i.Type {
 	case discordgo.InteractionApplicationCommand:
+		slog.Debug("slash command", "name", i.ApplicationCommandData().Name, "guild_id", i.GuildID)
 		b.handleSlashCommand(s, i)
 	case discordgo.InteractionMessageComponent:
 		if b.wizard != nil {
