@@ -217,7 +217,7 @@ func (w *wizardHandler) showChannelStepDeferred(s *discordgo.Session, i *discord
 		}
 	}
 
-	content := "**Step 2/3 — Channel Setup**\nSelect channels where I should be active. If you chose 'none' as response mode, I'll only respond in the selected channels."
+	content := "**Step 2/3 — Channel Setup**\nSelect channels to restrict where I'm active. Skip or leave empty to use all channels."
 	if truncated {
 		content += "\n\n*This server has more than 25 text channels. Showing the first 25 — use the web dashboard for full control.*"
 	}
@@ -312,21 +312,29 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 		state.language = values[0]
 	}
 
-	// Build channel overrides. When the server mode is "none" and specific channels were
-	// chosen, create "smart" overrides for those channels so the bot responds there.
-	// For any other server mode, channel overrides are unnecessary.
+	// Build channel overrides. When specific channels were selected, restrict
+	// the bot to only those channels by setting the agent mode to "none" and
+	// creating per-channel overrides with the user's chosen mode.
+	// For "none" mode, selected channels default to "smart".
 	var channels []config.ChannelConfig
-	if state.mode == config.ModeNone && len(state.channelIDs) > 0 {
+	agentMode := state.mode
+	if len(state.channelIDs) > 0 {
+		channelMode := state.mode
+		if channelMode == config.ModeNone {
+			channelMode = config.ModeSmart
+		}
+		agentMode = config.ModeNone
+
 		channels = make([]config.ChannelConfig, len(state.channelIDs))
 		for idx, chID := range state.channelIDs {
-			channels[idx] = config.ChannelConfig{ID: chID, ResponseMode: config.ModeSmart}
+			channels[idx] = config.ChannelConfig{ID: chID, ResponseMode: channelMode}
 		}
 	}
 
 	agentCfg := config.AgentConfig{
 		ID:           state.guildID,
 		ServerID:     state.guildID,
-		ResponseMode: state.mode,
+		ResponseMode: agentMode,
 		Language:     state.language,
 		Channels:     channels,
 	}
