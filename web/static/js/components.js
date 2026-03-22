@@ -14,7 +14,7 @@ export function el(tag, attrs = {}, ...children) {
     if (k === 'className') e.className = v;
     else if (k === 'style' && typeof v === 'object') Object.assign(e.style, v);
     else if (k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2).toLowerCase(), v);
-    else e.setAttribute(k, v);
+    else if (v != null) e.setAttribute(k, v);
   }
   for (const c of children) {
     if (c == null) continue;

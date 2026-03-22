@@ -187,6 +187,7 @@ dialog {
   padding: var(--sp-6);
   max-width: 480px;
   width: 90vw;
+  margin: auto;
   box-shadow: var(--shadow-elevated);
 }
 
