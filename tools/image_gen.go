@@ -98,6 +98,8 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	defer t.deps.ImageWg.Done()
 	defer t.deps.ImageRunning.Store(false)
 
+	slog.Debug("image gen goroutine started", "prompt", prompt, "model", t.deps.Model, "timeout", t.deps.TimeoutSeconds)
+
 	ctx, cancel := context.WithTimeout(t.deps.Ctx, time.Duration(t.deps.TimeoutSeconds)*time.Second)
 	defer cancel()
 
@@ -134,6 +136,7 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	req.Header.Set("Authorization", "Key "+t.deps.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 
+	slog.Debug("image gen calling fal API", "url", url)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		slog.Error("image gen API call failed", "error", err, "prompt", prompt)
@@ -161,6 +164,8 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 		}
 		return
 	}
+
+	slog.Debug("image gen fal response", "images", len(falResp.Images), "nsfw", falResp.HasNSFWConcepts, "safety_checker", t.deps.SafetyChecker)
 
 	if t.deps.SafetyChecker {
 		if len(falResp.HasNSFWConcepts) == 0 {
@@ -228,10 +233,13 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	if !t.deps.SafetyChecker && len(falResp.HasNSFWConcepts) > 0 && falResp.HasNSFWConcepts[0] {
 		filename = "SPOILER_generated.jpg"
 	}
+	slog.Debug("image gen sending to Discord", "filename", filename, "size", len(imgData))
 	if err := t.deps.SendImage(filename, bytes.NewReader(imgData), ""); err != nil {
 		slog.Error("image send to Discord failed", "error", err)
 		if err := t.deps.SendText("Failed to send the generated image."); err != nil {
 			slog.Warn("image gen notify failed", "error", err)
 		}
+	} else {
+		slog.Info("image gen completed successfully", "prompt", prompt, "size", len(imgData))
 	}
 }
