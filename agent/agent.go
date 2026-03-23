@@ -1084,11 +1084,11 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	}
 	if mode == config.ModeSmart {
 		if addressed {
-			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` or `react` tools.")
+			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` or `react` tools. Prefer `reply` — only use `react` alone when a reaction is clearly more appropriate than words.")
 		} else if directedAtOther {
 			sb.WriteString("\n\nYou are in smart mode. This message is directed at another specific user — you MUST stay silent. Do NOT reply, react, or produce any output.")
 		} else {
-			sb.WriteString("\n\nYou are in smart mode. Decide whether to respond:\n- RESPOND (via `reply` or `react` tools) when: someone asks a question to the channel, continues a conversation with you, mentions your name, shares something interesting or relevant to you\n- STAY SILENT (produce no output at all) when: people are clearly talking to each other, the message is not directed at you, it's a side conversation you're not part of\nDo NOT write meta-commentary about why you are staying silent.")
+			sb.WriteString("\n\nYou are in smart mode. Decide whether to respond:\n- RESPOND (via `reply` or `react` tools) when: someone asks a question to the channel, continues a conversation with you, mentions your name, shares something interesting or relevant to you\n- STAY SILENT (produce no output at all) when: people are clearly talking to each other, the message is not directed at you, it's a side conversation you're not part of\nUse `react` sparingly — only when the message genuinely resonates, is funny, or deserves acknowledgment. Do not react to most messages; silence is the default.\nDo NOT write meta-commentary about why you are staying silent.")
 		}
 	}
 	return sb.String()
