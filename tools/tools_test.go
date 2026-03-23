@@ -183,6 +183,54 @@ func TestReplyToolRateLimit(t *testing.T) {
 	}
 }
 
+func TestReplyToolDuplicateSuppression(t *testing.T) {
+	sendCount := 0
+	send := func(content string) error {
+		sendCount++
+		return nil
+	}
+	react := func(emoji string) error { return nil }
+
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	ctx := context.Background()
+
+	// First reply: should send.
+	result, err := r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"weather is nice"}`))
+	if err != nil {
+		t.Fatalf("first Dispatch() returned unexpected error: %v", err)
+	}
+	if result != "Replied." {
+		t.Errorf("first call: expected %q, got %q", "Replied.", result)
+	}
+	if sendCount != 1 {
+		t.Errorf("first call: expected send count 1, got %d", sendCount)
+	}
+
+	// Exact duplicate: should be suppressed (not sent to Discord).
+	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"weather is nice"}`))
+	if err != nil {
+		t.Fatalf("duplicate Dispatch() returned unexpected error: %v", err)
+	}
+	if result != "Replied." {
+		t.Errorf("duplicate call: expected %q, got %q", "Replied.", result)
+	}
+	if sendCount != 1 {
+		t.Errorf("duplicate call: expected send count still 1, got %d", sendCount)
+	}
+
+	// Different content: should send.
+	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"something else"}`))
+	if err != nil {
+		t.Fatalf("third Dispatch() returned unexpected error: %v", err)
+	}
+	if result != "Replied." {
+		t.Errorf("third call: expected %q, got %q", "Replied.", result)
+	}
+	if sendCount != 2 {
+		t.Errorf("third call: expected send count 2, got %d", sendCount)
+	}
+}
+
 // newSearchDeps creates a minimal WebSearchDeps suitable for unit tests.
 // deliverResult is called when the async search goroutine finishes; pass a no-op
 // if the test does not need to observe the delivered result.

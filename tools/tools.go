@@ -251,9 +251,14 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 		return "Replied.", nil
 	}
 	// Guardrail: cap replies per turn to prevent runaway loops while still
-	// allowing a status message followed by the real answer (max 3).
+	// allowing a status message followed by the real answer (max 2).
 	if *t.replyCount >= 2 {
 		return "Reply limit reached for this turn.", nil
+	}
+	// Suppress exact duplicate of the previous reply — the LLM sometimes
+	// re-emits the same content in the post-reply iteration.
+	if *t.replyCount > 0 && p.Content == *t.replyText {
+		return "Replied.", nil
 	}
 	parts := SplitAndCapMessage(p.Content, 2000, t.maxReplyParts)
 	for _, part := range parts {
