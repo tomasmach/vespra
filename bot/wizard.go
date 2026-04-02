@@ -333,7 +333,9 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 	// Inherit provider from global config so the agent uses the correct LLM endpoint.
 	var provider string
 	globalCfg := w.ops.CfgStore().Get()
-	if globalCfg.LLM.GLMKey != "" && strings.HasPrefix(globalCfg.LLM.Model, "glm-") {
+	if globalCfg.LLM.FireworksKey != "" && strings.Contains(globalCfg.LLM.Model, "fireworks") {
+		provider = "fireworks"
+	} else if globalCfg.LLM.GLMKey != "" && strings.HasPrefix(globalCfg.LLM.Model, "glm-") {
 		provider = "glm"
 	}
 

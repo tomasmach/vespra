@@ -52,6 +52,8 @@ type LLMConfig struct {
 	OpenRouterKey         string `toml:"openrouter_key" json:"-"`
 	GLMKey                string `toml:"glm_key" json:"-"`
 	GLMBaseURL            string `toml:"glm_base_url" json:"-"`
+	FireworksKey          string `toml:"fireworks_key" json:"-"`
+	FireworksBaseURL      string `toml:"fireworks_base_url" json:"-"`
 	Model                 string `toml:"model"`
 	VisionModel           string `toml:"vision_model"`
 	VisionBaseURL         string `toml:"vision_base_url" json:"-"`
@@ -115,7 +117,7 @@ type AgentConfig struct {
 	DBPath       string          `toml:"db_path" json:"db_path,omitempty"`
 	ResponseMode string          `toml:"response_mode" json:"response_mode,omitempty"`
 	Language     string          `toml:"language" json:"language,omitempty"`
-	Provider     string          `toml:"provider" json:"provider,omitempty"` // "openrouter" | "glm" | "" (inherit global)
+	Provider     string          `toml:"provider" json:"provider,omitempty"` // "openrouter" | "glm" | "fireworks" | "" (inherit global)
 	Model        string          `toml:"model" json:"model,omitempty"`       // model name override; "" = use global
 	IgnoreUsers  []string        `toml:"ignore_users,omitempty" json:"ignore_users,omitempty"`
 	Channels     []ChannelConfig `toml:"channels" json:"channels,omitempty"`
@@ -196,6 +198,9 @@ func Load(path string) (*Config, error) {
 	if cfg.LLM.GLMBaseURL == "" {
 		cfg.LLM.GLMBaseURL = "https://open.bigmodel.cn/api/paas/v4"
 	}
+	if cfg.LLM.FireworksBaseURL == "" {
+		cfg.LLM.FireworksBaseURL = "https://api.fireworks.ai/inference/v1"
+	}
 	if cfg.LLM.RequestTimeoutSeconds == 0 {
 		cfg.LLM.RequestTimeoutSeconds = 60
 	}
@@ -261,15 +266,15 @@ func Load(path string) (*Config, error) {
 	if cfg.Bot.Token == "" {
 		return nil, fmt.Errorf("bot.token is required")
 	}
-	if cfg.LLM.OpenRouterKey == "" && cfg.LLM.GLMKey == "" {
-		return nil, fmt.Errorf("llm.openrouter_key or llm.glm_key is required")
+	if cfg.LLM.OpenRouterKey == "" && cfg.LLM.GLMKey == "" && cfg.LLM.FireworksKey == "" {
+		return nil, fmt.Errorf("llm.openrouter_key, llm.glm_key, or llm.fireworks_key is required")
 	}
 
 	// Validate response mode values
 	if !ValidModes[cfg.Response.DefaultMode] {
 		return nil, fmt.Errorf("response.default_mode %q is invalid (must be smart, mention, all, or none)", cfg.Response.DefaultMode)
 	}
-	validProviders := map[string]bool{"openrouter": true, "glm": true}
+	validProviders := map[string]bool{"openrouter": true, "glm": true, "fireworks": true}
 	for _, agent := range cfg.Agents {
 		if agent.ServerID == "" {
 			return nil, fmt.Errorf("agent %q: server_id is required", agent.ID)
@@ -278,10 +283,13 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("agent %s response_mode %q is invalid (must be smart, mention, all, or none)", agent.ID, agent.ResponseMode)
 		}
 		if agent.Provider != "" && !validProviders[agent.Provider] {
-			return nil, fmt.Errorf("agent %s provider %q is invalid (must be openrouter or glm)", agent.ID, agent.Provider)
+			return nil, fmt.Errorf("agent %s provider %q is invalid (must be openrouter, glm, or fireworks)", agent.ID, agent.Provider)
 		}
 		if agent.Provider == "glm" && cfg.LLM.GLMKey == "" {
 			return nil, fmt.Errorf("agent %s uses provider %q but llm.glm_key is not configured", agent.ID, agent.Provider)
+		}
+		if agent.Provider == "fireworks" && cfg.LLM.FireworksKey == "" {
+			return nil, fmt.Errorf("agent %s uses provider %q but llm.fireworks_key is not configured", agent.ID, agent.Provider)
 		}
 		for _, ch := range agent.Channels {
 			if ch.ResponseMode != "" && !ValidModes[ch.ResponseMode] {
