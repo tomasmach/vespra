@@ -261,7 +261,7 @@ func Load(path string) (*Config, error) {
 		cfg.Tools.Image.Resolution = "1K"
 	}
 	if cfg.Tools.Image.TimeoutSeconds <= 0 {
-		cfg.Tools.Image.TimeoutSeconds = 60
+		cfg.Tools.Image.TimeoutSeconds = 120
 	}
 	if cfg.Response.DefaultMode == "" {
 		cfg.Response.DefaultMode = ModeSmart

@@ -136,7 +136,7 @@ export async function render(container, params) {
   const imgTimeoutInput = el('input', {
     className: 'input',
     type: 'number',
-    value: (imageConfig && imageConfig.timeout_seconds) || 60,
+    value: (imageConfig && imageConfig.timeout_seconds) || 120,
     min: '10',
     max: '300',
     style: { width: '100px' },

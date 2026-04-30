@@ -189,6 +189,9 @@ default_mode = "smart"      # smart | mention | all | none
 [tools]
 web_search_key = "..."      # optional; web_search disabled if absent
 
+[tools.image]
+timeout_seconds = 120       # image generation timeout
+
 [web]
 addr = ":8080"              # management UI address (default :8080)
 
