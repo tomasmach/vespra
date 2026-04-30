@@ -4,3 +4,11 @@ vespra
 .worktrees/
 CLAUDE.LOCAL.md
 .DS_Store
+
+# Local runtime/deployment state
+/config/config.toml
+/config/config.toml.bak-*
+/config/soul.md
+/config/souls/
+/data/
+*.bak-*

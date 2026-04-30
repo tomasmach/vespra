@@ -262,8 +262,8 @@ func TestImageGenNSFWSpoilerWhenSafetyCheckerOff(t *testing.T) {
 
 	wg.Wait()
 
-	if receivedFilename != "SPOILER_generated.jpg" {
-		t.Errorf("expected filename 'SPOILER_generated.jpg', got %q", receivedFilename)
+	if receivedFilename != "SPOILER_generated.png" {
+		t.Errorf("expected filename 'SPOILER_generated.png', got %q", receivedFilename)
 	}
 }
 
@@ -313,8 +313,8 @@ func TestImageGenNonNSFWWithSafetyCheckerOffSendsPlainFilename(t *testing.T) {
 
 	wg.Wait()
 
-	if receivedFilename != "generated.jpg" {
-		t.Errorf("expected filename 'generated.jpg' for non-NSFW image, got %q", receivedFilename)
+	if receivedFilename != "generated.png" {
+		t.Errorf("expected filename 'generated.png' for non-NSFW image, got %q", receivedFilename)
 	}
 }
 
@@ -365,8 +365,8 @@ func TestImageGenAbsentNSFWArrayWithSafetyCheckerOffSendsPlainFilename(t *testin
 
 	wg.Wait()
 
-	if receivedFilename != "generated.jpg" {
-		t.Errorf("expected filename 'generated.jpg' when has_nsfw_concepts is absent, got %q", receivedFilename)
+	if receivedFilename != "generated.png" {
+		t.Errorf("expected filename 'generated.png' when has_nsfw_concepts is absent, got %q", receivedFilename)
 	}
 }
 
@@ -380,8 +380,13 @@ func TestImageGenSuccess(t *testing.T) {
 	}))
 	defer imgServer.Close()
 
+	var requestBody map[string]any
 	// Mock fal.ai API
 	falServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"images":[{"url":"%s/image.jpg"}],"has_nsfw_concepts":[false]}`, imgServer.URL)
 	}))
@@ -421,8 +426,20 @@ func TestImageGenSuccess(t *testing.T) {
 
 	wg.Wait()
 
-	if receivedFilename != "generated.jpg" {
-		t.Errorf("expected filename 'generated.jpg', got %q", receivedFilename)
+	if receivedFilename != "generated.png" {
+		t.Errorf("expected filename 'generated.png', got %q", receivedFilename)
+	}
+	if requestBody["aspect_ratio"] != "auto" {
+		t.Errorf("expected aspect_ratio auto, got %#v", requestBody["aspect_ratio"])
+	}
+	if requestBody["resolution"] != "1K" {
+		t.Errorf("expected resolution 1K, got %#v", requestBody["resolution"])
+	}
+	if requestBody["output_format"] != "png" {
+		t.Errorf("expected output_format png, got %#v", requestBody["output_format"])
+	}
+	if _, ok := requestBody["image_size"]; ok {
+		t.Errorf("did not expect legacy image_size in fal request: %#v", requestBody["image_size"])
 	}
 	if string(receivedData) != string(imageData) {
 		t.Errorf("expected image data %q, got %q", imageData, receivedData)

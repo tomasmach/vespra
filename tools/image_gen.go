@@ -28,12 +28,13 @@ type ImageGenDeps struct {
 	Model          string
 	SafetyChecker  bool
 	TimeoutSeconds int
+	Resolution     string
 	BaseURL        string // for testing; overrides https://fal.run
 }
 
 type imageGenTool struct {
-	deps         *ImageGenDeps
-	imageCalled  *bool
+	deps        *ImageGenDeps
+	imageCalled *bool
 }
 
 func (t *imageGenTool) Name() string { return ToolNameImageGen }
@@ -47,7 +48,8 @@ func (t *imageGenTool) Parameters() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"prompt": {"type": "string", "description": "A detailed English prompt describing the image to generate."},
-			"image_size": {"type": "string", "description": "Image size/aspect ratio. Options: square_hd, square, portrait_4_3, portrait_16_9, landscape_4_3, landscape_16_9. Default: landscape_4_3."}
+			"aspect_ratio": {"type": "string", "description": "Image aspect ratio. Options: auto, 21:9, 16:9, 3:2, 4:3, 5:4, 1:1, 4:5, 3:4, 2:3, 9:16. Default: auto."},
+			"image_size": {"type": "string", "description": "Deprecated legacy aspect ratio; accepted for backwards compatibility."}
 		},
 		"required": ["prompt"]
 	}`)
@@ -55,8 +57,9 @@ func (t *imageGenTool) Parameters() json.RawMessage {
 
 func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		Prompt    string `json:"prompt"`
-		ImageSize string `json:"image_size"`
+		Prompt      string `json:"prompt"`
+		AspectRatio string `json:"aspect_ratio"`
+		ImageSize   string `json:"image_size"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
@@ -64,8 +67,12 @@ func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, 
 	if p.Prompt == "" {
 		return "Error: prompt is required", nil
 	}
-	if p.ImageSize == "" {
-		p.ImageSize = "landscape_4_3"
+	aspectRatio := p.AspectRatio
+	if aspectRatio == "" {
+		aspectRatio = legacyImageSizeToAspectRatio(p.ImageSize)
+	}
+	if aspectRatio == "" {
+		aspectRatio = "auto"
 	}
 
 	if !t.deps.ImageRunning.CompareAndSwap(false, true) {
@@ -74,17 +81,37 @@ func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, 
 	*t.imageCalled = true
 
 	t.deps.ImageWg.Add(1)
-	go t.runGenerate(p.Prompt, p.ImageSize)
+	go t.runGenerate(p.Prompt, aspectRatio)
 	return fmt.Sprintf("Image generation started for prompt: %q — the image will be sent shortly.", p.Prompt), nil
 }
 
+func legacyImageSizeToAspectRatio(imageSize string) string {
+	switch imageSize {
+	case "square_hd", "square":
+		return "1:1"
+	case "portrait_4_3":
+		return "3:4"
+	case "portrait_16_9":
+		return "9:16"
+	case "landscape_4_3":
+		return "4:3"
+	case "landscape_16_9":
+		return "16:9"
+	default:
+		return imageSize
+	}
+}
+
 type falRequest struct {
-	Prompt              string `json:"prompt"`
-	NumInferenceSteps   int    `json:"num_inference_steps"`
-	ImageSize           string `json:"image_size"`
-	EnableSafetyChecker bool   `json:"enable_safety_checker"`
-	NumImages           int    `json:"num_images"`
-	OutputFormat        string `json:"output_format"`
+	Prompt             string `json:"prompt"`
+	NumImages          int    `json:"num_images"`
+	AspectRatio        string `json:"aspect_ratio"`
+	OutputFormat       string `json:"output_format"`
+	SafetyTolerance    string `json:"safety_tolerance,omitempty"`
+	Resolution         string `json:"resolution"`
+	LimitGenerations   bool   `json:"limit_generations"`
+	EnableWebSearch    bool   `json:"enable_web_search,omitempty"`
+	EnableGoogleSearch bool   `json:"enable_google_search,omitempty"`
 }
 
 type falResponse struct {
@@ -94,7 +121,7 @@ type falResponse struct {
 	HasNSFWConcepts []bool `json:"has_nsfw_concepts"`
 }
 
-func (t *imageGenTool) runGenerate(prompt, imageSize string) {
+func (t *imageGenTool) runGenerate(prompt, aspectRatio string) {
 	defer t.deps.ImageWg.Done()
 	defer t.deps.ImageRunning.Store(false)
 
@@ -103,13 +130,20 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	ctx, cancel := context.WithTimeout(t.deps.Ctx, time.Duration(t.deps.TimeoutSeconds)*time.Second)
 	defer cancel()
 
+	resolution := t.deps.Resolution
+	if resolution == "" {
+		resolution = "1K"
+	}
 	reqBody := falRequest{
-		Prompt:              prompt,
-		NumInferenceSteps:   4,
-		ImageSize:           imageSize,
-		EnableSafetyChecker: t.deps.SafetyChecker,
-		NumImages:           1,
-		OutputFormat:        "jpeg",
+		Prompt:           prompt,
+		NumImages:        1,
+		AspectRatio:      aspectRatio,
+		OutputFormat:     "png",
+		Resolution:       resolution,
+		LimitGenerations: true,
+	}
+	if t.deps.SafetyChecker {
+		reqBody.SafetyTolerance = "4"
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -229,9 +263,9 @@ func (t *imageGenTool) runGenerate(prompt, imageSize string) {
 	}
 
 	// When safety checker is disabled, send NSFW images as spoilers.
-	filename := "generated.jpg"
+	filename := "generated.png"
 	if !t.deps.SafetyChecker && len(falResp.HasNSFWConcepts) > 0 && falResp.HasNSFWConcepts[0] {
-		filename = "SPOILER_generated.jpg"
+		filename = "SPOILER_generated.png"
 	}
 	slog.Debug("image gen sending to Discord", "filename", filename, "size", len(imgData))
 	if err := t.deps.SendImage(filename, bytes.NewReader(imgData), ""); err != nil {

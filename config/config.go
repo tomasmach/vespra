@@ -32,7 +32,7 @@ type Config struct {
 	Bot      BotConfig
 	LLM      LLMConfig
 	Memory   MemoryConfig
-	Agent    TurnConfig    `toml:"agent"`
+	Agent    TurnConfig `toml:"agent"`
 	Response ResponseConfig
 	Tools    ToolsConfig
 	Web      WebConfig
@@ -70,11 +70,11 @@ type MemoryConfig struct {
 }
 
 type TurnConfig struct {
-	HistoryLimit             int  `toml:"history_limit"`
-	IdleTimeoutMinutes       int  `toml:"idle_timeout_minutes"`
-	MaxToolIterations        int  `toml:"max_tool_iterations"`
-	HistoryBackfillLimit     int  `toml:"history_backfill_limit"`
-	MemoryExtractionInterval int  `toml:"memory_extraction_interval"` // -1 to disable
+	HistoryLimit             int     `toml:"history_limit"`
+	IdleTimeoutMinutes       int     `toml:"idle_timeout_minutes"`
+	MaxToolIterations        int     `toml:"max_tool_iterations"`
+	HistoryBackfillLimit     int     `toml:"history_backfill_limit"`
+	MemoryExtractionInterval int     `toml:"memory_extraction_interval"` // -1 to disable
 	CoalesceDisabled         bool    `toml:"coalesce_disabled"`
 	CoalesceDebounceMs       int     `toml:"coalesce_debounce_ms"`
 	CoalesceMaxWaitMs        int     `toml:"coalesce_max_wait_ms"`
@@ -99,6 +99,7 @@ type ToolsConfig struct {
 type ImageConfig struct {
 	APIKey              string `toml:"api_key" json:"-"`
 	Model               string `toml:"model"`
+	Resolution          string `toml:"resolution"`
 	EnableSafetyChecker *bool  `toml:"enable_safety_checker"`
 	TimeoutSeconds      int    `toml:"timeout_seconds"`
 }
@@ -110,17 +111,17 @@ type SearchConfig struct {
 }
 
 type AgentConfig struct {
-	ID           string          `toml:"id" json:"id"`
-	ServerID     string          `toml:"server_id" json:"server_id"`
-	Token        string          `toml:"token" json:"-"`
-	SoulFile     string          `toml:"soul_file" json:"soul_file,omitempty"`
-	DBPath       string          `toml:"db_path" json:"db_path,omitempty"`
-	ResponseMode string          `toml:"response_mode" json:"response_mode,omitempty"`
-	Language     string          `toml:"language" json:"language,omitempty"`
-	Provider     string          `toml:"provider" json:"provider,omitempty"` // "openrouter" | "glm" | "fireworks" | "" (inherit global)
-	Model        string          `toml:"model" json:"model,omitempty"`       // model name override; "" = use global
-	IgnoreUsers  []string        `toml:"ignore_users,omitempty" json:"ignore_users,omitempty"`
-	Channels     []ChannelConfig `toml:"channels" json:"channels,omitempty"`
+	ID           string           `toml:"id" json:"id"`
+	ServerID     string           `toml:"server_id" json:"server_id"`
+	Token        string           `toml:"token" json:"-"`
+	SoulFile     string           `toml:"soul_file" json:"soul_file,omitempty"`
+	DBPath       string           `toml:"db_path" json:"db_path,omitempty"`
+	ResponseMode string           `toml:"response_mode" json:"response_mode,omitempty"`
+	Language     string           `toml:"language" json:"language,omitempty"`
+	Provider     string           `toml:"provider" json:"provider,omitempty"` // "openrouter" | "glm" | "fireworks" | "" (inherit global)
+	Model        string           `toml:"model" json:"model,omitempty"`       // model name override; "" = use global
+	IgnoreUsers  []string         `toml:"ignore_users,omitempty" json:"ignore_users,omitempty"`
+	Channels     []ChannelConfig  `toml:"channels" json:"channels,omitempty"`
 	Image        AgentImageConfig `toml:"image" json:"image,omitempty"`
 }
 
@@ -129,6 +130,7 @@ type AgentConfig struct {
 type AgentImageConfig struct {
 	APIKey              string `toml:"api_key" json:"-"`
 	Model               string `toml:"model" json:"model,omitempty"`
+	Resolution          string `toml:"resolution" json:"resolution,omitempty"`
 	EnableSafetyChecker *bool  `toml:"enable_safety_checker" json:"enable_safety_checker,omitempty"`
 }
 
@@ -254,6 +256,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Tools.Image.Model == "" {
 		cfg.Tools.Image.Model = "fal-ai/flux/schnell"
+	}
+	if cfg.Tools.Image.Resolution == "" {
+		cfg.Tools.Image.Resolution = "1K"
 	}
 	if cfg.Tools.Image.TimeoutSeconds <= 0 {
 		cfg.Tools.Image.TimeoutSeconds = 60

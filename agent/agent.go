@@ -102,10 +102,10 @@ type ChannelAgent struct {
 	imageWg           sync.WaitGroup // tracks in-flight image generation goroutines
 	sendTimestamps    []time.Time    // sliding window for outgoing rate limit
 
-	ctx        context.Context    // agent's own context; set at the start of run()
+	ctx        context.Context               // agent's own context; set at the start of run()
 	msgCh      chan *discordgo.MessageCreate // buffered 100
 	internalCh chan string                   // buffered; receives system messages (e.g., web search results)
-	cancel     context.CancelFunc           // cancels this agent's context
+	cancel     context.CancelFunc            // cancels this agent's context
 }
 
 // resolveMentions replaces raw Discord mention syntax (<@ID> and <@!ID>) with
@@ -1244,6 +1244,7 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 	// Resolve per-agent overrides over global config.
 	apiKey := cfg.Tools.Image.APIKey
 	model := cfg.Tools.Image.Model
+	resolution := cfg.Tools.Image.Resolution
 	safetyChecker := true
 	if cfg.Tools.Image.EnableSafetyChecker != nil {
 		safetyChecker = *cfg.Tools.Image.EnableSafetyChecker
@@ -1254,6 +1255,9 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 		}
 		if agentCfg.Image.Model != "" {
 			model = agentCfg.Image.Model
+		}
+		if agentCfg.Image.Resolution != "" {
+			resolution = agentCfg.Image.Resolution
 		}
 		if agentCfg.Image.EnableSafetyChecker != nil {
 			safetyChecker = *agentCfg.Image.EnableSafetyChecker
@@ -1271,6 +1275,7 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 		Ctx:            a.ctx,
 		APIKey:         apiKey,
 		Model:          model,
+		Resolution:     resolution,
 		SafetyChecker:  safetyChecker,
 		TimeoutSeconds: cfg.Tools.Image.TimeoutSeconds,
 	}
@@ -1630,4 +1635,3 @@ func buildMessages(systemPrompt string, history []llm.Message) []llm.Message {
 	msgs = append(msgs, history...)
 	return msgs
 }
-
