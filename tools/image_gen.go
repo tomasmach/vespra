@@ -19,17 +19,19 @@ type SendImageFunc func(filename string, data io.Reader, caption string) error
 // ImageGenDeps groups dependencies for the async image generation tool.
 // Pass nil to NewDefaultRegistry to omit image generation from the registry.
 type ImageGenDeps struct {
-	SendImage      SendImageFunc
-	SendText       SendFunc
-	ImageWg        *sync.WaitGroup
-	ImageRunning   *atomic.Bool
-	Ctx            context.Context
-	APIKey         string
-	Model          string
-	SafetyChecker  bool
-	TimeoutSeconds int
-	Resolution     string
-	BaseURL        string // for testing; overrides https://fal.run
+	SendImage       SendImageFunc
+	SendText        SendFunc
+	ImageWg         *sync.WaitGroup
+	ImageRunning    *atomic.Bool
+	Ctx             context.Context
+	APIKey          string
+	Model           string
+	EditModel       string
+	SourceImageURLs []string
+	SafetyChecker   bool
+	TimeoutSeconds  int
+	Resolution      string
+	BaseURL         string // for testing; overrides https://fal.run
 }
 
 type imageGenTool struct {
@@ -37,9 +39,11 @@ type imageGenTool struct {
 	imageCalled *bool
 }
 
+const maxImageEditSourceURLs = 14
+
 func (t *imageGenTool) Name() string { return ToolNameImageGen }
 func (t *imageGenTool) Description() string {
-	return "Generate an image from a text prompt. Call this tool whenever the user asks you to draw, create, make, generate, visualize, or show an image or picture of anything — including requests phrased as 'make an image of X', 'show me what X looks like', 'draw X', or similar. " +
+	return "Generate an image from a text prompt, or edit attached/replied-to source images. Call this tool whenever the user asks you to draw, create, make, generate, visualize, show, edit, transform, or change an image or picture — including requests phrased as 'make an image of X', 'show me what X looks like', 'draw X', 'edit this', 'change this image', or similar. " +
 		"Do NOT describe the image generation in your text — always call this tool first. " +
 		"Include a brief status message as inline text content alongside this tool call (e.g. 'Generating your image…') — do NOT call the reply tool separately after this one."
 }
@@ -48,6 +52,7 @@ func (t *imageGenTool) Parameters() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"prompt": {"type": "string", "description": "A detailed English prompt describing the image to generate."},
+			"mode": {"type": "string", "description": "Use edit when modifying attached or replied-to source images; otherwise use generate. Options: generate, edit."},
 			"aspect_ratio": {"type": "string", "description": "Image aspect ratio. Options: auto, 21:9, 16:9, 3:2, 4:3, 5:4, 1:1, 4:5, 3:4, 2:3, 9:16. Default: auto."},
 			"image_size": {"type": "string", "description": "Deprecated legacy aspect ratio; accepted for backwards compatibility."}
 		},
@@ -58,6 +63,7 @@ func (t *imageGenTool) Parameters() json.RawMessage {
 func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
 		Prompt      string `json:"prompt"`
+		Mode        string `json:"mode"`
 		AspectRatio string `json:"aspect_ratio"`
 		ImageSize   string `json:"image_size"`
 	}
@@ -74,6 +80,24 @@ func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, 
 	if aspectRatio == "" {
 		aspectRatio = "auto"
 	}
+	mode := p.Mode
+	if mode == "" {
+		if len(t.deps.SourceImageURLs) > 0 {
+			mode = "edit"
+		} else {
+			mode = "generate"
+		}
+	}
+	if mode != "generate" && mode != "edit" {
+		return "Error: mode must be either generate or edit", nil
+	}
+	sourceImageURLs := t.deps.SourceImageURLs
+	if len(sourceImageURLs) > maxImageEditSourceURLs {
+		sourceImageURLs = sourceImageURLs[:maxImageEditSourceURLs]
+	}
+	if mode == "edit" && len(sourceImageURLs) == 0 {
+		return "Image editing requires an attached or replied-to image.", nil
+	}
 
 	if !t.deps.ImageRunning.CompareAndSwap(false, true) {
 		return "An image generation is already running, please wait.", nil
@@ -81,7 +105,7 @@ func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, 
 	*t.imageCalled = true
 
 	t.deps.ImageWg.Add(1)
-	go t.runGenerate(p.Prompt, aspectRatio)
+	go t.runGenerate(p.Prompt, aspectRatio, mode, sourceImageURLs)
 	return fmt.Sprintf("Image generation started for prompt: %q — the image will be sent shortly.", p.Prompt), nil
 }
 
@@ -103,15 +127,16 @@ func legacyImageSizeToAspectRatio(imageSize string) string {
 }
 
 type falRequest struct {
-	Prompt             string `json:"prompt"`
-	NumImages          int    `json:"num_images"`
-	AspectRatio        string `json:"aspect_ratio"`
-	OutputFormat       string `json:"output_format"`
-	SafetyTolerance    string `json:"safety_tolerance,omitempty"`
-	Resolution         string `json:"resolution"`
-	LimitGenerations   bool   `json:"limit_generations"`
-	EnableWebSearch    bool   `json:"enable_web_search,omitempty"`
-	EnableGoogleSearch bool   `json:"enable_google_search,omitempty"`
+	Prompt             string   `json:"prompt"`
+	NumImages          int      `json:"num_images"`
+	AspectRatio        string   `json:"aspect_ratio"`
+	OutputFormat       string   `json:"output_format"`
+	SafetyTolerance    string   `json:"safety_tolerance,omitempty"`
+	ImageURLs          []string `json:"image_urls,omitempty"`
+	Resolution         string   `json:"resolution"`
+	LimitGenerations   bool     `json:"limit_generations"`
+	EnableWebSearch    bool     `json:"enable_web_search,omitempty"`
+	EnableGoogleSearch bool     `json:"enable_google_search,omitempty"`
 }
 
 type falResponse struct {
@@ -121,11 +146,15 @@ type falResponse struct {
 	HasNSFWConcepts []bool `json:"has_nsfw_concepts"`
 }
 
-func (t *imageGenTool) runGenerate(prompt, aspectRatio string) {
+func (t *imageGenTool) runGenerate(prompt, aspectRatio, mode string, sourceImageURLs []string) {
 	defer t.deps.ImageWg.Done()
 	defer t.deps.ImageRunning.Store(false)
 
-	slog.Debug("image gen goroutine started", "prompt", prompt, "model", t.deps.Model, "timeout", t.deps.TimeoutSeconds)
+	model := t.deps.Model
+	if mode == "edit" && t.deps.EditModel != "" {
+		model = t.deps.EditModel
+	}
+	slog.Debug("image gen goroutine started", "prompt", prompt, "model", model, "mode", mode, "timeout", t.deps.TimeoutSeconds)
 
 	ctx, cancel := context.WithTimeout(t.deps.Ctx, time.Duration(t.deps.TimeoutSeconds)*time.Second)
 	defer cancel()
@@ -141,6 +170,9 @@ func (t *imageGenTool) runGenerate(prompt, aspectRatio string) {
 		OutputFormat:     "png",
 		Resolution:       resolution,
 		LimitGenerations: true,
+	}
+	if mode == "edit" {
+		reqBody.ImageURLs = sourceImageURLs
 	}
 	if t.deps.SafetyChecker {
 		reqBody.SafetyTolerance = "4"
@@ -158,7 +190,7 @@ func (t *imageGenTool) runGenerate(prompt, aspectRatio string) {
 	if baseURL == "" {
 		baseURL = "https://fal.run"
 	}
-	url := fmt.Sprintf("%s/%s", baseURL, t.deps.Model)
+	url := fmt.Sprintf("%s/%s", baseURL, model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		slog.Error("image gen request creation error", "error", err)
@@ -201,7 +233,7 @@ func (t *imageGenTool) runGenerate(prompt, aspectRatio string) {
 
 	slog.Debug("image gen fal response", "images", len(falResp.Images), "nsfw", falResp.HasNSFWConcepts, "safety_checker", t.deps.SafetyChecker)
 
-	if t.deps.SafetyChecker {
+	if t.deps.SafetyChecker && (mode != "edit" || len(falResp.HasNSFWConcepts) > 0) {
 		if len(falResp.HasNSFWConcepts) == 0 {
 			slog.Warn("image gen safety check: has_nsfw_concepts absent, blocking image", "prompt", prompt)
 			if err := t.deps.SendText("The generated image could not be safety-checked and was not sent."); err != nil {

@@ -99,6 +99,7 @@ type ToolsConfig struct {
 type ImageConfig struct {
 	APIKey              string `toml:"api_key" json:"-"`
 	Model               string `toml:"model"`
+	EditModel           string `toml:"edit_model"`
 	Resolution          string `toml:"resolution"`
 	EnableSafetyChecker *bool  `toml:"enable_safety_checker"`
 	TimeoutSeconds      int    `toml:"timeout_seconds"`
@@ -130,6 +131,7 @@ type AgentConfig struct {
 type AgentImageConfig struct {
 	APIKey              string `toml:"api_key" json:"-"`
 	Model               string `toml:"model" json:"model,omitempty"`
+	EditModel           string `toml:"edit_model" json:"edit_model,omitempty"`
 	Resolution          string `toml:"resolution" json:"resolution,omitempty"`
 	EnableSafetyChecker *bool  `toml:"enable_safety_checker" json:"enable_safety_checker,omitempty"`
 }
@@ -256,6 +258,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Tools.Image.Model == "" {
 		cfg.Tools.Image.Model = "fal-ai/flux/schnell"
+	}
+	if cfg.Tools.Image.EditModel == "" {
+		cfg.Tools.Image.EditModel = "fal-ai/nano-banana-2/edit"
 	}
 	if cfg.Tools.Image.Resolution == "" {
 		cfg.Tools.Image.Resolution = "1K"

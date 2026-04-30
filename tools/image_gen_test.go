@@ -445,3 +445,110 @@ func TestImageGenSuccess(t *testing.T) {
 		t.Errorf("expected image data %q, got %q", imageData, receivedData)
 	}
 }
+
+func TestImageGenEditModeUsesEditModelAndSourceImages(t *testing.T) {
+	imageData := []byte("edited-image-data")
+
+	imgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imageData)
+	}))
+	defer imgServer.Close()
+
+	var requestPath string
+	var requestBody map[string]any
+	falServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"images":[{"url":"%s/edited.png"}],"description":""}`, imgServer.URL)
+	}))
+	defer falServer.Close()
+
+	var imageRunning atomic.Bool
+	var wg sync.WaitGroup
+	var receivedData []byte
+
+	deps := &tools.ImageGenDeps{
+		SendImage: func(filename string, data io.Reader, caption string) error {
+			var err error
+			receivedData, err = io.ReadAll(data)
+			return err
+		},
+		SendText:        func(string) error { return nil },
+		ImageWg:         &wg,
+		ImageRunning:    &imageRunning,
+		Ctx:             context.Background(),
+		APIKey:          "test-key",
+		Model:           "text-model",
+		EditModel:       "fal-ai/nano-banana-2/edit",
+		SourceImageURLs: []string{"data:image/png;base64,abc123"},
+		SafetyChecker:   true,
+		TimeoutSeconds:  5,
+		BaseURL:         falServer.URL,
+	}
+
+	send := func(string) error { return nil }
+	react := func(string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+
+	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"make it cinematic","mode":"edit","aspect_ratio":"1:1"}`))
+	if err != nil {
+		t.Fatalf("Dispatch() error: %v", err)
+	}
+
+	wg.Wait()
+
+	if requestPath != "/fal-ai/nano-banana-2/edit" {
+		t.Errorf("expected edit endpoint path, got %q", requestPath)
+	}
+	imageURLs, ok := requestBody["image_urls"].([]any)
+	if !ok || len(imageURLs) != 1 || imageURLs[0] != "data:image/png;base64,abc123" {
+		t.Fatalf("unexpected image_urls payload: %#v", requestBody["image_urls"])
+	}
+	if requestBody["prompt"] != "make it cinematic" {
+		t.Errorf("expected prompt in request body, got %#v", requestBody["prompt"])
+	}
+	if string(receivedData) != string(imageData) {
+		t.Errorf("expected edited image data %q, got %q", imageData, receivedData)
+	}
+}
+
+func TestImageGenEditModeWithoutSourceImagesReturnsError(t *testing.T) {
+	var imageRunning atomic.Bool
+	var wg sync.WaitGroup
+	deps := &tools.ImageGenDeps{
+		SendImage:      func(string, io.Reader, string) error { return nil },
+		SendText:       func(string) error { return nil },
+		ImageWg:        &wg,
+		ImageRunning:   &imageRunning,
+		Ctx:            context.Background(),
+		APIKey:         "test-key",
+		Model:          "text-model",
+		EditModel:      "fal-ai/nano-banana-2/edit",
+		SafetyChecker:  true,
+		TimeoutSeconds: 5,
+	}
+
+	send := func(string) error { return nil }
+	react := func(string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+
+	result, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"make it cinematic","mode":"edit"}`))
+	if err != nil {
+		t.Fatalf("Dispatch() error: %v", err)
+	}
+
+	if !strings.Contains(result, "requires an attached or replied-to image") {
+		t.Errorf("expected missing source image message, got %q", result)
+	}
+	if r.ImageGenCalled {
+		t.Error("ImageGenCalled should be false when edit mode has no source images")
+	}
+	if imageRunning.Load() {
+		t.Error("ImageRunning should not be set when edit mode has no source images")
+	}
+}
