@@ -63,6 +63,7 @@ func (t *imageGenTool) Parameters() json.RawMessage {
 			"prompt": {"type": "string", "description": "A detailed English prompt describing the image to generate."},
 			"mode": {"type": "string", "description": "Use edit when modifying attached or replied-to source images; otherwise use generate. Options: generate, edit."},
 			"aspect_ratio": {"type": "string", "description": "Image aspect ratio. Options: auto, 21:9, 16:9, 3:2, 4:3, 5:4, 1:1, 4:5, 3:4, 2:3, 9:16. Default: auto."},
+			"reference_image_ids": {"type": "array", "items": {"type": "string"}, "description": "IDs returned by visual_memory_recall for remembered visual references to use as source images."},
 			"image_size": {"type": "string", "description": "Deprecated legacy aspect ratio; accepted for backwards compatibility."}
 		},
 		"required": ["prompt"]

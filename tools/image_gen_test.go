@@ -84,6 +84,61 @@ func TestImageGenCalledFlagSetOnSuccessfulCAS(t *testing.T) {
 	wg.Wait()
 }
 
+func TestImageGenDefinitionAdvertisesReferenceImageIDs(t *testing.T) {
+	var imageRunning atomic.Bool
+	var wg sync.WaitGroup
+	deps := &tools.ImageGenDeps{
+		SendImage:      func(string, io.Reader, string) error { return nil },
+		SendText:       func(string) error { return nil },
+		ImageWg:        &wg,
+		ImageRunning:   &imageRunning,
+		Ctx:            context.Background(),
+		APIKey:         "test-key",
+		Model:          "test-model",
+		SafetyChecker:  true,
+		TimeoutSeconds: 5,
+	}
+
+	send := func(string) error { return nil }
+	react := func(string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+
+	var generateImageParams json.RawMessage
+	for _, def := range r.Definitions() {
+		if def.Function.Name == "generate_image" {
+			generateImageParams = def.Function.Parameters
+			break
+		}
+	}
+	if generateImageParams == nil {
+		t.Fatal("generate_image definition not found")
+	}
+
+	var schema struct {
+		Properties map[string]struct {
+			Type        string `json:"type"`
+			Description string `json:"description"`
+			Items       *struct {
+				Type string `json:"type"`
+			} `json:"items"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(generateImageParams, &schema); err != nil {
+		t.Fatalf("unmarshal generate_image parameters: %v", err)
+	}
+
+	property, ok := schema.Properties["reference_image_ids"]
+	if !ok {
+		t.Fatal("generate_image schema should expose reference_image_ids")
+	}
+	if property.Type != "array" {
+		t.Fatalf("reference_image_ids type = %q, want array", property.Type)
+	}
+	if property.Items == nil || property.Items.Type != "string" {
+		t.Fatalf("reference_image_ids items = %#v, want string items", property.Items)
+	}
+}
+
 func TestImageGenCASRejectedWhenAlreadyRunning(t *testing.T) {
 	var imageRunning atomic.Bool
 	imageRunning.Store(true)
