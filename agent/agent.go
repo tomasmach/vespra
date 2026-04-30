@@ -209,6 +209,7 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 }
 
 const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
+const maxImageEditSourceImages = 14
 
 // internalTurnMaxIter caps LLM completion round-trips for system-generated turns (e.g. web search
 // results). Each iteration may produce multiple tool calls. Assumes at most one web_fetch call per
@@ -332,6 +333,50 @@ func downloadImageAsDataURL(ctx context.Context, client *http.Client, a *discord
 		ct = "image/jpeg"
 	}
 	return downloadURLAsDataURL(ctx, client, a.URL, ct)
+}
+
+// collectImageDataURLs downloads image attachments from a message and its
+// referenced message for use as fal.ai edit inputs.
+func collectImageDataURLs(ctx context.Context, client *http.Client, msg *discordgo.Message) []string {
+	if msg == nil {
+		return nil
+	}
+	var urls []string
+	collect := func(attachments []*discordgo.MessageAttachment) {
+		for _, a := range attachments {
+			if len(urls) >= maxImageEditSourceImages {
+				return
+			}
+			if !strings.HasPrefix(a.ContentType, "image/") {
+				continue
+			}
+			dataURL, err := downloadImageAsDataURL(ctx, client, a)
+			if err != nil {
+				slog.Warn("failed to download image edit source, skipping", "error", err, "url", a.URL)
+				continue
+			}
+			urls = append(urls, dataURL)
+		}
+	}
+	collect(msg.Attachments)
+	if msg.ReferencedMessage != nil {
+		collect(msg.ReferencedMessage.Attachments)
+	}
+	return urls
+}
+
+func collectImageDataURLsFromMessages(ctx context.Context, client *http.Client, msgs []*discordgo.MessageCreate) []string {
+	var urls []string
+	for _, m := range msgs {
+		if len(urls) >= maxImageEditSourceImages {
+			return urls
+		}
+		urls = append(urls, collectImageDataURLs(ctx, client, m.Message)...)
+		if len(urls) > maxImageEditSourceImages {
+			urls = urls[:maxImageEditSourceImages]
+		}
+	}
+	return urls
 }
 
 // sendAllowed checks whether sending a message is within the configured rate
@@ -724,7 +769,11 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn), cfg.Agent.MaxReplyParts)
+	var sourceImageURLs []string
+	if a.imageGenConfigured(cfg) {
+		sourceImageURLs = collectImageDataURLs(ctx, a.httpClient, msg.Message)
+	}
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn, sourceImageURLs), cfg.Agent.MaxReplyParts)
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	a.annotateAndStripMedia(ctx, cfg, &userMsg)
@@ -909,7 +958,11 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn), cfg.Agent.MaxReplyParts)
+	var sourceImageURLs []string
+	if a.imageGenConfigured(cfg) {
+		sourceImageURLs = collectImageDataURLsFromMessages(ctx, a.httpClient, msgs)
+	}
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs), cfg.Agent.MaxReplyParts)
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 	a.annotateAndStripMedia(ctx, cfg, &combinedUserMsg)
@@ -1238,12 +1291,23 @@ func (a *ChannelAgent) makeSendImageFn(channelID string) tools.SendImageFunc {
 	}
 }
 
-func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tools.SendFunc) *tools.ImageGenDeps {
+func (a *ChannelAgent) imageGenConfigured(cfg *config.Config) bool {
+	if cfg.Tools.Image.APIKey != "" {
+		return true
+	}
+	if agentCfg := a.currentAgentConfig(); agentCfg != nil && agentCfg.Image.APIKey != "" {
+		return true
+	}
+	return false
+}
+
+func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tools.SendFunc, sourceImageURLs []string) *tools.ImageGenDeps {
 	cfg := a.cfgStore.Get()
 
 	// Resolve per-agent overrides over global config.
 	apiKey := cfg.Tools.Image.APIKey
 	model := cfg.Tools.Image.Model
+	editModel := cfg.Tools.Image.EditModel
 	resolution := cfg.Tools.Image.Resolution
 	safetyChecker := true
 	if cfg.Tools.Image.EnableSafetyChecker != nil {
@@ -1255,6 +1319,9 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 		}
 		if agentCfg.Image.Model != "" {
 			model = agentCfg.Image.Model
+		}
+		if agentCfg.Image.EditModel != "" {
+			editModel = agentCfg.Image.EditModel
 		}
 		if agentCfg.Image.Resolution != "" {
 			resolution = agentCfg.Image.Resolution
@@ -1268,16 +1335,18 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 		return nil
 	}
 	return &tools.ImageGenDeps{
-		SendImage:      sendImage,
-		SendText:       sendText,
-		ImageWg:        &a.imageWg,
-		ImageRunning:   &a.imageRunning,
-		Ctx:            a.ctx,
-		APIKey:         apiKey,
-		Model:          model,
-		Resolution:     resolution,
-		SafetyChecker:  safetyChecker,
-		TimeoutSeconds: cfg.Tools.Image.TimeoutSeconds,
+		SendImage:       sendImage,
+		SendText:        sendText,
+		ImageWg:         &a.imageWg,
+		ImageRunning:    &a.imageRunning,
+		Ctx:             a.ctx,
+		APIKey:          apiKey,
+		Model:           model,
+		EditModel:       editModel,
+		SourceImageURLs: sourceImageURLs,
+		Resolution:      resolution,
+		SafetyChecker:   safetyChecker,
+		TimeoutSeconds:  cfg.Tools.Image.TimeoutSeconds,
 	}
 }
 

@@ -157,6 +157,7 @@ CREATE TABLE embeddings (
 | `reply` | Send a text message to the channel |
 | `react` | Add an emoji reaction to a message |
 | `web_search` | Search the web (disabled if no `tools.web_search_key` configured) |
+| `generate_image` | Generate images from prompts or edit attached/replied-to images via fal.ai |
 
 ---
 
@@ -190,7 +191,10 @@ default_mode = "smart"      # smart | mention | all | none
 web_search_key = "..."      # optional; web_search disabled if absent
 
 [tools.image]
-timeout_seconds = 120       # image generation timeout
+api_key = "..."             # optional; enables fal.ai image generation/editing
+model = "fal-ai/flux/schnell"
+edit_model = "fal-ai/nano-banana-2/edit"
+timeout_seconds = 120       # image generation/editing timeout
 
 [web]
 addr = ":8080"              # management UI address (default :8080)

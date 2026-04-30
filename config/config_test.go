@@ -75,6 +75,43 @@ db_path = "/original/path/memory.db"
 	}
 }
 
+func TestLoadImageEditModelDefaultAndAgentOverride(t *testing.T) {
+	const minimalTOML = `
+[bot]
+token = "test-token"
+
+[llm]
+openrouter_key = "test-key"
+
+[[agents]]
+id = "agent-1"
+server_id = "server-1"
+
+[agents.image]
+edit_model = "custom/edit-model"
+`
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgFile, []byte(minimalTOML), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Tools.Image.EditModel != "fal-ai/nano-banana-2/edit" {
+		t.Errorf("Tools.Image.EditModel = %q, want default fal-ai/nano-banana-2/edit", cfg.Tools.Image.EditModel)
+	}
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(cfg.Agents))
+	}
+	if cfg.Agents[0].Image.EditModel != "custom/edit-model" {
+		t.Errorf("Agents[0].Image.EditModel = %q, want custom/edit-model", cfg.Agents[0].Image.EditModel)
+	}
+}
+
 func TestResolveLanguage(t *testing.T) {
 	cfg := &config.Config{
 		Agents: []config.AgentConfig{
