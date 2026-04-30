@@ -63,6 +63,9 @@ export const API = {
   listMemories:  (params)        => get('/api/memories?' + qs(params)),
   deleteMemory:  (id, sid)       => del(`/api/memories/${enc(id)}?server_id=${enc(sid)}`),
   patchMemory:   (id, sid, data) => patch(`/api/memories/${enc(id)}?server_id=${enc(sid)}`, data),
+  listVisualMemories: (params)   => get('/api/visual-memories?' + qs(params)),
+  visualMemoryImageURL: (id, sid)=> `/api/visual-memories/${enc(id)}/image?server_id=${enc(sid)}`,
+  deleteVisualMemory: (id, sid)  => del(`/api/visual-memories/${enc(id)}?server_id=${enc(sid)}`),
 
   // Logs & Conversations
   getLogs:          (id, params)  => get(`/api/agents/${enc(id)}/logs?${qs(params)}`),

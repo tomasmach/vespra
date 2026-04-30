@@ -2,6 +2,7 @@ package web_test
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,8 +12,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bwmarrin/discordgo"
 	"github.com/tomasmach/vespra/agent"
 	"github.com/tomasmach/vespra/config"
+	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/memory"
 	"github.com/tomasmach/vespra/web"
 )
 
@@ -39,6 +43,97 @@ func newTestServerWithAgents(t *testing.T, agentsTOML string) (*httptest.Server,
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, dir
+}
+
+func newTestServerWithVisualMemory(t *testing.T, serverID string) (*httptest.Server, *memory.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	cfgText := "[bot]\ntoken=\"x\"\n[llm]\nopenrouter_key=\"test\"\nembedding_model=\"test-embed\"\nbase_url=\"http://127.0.0.1\"\n[memory]\ndb_path=\"" + filepath.ToSlash(filepath.Join(dir, "dm.db")) + "\"\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgStore, err := config.NewStore(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llmClient := llm.New(cfgStore)
+	mem, err := memory.New(&config.MemoryConfig{DBPath: filepath.Join(dir, "agent.db")}, llmClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, err := agent.NewRouter(t.Context(), cfgStore, llmClient, &discordgo.Session{}, map[string]*agent.AgentResources{
+		serverID: {Config: &config.AgentConfig{ServerID: serverID}, Memory: mem, Session: &discordgo.Session{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := web.New(":0", cfgStore, cfgPath, router, nil)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return ts, mem
+}
+
+func TestVisualMemoryEndpointsListThumbnailAndDelete(t *testing.T) {
+	ts, mem := newTestServerWithVisualMemory(t, "srv1")
+	result, err := mem.SaveVisual(t.Context(), memory.VisualSaveOptions{
+		Label:       "Alice",
+		Description: "Alice in a red jacket",
+		ServerID:    "srv1",
+		ContentType: "image/png",
+		Data:        []byte("png-data"),
+	})
+	if err != nil {
+		t.Fatalf("SaveVisual() error: %v", err)
+	}
+
+	resp, err := http.Get(ts.URL + "/api/visual-memories?server_id=srv1&q=alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		VisualMemories []memory.VisualMemoryRow `json:"visual_memories"`
+		Total          int                      `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list visual memories: expected 200, got %d", resp.StatusCode)
+	}
+	if list.Total != 1 || len(list.VisualMemories) != 1 || list.VisualMemories[0].ID != result.ID {
+		t.Fatalf("unexpected visual memory list: %+v", list)
+	}
+
+	resp, err = http.Get(ts.URL + "/api/visual-memories/" + result.ID + "/image?server_id=srv1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("thumbnail: expected 200, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
+		t.Fatalf("expected image/png content type, got %q", ct)
+	}
+	if string(body) != "png-data" {
+		t.Fatalf("unexpected thumbnail body %q", body)
+	}
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/visual-memories/"+result.ID+"?server_id=srv1", nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete visual memory: expected 204, got %d", resp.StatusCode)
+	}
+	if _, err := mem.GetVisual(t.Context(), "srv1", result.ID); !errors.Is(err, memory.ErrMemoryNotFound) {
+		t.Fatalf("expected deleted visual memory to be hidden, got %v", err)
+	}
 }
 
 func TestAgentSoulDirTraversal(t *testing.T) {

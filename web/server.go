@@ -56,6 +56,9 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("GET /api/memories", s.handleListMemories)
 	mux.HandleFunc("DELETE /api/memories/{id}", s.handleDeleteMemory)
 	mux.HandleFunc("PATCH /api/memories/{id}", s.handlePatchMemory)
+	mux.HandleFunc("GET /api/visual-memories", s.handleListVisualMemories)
+	mux.HandleFunc("GET /api/visual-memories/{id}/image", s.handleGetVisualMemoryImage)
+	mux.HandleFunc("DELETE /api/visual-memories/{id}", s.handleDeleteVisualMemory)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/events", s.handleSSE)
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
@@ -313,6 +316,91 @@ func (s *Server) handlePatchMemory(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Error("update memory content", "error", err, "id", id)
 		http.Error(w, "failed to update memory", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleListVisualMemories(w http.ResponseWriter, r *http.Request) {
+	mem, serverID, ok := s.memoryForRequest(w, r)
+	if !ok {
+		return
+	}
+
+	opts := memory.VisualListOptions{
+		ServerID: serverID,
+		UserID:   r.URL.Query().Get("user_id"),
+		Query:    r.URL.Query().Get("q"),
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		opts.Limit, _ = strconv.Atoi(v)
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		opts.Offset, _ = strconv.Atoi(v)
+	}
+
+	rows, total, err := mem.ListVisual(r.Context(), opts)
+	if err != nil {
+		slog.Error("list visual memories", "error", err)
+		http.Error(w, "failed to list visual memories", http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []memory.VisualMemoryRow{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"visual_memories": rows,
+		"total":           total,
+	})
+}
+
+func (s *Server) handleGetVisualMemoryImage(w http.ResponseWriter, r *http.Request) {
+	mem, serverID, ok := s.memoryForRequest(w, r)
+	if !ok {
+		return
+	}
+
+	row, err := mem.GetVisual(r.Context(), serverID, r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, memory.ErrMemoryNotFound) {
+			http.Error(w, "visual memory not found", http.StatusNotFound)
+			return
+		}
+		slog.Error("get visual memory", "error", err)
+		http.Error(w, "failed to get visual memory", http.StatusInternalServerError)
+		return
+	}
+	f, err := os.Open(row.FilePath)
+	if err != nil {
+		slog.Error("open visual memory file", "error", err, "id", row.ID)
+		http.Error(w, "failed to open visual memory image", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		slog.Error("stat visual memory file", "error", err, "id", row.ID)
+		http.Error(w, "failed to read visual memory image", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", row.ContentType)
+	http.ServeContent(w, r, filepath.Base(row.FilePath), stat.ModTime(), f)
+}
+
+func (s *Server) handleDeleteVisualMemory(w http.ResponseWriter, r *http.Request) {
+	mem, serverID, ok := s.memoryForRequest(w, r)
+	if !ok {
+		return
+	}
+	if err := mem.ForgetVisual(r.Context(), serverID, r.PathValue("id")); err != nil {
+		if errors.Is(err, memory.ErrMemoryNotFound) {
+			http.Error(w, "visual memory not found", http.StatusNotFound)
+			return
+		}
+		slog.Error("forget visual memory", "error", err)
+		http.Error(w, "failed to delete visual memory", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

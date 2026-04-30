@@ -773,7 +773,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if a.imageGenConfigured(cfg) {
 		sourceImageURLs = collectImageDataURLs(ctx, a.httpClient, msg.Message)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn, sourceImageURLs), cfg.Agent.MaxReplyParts)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn, sourceImageURLs, msg.ChannelID, msg.ID), cfg.Agent.MaxReplyParts)
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	a.annotateAndStripMedia(ctx, cfg, &userMsg)
@@ -962,7 +962,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	if a.imageGenConfigured(cfg) {
 		sourceImageURLs = collectImageDataURLsFromMessages(ctx, a.httpClient, msgs)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs), cfg.Agent.MaxReplyParts)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs, lastMsg.ChannelID, lastMsg.ID), cfg.Agent.MaxReplyParts)
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 	a.annotateAndStripMedia(ctx, cfg, &combinedUserMsg)
@@ -1301,7 +1301,7 @@ func (a *ChannelAgent) imageGenConfigured(cfg *config.Config) bool {
 	return false
 }
 
-func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tools.SendFunc, sourceImageURLs []string) *tools.ImageGenDeps {
+func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tools.SendFunc, sourceImageURLs []string, sourceChannelID, sourceMessageID string) *tools.ImageGenDeps {
 	cfg := a.cfgStore.Get()
 
 	// Resolve per-agent overrides over global config.
@@ -1347,6 +1347,10 @@ func (a *ChannelAgent) imageGenDeps(sendImage tools.SendImageFunc, sendText tool
 		Resolution:      resolution,
 		SafetyChecker:   safetyChecker,
 		TimeoutSeconds:  cfg.Tools.Image.TimeoutSeconds,
+		VisualStore:     a.resources.Memory,
+		ServerID:        a.serverID,
+		SourceChannelID: sourceChannelID,
+		SourceMessageID: sourceMessageID,
 	}
 }
 
