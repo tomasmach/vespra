@@ -82,11 +82,7 @@ func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, 
 	}
 	mode := p.Mode
 	if mode == "" {
-		if len(t.deps.SourceImageURLs) > 0 {
-			mode = "edit"
-		} else {
-			mode = "generate"
-		}
+		mode = "generate"
 	}
 	if mode != "generate" && mode != "edit" {
 		return "Error: mode must be either generate or edit", nil

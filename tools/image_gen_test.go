@@ -446,6 +446,73 @@ func TestImageGenSuccess(t *testing.T) {
 	}
 }
 
+func TestImageGenOmittedModeWithSourceImagesDefaultsToGenerate(t *testing.T) {
+	imageData := []byte("generated-image-data")
+
+	imgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imageData)
+	}))
+	defer imgServer.Close()
+
+	var requestPath string
+	var requestBody map[string]any
+	falServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"images":[{"url":"%s/generated.png"}],"has_nsfw_concepts":[false]}`, imgServer.URL)
+	}))
+	defer falServer.Close()
+
+	var imageRunning atomic.Bool
+	var wg sync.WaitGroup
+	var receivedData []byte
+
+	deps := &tools.ImageGenDeps{
+		SendImage: func(filename string, data io.Reader, caption string) error {
+			var err error
+			receivedData, err = io.ReadAll(data)
+			return err
+		},
+		SendText:        func(string) error { return nil },
+		ImageWg:         &wg,
+		ImageRunning:    &imageRunning,
+		Ctx:             context.Background(),
+		APIKey:          "test-key",
+		Model:           "text-model",
+		EditModel:       "fal-ai/nano-banana-2/edit",
+		SourceImageURLs: []string{"data:image/png;base64,abc123"},
+		SafetyChecker:   true,
+		TimeoutSeconds:  5,
+		BaseURL:         falServer.URL,
+	}
+
+	send := func(string) error { return nil }
+	react := func(string) error { return nil }
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+
+	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"a fresh landscape"}`))
+	if err != nil {
+		t.Fatalf("Dispatch() error: %v", err)
+	}
+
+	wg.Wait()
+
+	if requestPath != "/text-model" {
+		t.Errorf("expected generate endpoint path, got %q", requestPath)
+	}
+	if _, ok := requestBody["image_urls"]; ok {
+		t.Fatalf("did not expect source image URLs for omitted mode generation: %#v", requestBody["image_urls"])
+	}
+	if string(receivedData) != string(imageData) {
+		t.Errorf("expected generated image data %q, got %q", imageData, receivedData)
+	}
+}
+
 func TestImageGenEditModeUsesEditModelAndSourceImages(t *testing.T) {
 	imageData := []byte("edited-image-data")
 
