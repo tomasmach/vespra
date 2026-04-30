@@ -7,13 +7,41 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/tomasmach/vespra/config"
+	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/memory"
 	"github.com/tomasmach/vespra/tools"
 )
+
+func newToolTestStore(t *testing.T) *memory.Store {
+	t.Helper()
+	embSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"embedding":[0.1,0.2,0.3,0.4]}]}`)
+	}))
+	t.Cleanup(embSrv.Close)
+
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			OpenRouterKey:         "test",
+			EmbeddingModel:        "test-embed",
+			RequestTimeoutSeconds: 5,
+			BaseURL:               embSrv.URL,
+		},
+		Memory: config.MemoryConfig{DBPath: filepath.Join(t.TempDir(), "memory.db")},
+	}
+	store, err := memory.New(&cfg.Memory, llm.New(config.NewStoreFromConfig(cfg)))
+	if err != nil {
+		t.Fatalf("memory.New() error: %v", err)
+	}
+	return store
+}
 
 func TestImageGenCalledFlagSetOnSuccessfulCAS(t *testing.T) {
 	var imageRunning atomic.Bool
@@ -581,6 +609,162 @@ func TestImageGenEditModeUsesEditModelAndSourceImages(t *testing.T) {
 	}
 	if string(receivedData) != string(imageData) {
 		t.Errorf("expected edited image data %q, got %q", imageData, receivedData)
+	}
+}
+
+func TestVisualMemorySaveToolStoresCurrentSourceImages(t *testing.T) {
+	store := newToolTestStore(t)
+	var imageRunning atomic.Bool
+	var wg sync.WaitGroup
+	deps := &tools.ImageGenDeps{
+		SendImage:       func(string, io.Reader, string) error { return nil },
+		SendText:        func(string) error { return nil },
+		ImageWg:         &wg,
+		ImageRunning:    &imageRunning,
+		Ctx:             context.Background(),
+		APIKey:          "test-key",
+		Model:           "text-model",
+		SourceImageURLs: []string{"data:image/png;base64,YWxpY2U="},
+		SafetyChecker:   true,
+		TimeoutSeconds:  5,
+		VisualStore:     store,
+		ServerID:        "srv1",
+	}
+
+	send := func(string) error { return nil }
+	react := func(string) error { return nil }
+	r := tools.NewDefaultRegistry(store, "srv1", 0, 0, send, react, nil, deps, 2)
+
+	result, err := r.Dispatch(context.Background(), "visual_memory_save", json.RawMessage(`{"label":"Alice","description":"Alice in a red jacket","user_id":"user1"}`))
+	if err != nil {
+		t.Fatalf("Dispatch() error: %v", err)
+	}
+	if !strings.Contains(result, "Visual memory saved") {
+		t.Fatalf("unexpected result: %q", result)
+	}
+
+	rows, total, err := store.ListVisual(context.Background(), memory.VisualListOptions{ServerID: "srv1", Query: "alice", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListVisual() error: %v", err)
+	}
+	if total != 1 || len(rows) != 1 || rows[0].Label != "Alice" {
+		t.Fatalf("expected saved visual memory for Alice, got total=%d rows=%+v", total, rows)
+	}
+}
+
+func TestVisualMemoryRecallToolReturnsReferenceIDs(t *testing.T) {
+	store := newToolTestStore(t)
+	save, err := store.SaveVisual(context.Background(), memory.VisualSaveOptions{
+		Label:       "Alice",
+		Description: "Alice in a red jacket",
+		ServerID:    "srv1",
+		ContentType: "image/png",
+		Data:        []byte("alice"),
+	})
+	if err != nil {
+		t.Fatalf("SaveVisual() error: %v", err)
+	}
+
+	var imageRunning atomic.Bool
+	var wg sync.WaitGroup
+	deps := &tools.ImageGenDeps{
+		SendImage:      func(string, io.Reader, string) error { return nil },
+		SendText:       func(string) error { return nil },
+		ImageWg:        &wg,
+		ImageRunning:   &imageRunning,
+		Ctx:            context.Background(),
+		APIKey:         "test-key",
+		Model:          "text-model",
+		SafetyChecker:  true,
+		TimeoutSeconds: 5,
+		VisualStore:    store,
+		ServerID:       "srv1",
+	}
+
+	send := func(string) error { return nil }
+	react := func(string) error { return nil }
+	r := tools.NewDefaultRegistry(store, "srv1", 0, 0, send, react, nil, deps, 2)
+
+	result, err := r.Dispatch(context.Background(), "visual_memory_recall", json.RawMessage(`{"query":"alice"}`))
+	if err != nil {
+		t.Fatalf("Dispatch() error: %v", err)
+	}
+	if !strings.Contains(result, save.ID) || !strings.Contains(result, "Alice in a red jacket") {
+		t.Fatalf("recall result did not include saved reference: %q", result)
+	}
+}
+
+func TestImageGenUsesStoredReferenceImageIDs(t *testing.T) {
+	store := newToolTestStore(t)
+	save, err := store.SaveVisual(context.Background(), memory.VisualSaveOptions{
+		Label:       "Alice",
+		Description: "Alice in a red jacket",
+		ServerID:    "srv1",
+		ContentType: "image/png",
+		Data:        []byte("alice-reference"),
+	})
+	if err != nil {
+		t.Fatalf("SaveVisual() error: %v", err)
+	}
+
+	imageData := []byte("generated-image-data")
+	imgServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imageData)
+	}))
+	defer imgServer.Close()
+
+	var requestPath string
+	var requestBody map[string]any
+	falServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"images":[{"url":"%s/generated.png"}],"has_nsfw_concepts":[false]}`, imgServer.URL)
+	}))
+	defer falServer.Close()
+
+	var imageRunning atomic.Bool
+	var wg sync.WaitGroup
+	deps := &tools.ImageGenDeps{
+		SendImage:      func(string, io.Reader, string) error { return nil },
+		SendText:       func(string) error { return nil },
+		ImageWg:        &wg,
+		ImageRunning:   &imageRunning,
+		Ctx:            context.Background(),
+		APIKey:         "test-key",
+		Model:          "text-model",
+		EditModel:      "fal-ai/nano-banana-2/edit",
+		SafetyChecker:  true,
+		TimeoutSeconds: 5,
+		BaseURL:        falServer.URL,
+		VisualStore:    store,
+		ServerID:       "srv1",
+	}
+
+	send := func(string) error { return nil }
+	react := func(string) error { return nil }
+	r := tools.NewDefaultRegistry(store, "srv1", 0, 0, send, react, nil, deps, 2)
+
+	_, err = r.Dispatch(context.Background(), "generate_image", json.RawMessage(fmt.Sprintf(`{"prompt":"Alice as a detective","reference_image_ids":["%s"]}`, save.ID)))
+	if err != nil {
+		t.Fatalf("Dispatch() error: %v", err)
+	}
+
+	wg.Wait()
+
+	if requestPath != "/fal-ai/nano-banana-2/edit" {
+		t.Errorf("expected edit endpoint for references, got %q", requestPath)
+	}
+	imageURLs, ok := requestBody["image_urls"].([]any)
+	if !ok || len(imageURLs) != 1 {
+		t.Fatalf("expected one reference image URL, got %#v", requestBody["image_urls"])
+	}
+	if got := imageURLs[0].(string); !strings.HasPrefix(got, "data:image/png;base64,") {
+		t.Fatalf("expected stored reference as png data URL, got %q", got)
 	}
 }
 

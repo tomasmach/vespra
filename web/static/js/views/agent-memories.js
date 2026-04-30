@@ -14,6 +14,7 @@ export async function render(container, params) {
   let offset = 0;
   let memories = [];
   let total = 0;
+  let visualMemories = [];
 
   // Resolve server_id from agent
   try {
@@ -64,7 +65,48 @@ export async function render(container, params) {
     searchBar.append(userGroup, queryGroup, searchBtn);
     wrap.appendChild(searchBar);
 
-    // Results
+    if (visualMemories.length > 0) {
+      wrap.appendChild(el('h2', { className: 'section-title' }, 'Visual References'));
+      const visualGrid = el('div', { className: 'card-grid', style: { marginBottom: 'var(--sp-6)' } });
+      for (const visual of visualMemories) {
+        const visualId = visual.id || visual.ID || '';
+        const label = visual.label || visual.Label || '';
+        const description = visual.description || visual.Description || '';
+        const createdAt = visual.created_at || visual.CreatedAt || '';
+        const userId = visual.user_id || visual.UserID || '';
+
+        const card = el('div', { className: 'card memory-card visual-memory-card' });
+        const img = el('img', {
+          className: 'visual-memory-thumb',
+          src: API.visualMemoryImageURL(visualId, serverId),
+          alt: label ? `Reference image for ${label}` : 'Reference image',
+          loading: 'lazy',
+        });
+        card.appendChild(img);
+
+        card.appendChild(el('div', { className: 'memory-content' }, label || 'Untitled reference'));
+        if (description) {
+          card.appendChild(el('div', { className: 'memory-meta' }, el('span', {}, description)));
+        }
+
+        const meta = el('div', { className: 'memory-meta' });
+        if (userId) meta.appendChild(el('span', {}, 'user: ' + userId));
+        if (createdAt) meta.appendChild(el('span', { title: new Date(createdAt).toLocaleString() }, timeAgo(createdAt)));
+        card.appendChild(meta);
+
+        const actions = el('div', { className: 'memory-actions' },
+          el('button', {
+            className: 'btn btn-ghost btn-sm btn-danger',
+            onClick: () => handleVisualDelete({ id: visualId, label }),
+          }, 'Delete'),
+        );
+        card.appendChild(actions);
+        visualGrid.appendChild(card);
+      }
+      wrap.appendChild(visualGrid);
+    }
+
+    wrap.appendChild(el('h2', { className: 'section-title' }, 'Text Memories'));
     if (memories.length === 0) {
       wrap.appendChild(emptyState('~', 'No memories found', total === 0 ? 'This agent has no stored memories yet.' : 'Try a different search.'));
     } else {
@@ -168,10 +210,14 @@ export async function render(container, params) {
       const data = await API.listMemories(params);
       memories = data.memories || [];
       total = data.total || 0;
+
+      const visualData = await API.listVisualMemories(params);
+      visualMemories = visualData.visual_memories || [];
     } catch (err) {
       toast('Failed to load memories: ' + err.message, 'error');
       memories = [];
       total = 0;
+      visualMemories = [];
     }
   }
 
@@ -224,6 +270,19 @@ export async function render(container, params) {
       renderView();
     } catch (err) {
       toast('Failed to delete memory: ' + err.message, 'error');
+    }
+  }
+
+  async function handleVisualDelete(mem) {
+    const ok = await confirmDialog('Delete Visual Reference', `Delete the visual reference "${mem.label || mem.id}"?`);
+    if (!ok) return;
+    try {
+      await API.deleteVisualMemory(mem.id, serverId);
+      toast('Visual reference deleted', 'success');
+      await fetchMemories();
+      renderView();
+    } catch (err) {
+      toast('Failed to delete visual reference: ' + err.message, 'error');
     }
   }
 

@@ -3,14 +3,19 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tomasmach/vespra/memory"
 )
 
 // SendImageFunc sends an image file attachment to the Discord channel.
@@ -32,6 +37,10 @@ type ImageGenDeps struct {
 	TimeoutSeconds  int
 	Resolution      string
 	BaseURL         string // for testing; overrides https://fal.run
+	VisualStore     *memory.Store
+	ServerID        string
+	SourceChannelID string
+	SourceMessageID string
 }
 
 type imageGenTool struct {
@@ -62,10 +71,11 @@ func (t *imageGenTool) Parameters() json.RawMessage {
 
 func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		Prompt      string `json:"prompt"`
-		Mode        string `json:"mode"`
-		AspectRatio string `json:"aspect_ratio"`
-		ImageSize   string `json:"image_size"`
+		Prompt       string   `json:"prompt"`
+		Mode         string   `json:"mode"`
+		AspectRatio  string   `json:"aspect_ratio"`
+		ImageSize    string   `json:"image_size"`
+		ReferenceIDs []string `json:"reference_image_ids"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", err
@@ -88,6 +98,19 @@ func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, 
 		return "Error: mode must be either generate or edit", nil
 	}
 	sourceImageURLs := t.deps.SourceImageURLs
+	if len(p.ReferenceIDs) > 0 {
+		if t.deps.VisualStore == nil || t.deps.ServerID == "" {
+			return "Remembered image references are not available.", nil
+		}
+		referenceURLs, err := t.referenceImageDataURLs(ctx, p.ReferenceIDs)
+		if err != nil {
+			return fmt.Sprintf("Failed to load remembered image reference: %s", err), nil
+		}
+		sourceImageURLs = append(referenceURLs, sourceImageURLs...)
+		if mode == "generate" {
+			mode = "edit"
+		}
+	}
 	if len(sourceImageURLs) > maxImageEditSourceURLs {
 		sourceImageURLs = sourceImageURLs[:maxImageEditSourceURLs]
 	}
@@ -103,6 +126,36 @@ func (t *imageGenTool) Call(ctx context.Context, args json.RawMessage) (string, 
 	t.deps.ImageWg.Add(1)
 	go t.runGenerate(p.Prompt, aspectRatio, mode, sourceImageURLs)
 	return fmt.Sprintf("Image generation started for prompt: %q — the image will be sent shortly.", p.Prompt), nil
+}
+
+func (t *imageGenTool) referenceImageDataURLs(ctx context.Context, ids []string) ([]string, error) {
+	urls := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		row, err := t.deps.VisualStore.GetVisual(ctx, t.deps.ServerID, id)
+		if err != nil {
+			return nil, err
+		}
+		data, err := os.ReadFile(row.FilePath)
+		if err != nil {
+			return nil, fmt.Errorf("read visual memory %s: %w", id, err)
+		}
+		urls = append(urls, dataURL(row.ContentType, data))
+	}
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("no reference IDs provided")
+	}
+	return urls, nil
+}
+
+func dataURL(contentType string, data []byte) string {
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+	return fmt.Sprintf("data:%s;base64,%s", contentType, base64.StdEncoding.EncodeToString(data))
 }
 
 func legacyImageSizeToAspectRatio(imageSize string) string {

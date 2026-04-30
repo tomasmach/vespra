@@ -19,9 +19,11 @@ import (
 
 // Tool name constants used across packages to avoid stringly-typed checks.
 const (
-	ToolNameWebSearch = "web_search"
-	ToolNameWebFetch  = "web_fetch"
-	ToolNameImageGen  = "generate_image"
+	ToolNameWebSearch          = "web_search"
+	ToolNameWebFetch           = "web_fetch"
+	ToolNameImageGen           = "generate_image"
+	ToolNameVisualMemorySave   = "visual_memory_save"
+	ToolNameVisualMemoryRecall = "visual_memory_recall"
 )
 
 // Tool is the interface every tool must implement.
@@ -502,6 +504,16 @@ func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold flo
 	}
 	if imageGenDeps != nil {
 		r.Register(&imageGenTool{deps: imageGenDeps, imageCalled: &r.ImageGenCalled})
+		if imageGenDeps.VisualStore != nil && imageGenDeps.ServerID != "" {
+			r.Register(&visualMemorySaveTool{
+				store:           imageGenDeps.VisualStore,
+				serverID:        imageGenDeps.ServerID,
+				channelID:       imageGenDeps.SourceChannelID,
+				messageID:       imageGenDeps.SourceMessageID,
+				sourceImageURLs: imageGenDeps.SourceImageURLs,
+			})
+			r.Register(&visualMemoryRecallTool{store: imageGenDeps.VisualStore, serverID: imageGenDeps.ServerID})
+		}
 	}
 	return r
 }
