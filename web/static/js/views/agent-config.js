@@ -214,6 +214,12 @@ export async function render(container, params) {
     value: agentImg.model || '',
     placeholder: 'Leave blank to use global model',
   });
+  const imgEditModelInput = el('input', {
+    className: 'input',
+    type: 'text',
+    value: agentImg.edit_model || '',
+    placeholder: 'Leave blank to use global edit model',
+  });
 
   const agentImgSafetyState = { value: agentImg.enable_safety_checker };
   const agentImgSafetyBtn = el('button', {
@@ -258,6 +264,10 @@ export async function render(container, params) {
           imgModelInput,
         ),
         el('div', { className: 'input-group' },
+          el('label', { className: 'input-label' }, 'Edit Model Override'),
+          imgEditModelInput,
+        ),
+        el('div', { className: 'input-group' },
           el('label', { className: 'input-label' }, 'Safety Checker'),
           agentImgSafetyBtn,
           el('span', { className: 'input-hint' }, 'Inherit = use global setting'),
@@ -276,6 +286,7 @@ export async function render(container, params) {
       try {
         const imgApiKeyVal = imgApiKeyInput.value.trim();
         const imgModelVal = imgModelInput.value.trim();
+        const imgEditModelVal = imgEditModelInput.value.trim();
         const data = {
           server_id: agent.server_id,
           soul_file: agent.soul_file || '',
@@ -288,6 +299,7 @@ export async function render(container, params) {
           image: {
             ...(imgApiKeyVal && { api_key: imgApiKeyVal }),
             ...(imgModelVal && { model: imgModelVal }),
+            ...(imgEditModelVal && { edit_model: imgEditModelVal }),
             ...(agentImgSafetyState.value !== null && agentImgSafetyState.value !== undefined && { enable_safety_checker: agentImgSafetyState.value }),
           },
         };

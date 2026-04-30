@@ -233,6 +233,54 @@ func TestBuildUserMessageReferencedImage(t *testing.T) {
 	}
 }
 
+func TestCollectImageDataURLsIncludesCurrentAndReferencedAttachments(t *testing.T) {
+	currentData := []byte("current image")
+	refData := []byte("referenced image")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/current.png":
+			w.Header().Set("Content-Type", "image/png")
+			w.Write(currentData)
+		case "/ref.jpg":
+			w.Header().Set("Content-Type", "image/jpeg")
+			w.Write(refData)
+		default:
+			t.Fatalf("unexpected image request path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	refMsg := &discordgo.Message{
+		Author: &discordgo.User{Username: "bob"},
+		Attachments: []*discordgo.MessageAttachment{
+			{ContentType: "image/jpeg", URL: srv.URL + "/ref.jpg"},
+			{ContentType: "video/mp4", URL: srv.URL + "/ignored.mp4"},
+		},
+	}
+	m := &discordgo.Message{
+		Content: "edit this",
+		Author:  &discordgo.User{Username: "alice"},
+		Attachments: []*discordgo.MessageAttachment{
+			{ContentType: "image/png", URL: srv.URL + "/current.png"},
+		},
+		ReferencedMessage: refMsg,
+	}
+
+	got := collectImageDataURLs(context.Background(), srv.Client(), m)
+
+	wantCurrent := fmt.Sprintf("data:image/png;base64,%s", base64.StdEncoding.EncodeToString(currentData))
+	wantRef := fmt.Sprintf("data:image/jpeg;base64,%s", base64.StdEncoding.EncodeToString(refData))
+	if len(got) != 2 {
+		t.Fatalf("expected 2 image data URLs, got %d: %#v", len(got), got)
+	}
+	if got[0] != wantCurrent {
+		t.Errorf("first image URL = %q, want %q", got[0], wantCurrent)
+	}
+	if got[1] != wantRef {
+		t.Errorf("second image URL = %q, want %q", got[1], wantRef)
+	}
+}
+
 // msgAt creates a MessageCreate with the given username, content, and timestamp.
 func msgAt(username, content string, ts time.Time) *discordgo.MessageCreate {
 	return &discordgo.MessageCreate{
@@ -1208,8 +1256,8 @@ func TestIsAddressedToBotNameMention(t *testing.T) {
 		{
 			name: "reply to bot in guild",
 			msg: &discordgo.MessageCreate{Message: &discordgo.Message{
-				GuildID: "g1",
-				Content: "yes exactly",
+				GuildID:          "g1",
+				Content:          "yes exactly",
 				MessageReference: &discordgo.MessageReference{MessageID: "ref1"},
 				ReferencedMessage: &discordgo.Message{
 					Author: &discordgo.User{ID: botID},
@@ -1299,4 +1347,3 @@ func TestShouldSendFallback(t *testing.T) {
 		})
 	}
 }
-

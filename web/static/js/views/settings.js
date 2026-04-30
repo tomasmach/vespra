@@ -100,6 +100,12 @@ export async function render(container, params) {
     value: (imageConfig && imageConfig.model) || '',
     placeholder: 'fal-ai/flux/schnell',
   });
+  const imgEditModelInput = el('input', {
+    className: 'input',
+    type: 'text',
+    value: (imageConfig && imageConfig.edit_model) || '',
+    placeholder: 'fal-ai/nano-banana-2/edit',
+  });
 
   // Three states: null (inherit/default), true (enabled), false (disabled)
   // Initialize from current config: null if not set, otherwise the boolean value
@@ -155,6 +161,8 @@ export async function render(container, params) {
         if (keyVal) data.api_key = keyVal;
         const modelVal = imgModelInput.value.trim();
         if (modelVal) data.model = modelVal;
+        const editModelVal = imgEditModelInput.value.trim();
+        if (editModelVal) data.edit_model = editModelVal;
         // Always send enable_safety_checker: null means clear, true/false means set
         data.enable_safety_checker = imgSafetyState.value;
         const timeoutVal = parseInt(imgTimeoutInput.value, 10);
@@ -185,6 +193,11 @@ export async function render(container, params) {
         el('label', { className: 'input-label' }, 'Model'),
         imgModelInput,
         el('span', { className: 'input-hint' }, 'Default: fal-ai/flux/schnell'),
+      ),
+      el('div', { className: 'input-group' },
+        el('label', { className: 'input-label' }, 'Edit Model'),
+        imgEditModelInput,
+        el('span', { className: 'input-hint' }, 'Default: fal-ai/nano-banana-2/edit'),
       ),
       el('div', { style: { display: 'flex', gap: 'var(--sp-6)', alignItems: 'flex-start' } },
         el('div', { className: 'input-group' },

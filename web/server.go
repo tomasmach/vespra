@@ -38,7 +38,7 @@ type Server struct {
 	logStore   *logstore.Store
 	sseSubs    []chan string
 	ssesMu     sync.Mutex
-	writeMu    sync.Mutex  // guards config file writes
+	writeMu    sync.Mutex // guards config file writes
 	httpServer *http.Server
 }
 
@@ -356,6 +356,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	type agentImageView struct {
 		HasAPIKey           bool   `json:"has_api_key"`
 		Model               string `json:"model,omitempty"`
+		EditModel           string `json:"edit_model,omitempty"`
 		EnableSafetyChecker *bool  `json:"enable_safety_checker,omitempty"`
 	}
 	type agentView struct {
@@ -389,6 +390,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			Image: agentImageView{
 				HasAPIKey:           a.Image.APIKey != "",
 				Model:               a.Image.Model,
+				EditModel:           a.Image.EditModel,
 				EnableSafetyChecker: a.Image.EnableSafetyChecker,
 			},
 		}
@@ -1114,6 +1116,7 @@ func (s *Server) handleGetImageConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"has_api_key":           cfg.Tools.Image.APIKey != "",
 		"model":                 cfg.Tools.Image.Model,
+		"edit_model":            cfg.Tools.Image.EditModel,
 		"enable_safety_checker": cfg.Tools.Image.EnableSafetyChecker,
 		"timeout_seconds":       cfg.Tools.Image.TimeoutSeconds,
 	})
@@ -1123,6 +1126,7 @@ func (s *Server) handlePutImageConfig(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		APIKey              string          `json:"api_key"`
 		Model               string          `json:"model"`
+		EditModel           string          `json:"edit_model"`
 		EnableSafetyChecker json.RawMessage `json:"enable_safety_checker"` // null = clear, true/false = set, absent = no change
 		TimeoutSeconds      int             `json:"timeout_seconds"`
 	}
@@ -1148,6 +1152,9 @@ func (s *Server) handlePutImageConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if input.Model != "" {
 			img["model"] = input.Model
+		}
+		if input.EditModel != "" {
+			img["edit_model"] = input.EditModel
 		}
 		if len(input.EnableSafetyChecker) > 0 {
 			if string(input.EnableSafetyChecker) == "null" {
