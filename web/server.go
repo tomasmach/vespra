@@ -80,6 +80,8 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("PUT /api/soul", s.handlePutGlobalSoul)
 	mux.HandleFunc("GET /api/config/image", s.handleGetImageConfig)
 	mux.HandleFunc("PUT /api/config/image", s.handlePutImageConfig)
+	mux.HandleFunc("GET /api/config/bash", s.handleGetBashConfig)
+	mux.HandleFunc("PUT /api/config/bash", s.handlePutBashConfig)
 	sub, _ := fs.Sub(staticFiles, "static")
 	fileServer := http.FileServer(http.FS(sub))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -447,6 +449,11 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		EditModel           string `json:"edit_model,omitempty"`
 		EnableSafetyChecker *bool  `json:"enable_safety_checker,omitempty"`
 	}
+	type agentBashView struct {
+		Enabled        bool `json:"enabled"`
+		TimeoutSeconds int  `json:"timeout_seconds,omitempty"`
+		MaxOutputBytes int  `json:"max_output_bytes,omitempty"`
+	}
 	type agentView struct {
 		ID           string                 `json:"id"`
 		ServerID     string                 `json:"server_id"`
@@ -460,6 +467,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		Channels     []config.ChannelConfig `json:"channels,omitempty"`
 		IgnoreUsers  []string               `json:"ignore_users,omitempty"`
 		Image        agentImageView         `json:"image"`
+		Bash         agentBashView          `json:"bash"`
 	}
 	views := make([]agentView, len(cfg.Agents))
 	for i, a := range cfg.Agents {
@@ -480,6 +488,11 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 				Model:               a.Image.Model,
 				EditModel:           a.Image.EditModel,
 				EnableSafetyChecker: a.Image.EnableSafetyChecker,
+			},
+			Bash: agentBashView{
+				Enabled:        a.Bash.Enabled,
+				TimeoutSeconds: a.Bash.TimeoutSeconds,
+				MaxOutputBytes: a.Bash.MaxOutputBytes,
 			},
 		}
 	}
@@ -1262,6 +1275,114 @@ func (s *Server) handlePutImageConfig(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Error("save image config", "error", err)
+		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetBashConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfgStore.Get()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"has_runner_token":       cfg.Tools.Bash.RunnerToken != "",
+		"runner_url":             cfg.Tools.Bash.RunnerURL,
+		"job_image":              cfg.Tools.Bash.JobImage,
+		"volume_prefix":          cfg.Tools.Bash.VolumePrefix,
+		"egress_network":         cfg.Tools.Bash.EgressNetwork,
+		"timeout_seconds":        cfg.Tools.Bash.TimeoutSeconds,
+		"max_output_bytes":       cfg.Tools.Bash.MaxOutputBytes,
+		"max_command_bytes":      cfg.Tools.Bash.MaxCommandBytes,
+		"global_concurrency":     cfg.Tools.Bash.GlobalConcurrency,
+		"per_server_concurrency": cfg.Tools.Bash.PerServerConcurrency,
+		"per_user_rate_limit":    cfg.Tools.Bash.PerUserRateLimit,
+		"cpus":                   cfg.Tools.Bash.CPUs,
+		"memory":                 cfg.Tools.Bash.Memory,
+		"pids_limit":             cfg.Tools.Bash.PidsLimit,
+	})
+}
+
+func (s *Server) handlePutBashConfig(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		RunnerURL            string `json:"runner_url"`
+		RunnerToken          string `json:"runner_token"`
+		JobImage             string `json:"job_image"`
+		VolumePrefix         string `json:"volume_prefix"`
+		EgressNetwork        string `json:"egress_network"`
+		TimeoutSeconds       int    `json:"timeout_seconds"`
+		MaxOutputBytes       int    `json:"max_output_bytes"`
+		MaxCommandBytes      int    `json:"max_command_bytes"`
+		GlobalConcurrency    int    `json:"global_concurrency"`
+		PerServerConcurrency int    `json:"per_server_concurrency"`
+		PerUserRateLimit     int    `json:"per_user_rate_limit"`
+		CPUs                 string `json:"cpus"`
+		Memory               string `json:"memory"`
+		PidsLimit            int    `json:"pids_limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	err := s.patchConfig(func(raw map[string]any) {
+		tools, _ := raw["tools"].(map[string]any)
+		if tools == nil {
+			tools = make(map[string]any)
+		}
+		bash, _ := tools["bash"].(map[string]any)
+		if bash == nil {
+			bash = make(map[string]any)
+		}
+		if input.RunnerURL != "" {
+			bash["runner_url"] = input.RunnerURL
+		}
+		if input.RunnerToken != "" {
+			bash["runner_token"] = input.RunnerToken
+		}
+		if input.JobImage != "" {
+			bash["job_image"] = input.JobImage
+		}
+		if input.VolumePrefix != "" {
+			bash["volume_prefix"] = input.VolumePrefix
+		}
+		if input.EgressNetwork != "" {
+			bash["egress_network"] = input.EgressNetwork
+		}
+		if input.TimeoutSeconds > 0 {
+			bash["timeout_seconds"] = int64(input.TimeoutSeconds)
+		}
+		if input.MaxOutputBytes > 0 {
+			bash["max_output_bytes"] = int64(input.MaxOutputBytes)
+		}
+		if input.MaxCommandBytes > 0 {
+			bash["max_command_bytes"] = int64(input.MaxCommandBytes)
+		}
+		if input.GlobalConcurrency > 0 {
+			bash["global_concurrency"] = int64(input.GlobalConcurrency)
+		}
+		if input.PerServerConcurrency > 0 {
+			bash["per_server_concurrency"] = int64(input.PerServerConcurrency)
+		}
+		if input.PerUserRateLimit > 0 {
+			bash["per_user_rate_limit"] = int64(input.PerUserRateLimit)
+		}
+		if input.CPUs != "" {
+			bash["cpus"] = input.CPUs
+		}
+		if input.Memory != "" {
+			bash["memory"] = input.Memory
+		}
+		if input.PidsLimit > 0 {
+			bash["pids_limit"] = int64(input.PidsLimit)
+		}
+		tools["bash"] = bash
+		raw["tools"] = tools
+	})
+	if err != nil {
+		slog.Error("save bash config", "error", err)
 		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

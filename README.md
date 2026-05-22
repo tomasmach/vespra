@@ -158,6 +158,7 @@ CREATE TABLE embeddings (
 | `react` | Add an emoji reaction to a message |
 | `web_search` | Search the web (disabled if no `tools.web_search_key` configured) |
 | `generate_image` | Generate images from prompts or edit attached/replied-to images via fal.ai |
+| `bash_exec` | Run a non-interactive command in a per-server Docker sandbox (disabled by default) |
 
 ---
 
@@ -196,6 +197,21 @@ model = "fal-ai/flux/schnell"
 edit_model = "fal-ai/nano-banana-2/edit"
 timeout_seconds = 120       # image generation/editing timeout
 
+[tools.bash]
+runner_url = "http://runnerd:8090"     # required before any agent can enable bash
+runner_token = "..."                   # also set VESPRA_BASH_RUNNER_TOKEN in Docker
+job_image = "vespra-bash-job:latest"
+egress_network = "vespra-bash-egress"  # public-internet-only sandbox network
+timeout_seconds = 30
+max_output_bytes = 32768
+max_command_bytes = 8192
+global_concurrency = 4
+per_server_concurrency = 1
+per_user_rate_limit = 10
+cpus = "0.5"
+memory = "256m"
+pids_limit = 128
+
 [web]
 addr = ":8080"              # management UI address (default :8080)
 
@@ -205,6 +221,9 @@ server_id = "123456789"
 soul_file = "~/.config/vespra/souls/my-server.md"
 response_mode = "mention"
 db_path = "~/.local/share/vespra/my-server.db"   # optional
+
+[agents.bash]
+enabled = true              # opt-in per server; DMs are always disabled
 
 [[agents.channels]]
 channel_id = "111222333"
@@ -217,6 +236,18 @@ token = "..."               # custom bot token (requires restart to apply)
 ```
 
 **Response mode resolution:** channel override → agent override → global default.
+
+### Bash sandbox
+
+`bash_exec` is intentionally disabled unless both global runner settings and `[agents.bash] enabled = true` are configured for a real Discord guild. DMs never receive the tool. Commands run through `vespra-runnerd`, which owns Docker access and creates a fresh job container per command with only that server's persistent `/workspace` volume mounted.
+
+Build the sandbox job image before enabling the tool:
+
+```bash
+docker compose --profile build-images build bash-job-image
+```
+
+The main Vespra container must not receive `/var/run/docker.sock`; only `runnerd` should mount it. The configured `egress_network` should allow public internet egress while blocking access to Vespra's control network, Docker bridge gateways, LAN/private ranges, and metadata IPs.
 
 | Mode | Behavior |
 |------|----------|

@@ -21,6 +21,7 @@ import (
 	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
 	"github.com/tomasmach/vespra/memory"
+	"github.com/tomasmach/vespra/sandbox"
 	"github.com/tomasmach/vespra/soul"
 	"github.com/tomasmach/vespra/tools"
 )
@@ -773,7 +774,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if a.imageGenConfigured(cfg) {
 		sourceImageURLs = collectImageDataURLs(ctx, a.httpClient, msg.Message)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn, sourceImageURLs, msg.ChannelID, msg.ID), cfg.Agent.MaxReplyParts)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.bashDeps(msg.ChannelID, userID, msg.ID), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn, sourceImageURLs, msg.ChannelID, msg.ID), cfg.Agent.MaxReplyParts)
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	a.annotateAndStripMedia(ctx, cfg, &userMsg)
@@ -962,7 +963,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	if a.imageGenConfigured(cfg) {
 		sourceImageURLs = collectImageDataURLsFromMessages(ctx, a.httpClient, msgs)
 	}
-	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs, lastMsg.ChannelID, lastMsg.ID), cfg.Agent.MaxReplyParts)
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.bashDeps(lastMsg.ChannelID, lastAuthorID, lastMsg.ID), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs, lastMsg.ChannelID, lastMsg.ID), cfg.Agent.MaxReplyParts)
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 	a.annotateAndStripMedia(ctx, cfg, &combinedUserMsg)
@@ -1135,6 +1136,9 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
+	if agentCfg := agentConfigForServer(cfg, a.serverID); agentCfg != nil && agentCfg.Bash.Enabled && !strings.HasPrefix(a.serverID, "DM:") {
+		sb.WriteString("\n\n## Bash Tool\nYou may use `bash_exec` when a task genuinely benefits from shell access. It runs non-interactive bash in this Discord server's isolated `/workspace`; files there persist for this server only. Do not try to access host files, Docker, credentials, tokens, `/config`, or `/data`. After running a command, use the result to answer the user clearly.")
+	}
 	if mode == config.ModeSmart {
 		if addressed {
 			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` or `react` tools. Prefer `reply` — only use `react` alone when a reaction is clearly more appropriate than words.")
@@ -1209,8 +1213,12 @@ func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*dis
 // Returns nil for DMs or unconfigured servers.
 func (a *ChannelAgent) currentAgentConfig() *config.AgentConfig {
 	cfg := a.cfgStore.Get()
+	return agentConfigForServer(cfg, a.serverID)
+}
+
+func agentConfigForServer(cfg *config.Config, serverID string) *config.AgentConfig {
 	for i := range cfg.Agents {
-		if cfg.Agents[i].ServerID == a.serverID {
+		if cfg.Agents[i].ServerID == serverID {
 			return &cfg.Agents[i]
 		}
 	}
@@ -1278,6 +1286,45 @@ func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
 		TimeoutSeconds: timeout,
 		SearchProvider: cfg.Tools.Search.Provider,
 		SearchAPIKey:   cfg.Tools.Search.APIKey,
+	}
+}
+
+func (a *ChannelAgent) bashDeps(channelID, userID, messageID string) *tools.BashDeps {
+	cfg := a.cfgStore.Get()
+	agentCfg := a.currentAgentConfig()
+	if agentCfg == nil || !agentCfg.Bash.Enabled || strings.HasPrefix(a.serverID, "DM:") {
+		return nil
+	}
+	if cfg.Tools.Bash.RunnerURL == "" || cfg.Tools.Bash.RunnerToken == "" {
+		a.logger.Warn("bash_exec tool disabled: runner is not configured")
+		return nil
+	}
+	timeout := cfg.Tools.Bash.TimeoutSeconds
+	if agentCfg.Bash.TimeoutSeconds > 0 {
+		timeout = agentCfg.Bash.TimeoutSeconds
+	}
+	maxOutput := cfg.Tools.Bash.MaxOutputBytes
+	if agentCfg.Bash.MaxOutputBytes > 0 {
+		maxOutput = agentCfg.Bash.MaxOutputBytes
+	}
+	return &tools.BashDeps{
+		Runner:               sandbox.NewHTTPRunner(cfg.Tools.Bash.RunnerURL, cfg.Tools.Bash.RunnerToken, nil),
+		ServerID:             a.serverID,
+		ChannelID:            channelID,
+		UserID:               userID,
+		MessageID:            messageID,
+		TimeoutSeconds:       timeout,
+		MaxOutputBytes:       maxOutput,
+		MaxCommandBytes:      cfg.Tools.Bash.MaxCommandBytes,
+		JobImage:             cfg.Tools.Bash.JobImage,
+		VolumePrefix:         cfg.Tools.Bash.VolumePrefix,
+		EgressNetwork:        cfg.Tools.Bash.EgressNetwork,
+		CPUs:                 cfg.Tools.Bash.CPUs,
+		Memory:               cfg.Tools.Bash.Memory,
+		PidsLimit:            cfg.Tools.Bash.PidsLimit,
+		GlobalConcurrency:    cfg.Tools.Bash.GlobalConcurrency,
+		PerServerConcurrency: cfg.Tools.Bash.PerServerConcurrency,
+		PerUserRateLimit:     cfg.Tools.Bash.PerUserRateLimit,
 	}
 }
 
@@ -1569,7 +1616,7 @@ func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, 
 	if directedAtOther {
 		return true
 	}
-	return !reg.WebSearchCalled && !reg.ImageGenCalled
+	return !reg.WebSearchCalled && !reg.ImageGenCalled && !reg.BashCalled
 }
 
 // shouldSendFallback reports whether the error fallback ("I'm having trouble
@@ -1577,7 +1624,7 @@ func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, 
 // but produced no visible output at all — no reply, no image, no reaction, and
 // no plain-text content.
 func shouldSendFallback(internal bool, reg *tools.Registry, hasContent, addressed bool) bool {
-	return !internal && !reg.Replied && !reg.ImageGenCalled && !reg.WebSearchCalled && !reg.Reacted && !hasContent && addressed
+	return !internal && !reg.Replied && !reg.ImageGenCalled && !reg.WebSearchCalled && !reg.BashCalled && !reg.Reacted && !hasContent && addressed
 }
 
 // runMemoryExtraction launches a background goroutine that reviews recent history

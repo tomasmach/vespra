@@ -112,6 +112,77 @@ edit_model = "custom/edit-model"
 	}
 }
 
+func TestLoadBashDefaultsAndAgentEnablement(t *testing.T) {
+	const toml = `
+[bot]
+token = "test-token"
+
+[llm]
+openrouter_key = "test-key"
+
+[tools.bash]
+runner_url = "http://runnerd:8090"
+runner_token = "runner-token"
+
+[[agents]]
+id = "agent-1"
+server_id = "server-1"
+
+[agents.bash]
+enabled = true
+timeout_seconds = 10
+max_output_bytes = 1024
+`
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgFile, []byte(toml), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Tools.Bash.JobImage != "vespra-bash-job:latest" {
+		t.Errorf("Tools.Bash.JobImage = %q", cfg.Tools.Bash.JobImage)
+	}
+	if cfg.Tools.Bash.EgressNetwork != "vespra-bash-egress" {
+		t.Errorf("Tools.Bash.EgressNetwork = %q", cfg.Tools.Bash.EgressNetwork)
+	}
+	if !cfg.Agents[0].Bash.Enabled {
+		t.Fatal("agent bash should be enabled")
+	}
+	if cfg.Agents[0].Bash.TimeoutSeconds != 10 {
+		t.Errorf("agent bash timeout = %d, want 10", cfg.Agents[0].Bash.TimeoutSeconds)
+	}
+}
+
+func TestLoadBashEnabledRequiresRunner(t *testing.T) {
+	const toml = `
+[bot]
+token = "test-token"
+
+[llm]
+openrouter_key = "test-key"
+
+[[agents]]
+id = "agent-1"
+server_id = "server-1"
+
+[agents.bash]
+enabled = true
+`
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgFile, []byte(toml), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	if _, err := config.Load(cfgFile); err == nil {
+		t.Fatal("Load() should fail when bash is enabled without runner config")
+	}
+}
+
 func TestResolveLanguage(t *testing.T) {
 	cfg := &config.Config{
 		Agents: []config.AgentConfig{

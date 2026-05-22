@@ -94,6 +94,7 @@ type ToolsConfig struct {
 	WebTimeoutSeconds int          `toml:"web_timeout_seconds"`
 	Search            SearchConfig `toml:"search"`
 	Image             ImageConfig  `toml:"image"`
+	Bash              BashConfig   `toml:"bash"`
 }
 
 type ImageConfig struct {
@@ -111,6 +112,25 @@ type SearchConfig struct {
 	Timeout  int    `toml:"timeout_seconds"` // default 30
 }
 
+// BashConfig holds global defaults for the bash_exec tool and runner service.
+// The tool is still disabled unless an agent opts in with [agents.bash].
+type BashConfig struct {
+	RunnerURL            string `toml:"runner_url"`
+	RunnerToken          string `toml:"runner_token" json:"-"`
+	JobImage             string `toml:"job_image"`
+	VolumePrefix         string `toml:"volume_prefix"`
+	EgressNetwork        string `toml:"egress_network"`
+	TimeoutSeconds       int    `toml:"timeout_seconds"`
+	MaxOutputBytes       int    `toml:"max_output_bytes"`
+	MaxCommandBytes      int    `toml:"max_command_bytes"`
+	GlobalConcurrency    int    `toml:"global_concurrency"`
+	PerServerConcurrency int    `toml:"per_server_concurrency"`
+	PerUserRateLimit     int    `toml:"per_user_rate_limit"`
+	CPUs                 string `toml:"cpus"`
+	Memory               string `toml:"memory"`
+	PidsLimit            int    `toml:"pids_limit"`
+}
+
 type AgentConfig struct {
 	ID           string           `toml:"id" json:"id"`
 	ServerID     string           `toml:"server_id" json:"server_id"`
@@ -124,6 +144,7 @@ type AgentConfig struct {
 	IgnoreUsers  []string         `toml:"ignore_users,omitempty" json:"ignore_users,omitempty"`
 	Channels     []ChannelConfig  `toml:"channels" json:"channels,omitempty"`
 	Image        AgentImageConfig `toml:"image" json:"image,omitempty"`
+	Bash         AgentBashConfig  `toml:"bash" json:"bash,omitempty"`
 }
 
 // AgentImageConfig holds per-agent image generation overrides.
@@ -134,6 +155,14 @@ type AgentImageConfig struct {
 	EditModel           string `toml:"edit_model" json:"edit_model,omitempty"`
 	Resolution          string `toml:"resolution" json:"resolution,omitempty"`
 	EnableSafetyChecker *bool  `toml:"enable_safety_checker" json:"enable_safety_checker,omitempty"`
+}
+
+// AgentBashConfig enables bash access for a single Discord server and lets that
+// server choose stricter limits than the global [tools.bash] defaults.
+type AgentBashConfig struct {
+	Enabled        bool `toml:"enabled" json:"enabled,omitempty"`
+	TimeoutSeconds int  `toml:"timeout_seconds" json:"timeout_seconds,omitempty"`
+	MaxOutputBytes int  `toml:"max_output_bytes" json:"max_output_bytes,omitempty"`
 }
 
 // ResolveDBPath returns the DB path for this agent.
@@ -193,6 +222,14 @@ func Load(path string) (*Config, error) {
 		if cfg.Tools.Search.Provider == "" || cfg.Tools.Search.Provider == "glm" {
 			cfg.Tools.Search.Provider = "brave"
 		}
+	}
+	if v := os.Getenv("VESPRA_BASH_RUNNER_URL"); v != "" {
+		cfg.Tools.Bash.RunnerURL = v
+		slog.Info("bash runner URL overridden by env var", "VESPRA_BASH_RUNNER_URL", v)
+	}
+	if v := os.Getenv("VESPRA_BASH_RUNNER_TOKEN"); v != "" {
+		cfg.Tools.Bash.RunnerToken = v
+		slog.Info("bash runner token overridden by env var", "VESPRA_BASH_RUNNER_TOKEN", "***")
 	}
 
 	// Apply defaults
@@ -268,6 +305,7 @@ func Load(path string) (*Config, error) {
 	if cfg.Tools.Image.TimeoutSeconds <= 0 {
 		cfg.Tools.Image.TimeoutSeconds = 120
 	}
+	applyBashDefaults(&cfg.Tools.Bash)
 	if cfg.Response.DefaultMode == "" {
 		cfg.Response.DefaultMode = ModeSmart
 	}
@@ -283,6 +321,9 @@ func Load(path string) (*Config, error) {
 	// Validate response mode values
 	if !ValidModes[cfg.Response.DefaultMode] {
 		return nil, fmt.Errorf("response.default_mode %q is invalid (must be smart, mention, all, or none)", cfg.Response.DefaultMode)
+	}
+	if err := validateBashConfig(cfg.Tools.Bash); err != nil {
+		return nil, err
 	}
 	validProviders := map[string]bool{"openrouter": true, "glm": true, "fireworks": true}
 	for _, agent := range cfg.Agents {
@@ -300,6 +341,29 @@ func Load(path string) (*Config, error) {
 		}
 		if agent.Provider == "fireworks" && cfg.LLM.FireworksKey == "" {
 			return nil, fmt.Errorf("agent %s uses provider %q but llm.fireworks_key is not configured", agent.ID, agent.Provider)
+		}
+		if agent.Bash.Enabled {
+			if strings.HasPrefix(agent.ServerID, "DM:") {
+				return nil, fmt.Errorf("agent %s enables bash for a DM server_id; bash is only available for Discord guilds", agent.ID)
+			}
+			if cfg.Tools.Bash.RunnerURL == "" {
+				return nil, fmt.Errorf("agent %s enables bash but tools.bash.runner_url is not configured", agent.ID)
+			}
+			if cfg.Tools.Bash.RunnerToken == "" {
+				return nil, fmt.Errorf("agent %s enables bash but tools.bash.runner_token is not configured", agent.ID)
+			}
+			if agent.Bash.TimeoutSeconds < 0 {
+				return nil, fmt.Errorf("agent %s bash.timeout_seconds (%d) must not be negative", agent.ID, agent.Bash.TimeoutSeconds)
+			}
+			if agent.Bash.MaxOutputBytes < 0 {
+				return nil, fmt.Errorf("agent %s bash.max_output_bytes (%d) must not be negative", agent.ID, agent.Bash.MaxOutputBytes)
+			}
+			if agent.Bash.TimeoutSeconds > cfg.Tools.Bash.TimeoutSeconds {
+				return nil, fmt.Errorf("agent %s bash.timeout_seconds (%d) must not exceed tools.bash.timeout_seconds (%d)", agent.ID, agent.Bash.TimeoutSeconds, cfg.Tools.Bash.TimeoutSeconds)
+			}
+			if agent.Bash.MaxOutputBytes > cfg.Tools.Bash.MaxOutputBytes {
+				return nil, fmt.Errorf("agent %s bash.max_output_bytes (%d) must not exceed tools.bash.max_output_bytes (%d)", agent.ID, agent.Bash.MaxOutputBytes, cfg.Tools.Bash.MaxOutputBytes)
+			}
 		}
 		for _, ch := range agent.Channels {
 			if ch.ResponseMode != "" && !ValidModes[ch.ResponseMode] {
@@ -322,6 +386,70 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func applyBashDefaults(cfg *BashConfig) {
+	if cfg.JobImage == "" {
+		cfg.JobImage = "vespra-bash-job:latest"
+	}
+	if cfg.VolumePrefix == "" {
+		cfg.VolumePrefix = "vespra-bash-workspace"
+	}
+	if cfg.EgressNetwork == "" {
+		cfg.EgressNetwork = "vespra-bash-egress"
+	}
+	if cfg.TimeoutSeconds <= 0 {
+		cfg.TimeoutSeconds = 30
+	}
+	if cfg.MaxOutputBytes <= 0 {
+		cfg.MaxOutputBytes = 32 * 1024
+	}
+	if cfg.MaxCommandBytes <= 0 {
+		cfg.MaxCommandBytes = 8192
+	}
+	if cfg.GlobalConcurrency <= 0 {
+		cfg.GlobalConcurrency = 4
+	}
+	if cfg.PerServerConcurrency <= 0 {
+		cfg.PerServerConcurrency = 1
+	}
+	if cfg.PerUserRateLimit <= 0 {
+		cfg.PerUserRateLimit = 10
+	}
+	if cfg.CPUs == "" {
+		cfg.CPUs = "0.5"
+	}
+	if cfg.Memory == "" {
+		cfg.Memory = "256m"
+	}
+	if cfg.PidsLimit <= 0 {
+		cfg.PidsLimit = 128
+	}
+}
+
+func validateBashConfig(cfg BashConfig) error {
+	if cfg.RunnerURL != "" && cfg.RunnerToken == "" {
+		return fmt.Errorf("tools.bash.runner_token is required when runner_url is configured")
+	}
+	if strings.ContainsAny(cfg.CPUs, " \t\r\n") {
+		return fmt.Errorf("tools.bash.cpus must not contain whitespace")
+	}
+	if strings.ContainsAny(cfg.Memory, " \t\r\n") {
+		return fmt.Errorf("tools.bash.memory must not contain whitespace")
+	}
+	if cfg.EgressNetwork == "host" {
+		return fmt.Errorf("tools.bash.egress_network must not be host")
+	}
+	if cfg.TimeoutSeconds <= 0 {
+		return fmt.Errorf("tools.bash.timeout_seconds must be positive")
+	}
+	if cfg.MaxOutputBytes <= 0 {
+		return fmt.Errorf("tools.bash.max_output_bytes must be positive")
+	}
+	if cfg.MaxCommandBytes <= 0 {
+		return fmt.Errorf("tools.bash.max_command_bytes must be positive")
+	}
+	return nil
 }
 
 // Resolve returns the config file path from VESPRA_CONFIG env var,
