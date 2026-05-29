@@ -132,9 +132,19 @@ export async function render(container, params) {
       ),
     ),
   );
-  wrap.appendChild(storageSection);
+	  wrap.appendChild(storageSection);
 
-  // ── Create button ──
+	  // ── Bash sandbox ──
+	  const bashEnabledInput = el('input', { type: 'checkbox' });
+	  const bashSection = section('BASH SANDBOX',
+	    el('label', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--text-sm)' } },
+	      bashEnabledInput,
+	      el('span', {}, 'Enable bash_exec for this server'),
+	    ),
+	  );
+	  wrap.appendChild(bashSection);
+
+	  // ── Create button ──
   const createBtn = el('button', {
     className: 'btn btn-primary btn-lg',
     type: 'button',
@@ -176,12 +186,16 @@ export async function render(container, params) {
         const langVal = languageInput.value.trim();
         if (langVal) data.language = langVal;
 
-        if (state.provider) data.provider = state.provider;
+	        if (state.provider) data.provider = state.provider;
 
-        const modelVal = modelInput.value.trim();
-        if (modelVal) data.model = modelVal;
+	        const modelVal = modelInput.value.trim();
+	        if (modelVal) data.model = modelVal;
 
-        await API.createAgent(data);
+	        if (bashEnabledInput.checked) {
+	          data.bash = { enabled: true };
+	        }
+
+	        await API.createAgent(data);
         toast('Agent created', 'success');
         navigate('/agents/' + encodeURIComponent(id));
       } catch (err) {

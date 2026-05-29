@@ -64,7 +64,7 @@ func TestImageGenCalledFlagSetOnSuccessfulCAS(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	if r.ImageGenCalled {
 		t.Fatal("ImageGenCalled should be false before any tool call")
@@ -101,7 +101,7 @@ func TestImageGenDefinitionAdvertisesReferenceImageIDs(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	var generateImageParams json.RawMessage
 	for _, def := range r.Definitions() {
@@ -158,7 +158,7 @@ func TestImageGenCASRejectedWhenAlreadyRunning(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	result, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"test"}`))
 	if err != nil {
@@ -189,7 +189,7 @@ func TestImageGenEmptyPromptReturnsError(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	result, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":""}`))
 	if err != nil {
@@ -239,7 +239,7 @@ func TestImageGenNSFWBlocked(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"test"}`))
 	if err != nil {
@@ -285,7 +285,7 @@ func TestImageGenHTTPError(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"test"}`))
 	if err != nil {
@@ -336,7 +336,7 @@ func TestImageGenNSFWSpoilerWhenSafetyCheckerOff(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"test"}`))
 	if err != nil {
@@ -387,7 +387,7 @@ func TestImageGenNonNSFWWithSafetyCheckerOffSendsPlainFilename(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"test"}`))
 	if err != nil {
@@ -439,7 +439,7 @@ func TestImageGenAbsentNSFWArrayWithSafetyCheckerOffSendsPlainFilename(t *testin
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"test"}`))
 	if err != nil {
@@ -500,7 +500,7 @@ func TestImageGenSuccess(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"a sunset"}`))
 	if err != nil {
@@ -576,7 +576,7 @@ func TestImageGenOmittedModeWithSourceImagesDefaultsToGenerate(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"a fresh landscape"}`))
 	if err != nil {
@@ -643,7 +643,7 @@ func TestImageGenEditModeUsesEditModelAndSourceImages(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	_, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"make it cinematic","mode":"edit","aspect_ratio":"1:1"}`))
 	if err != nil {
@@ -688,7 +688,7 @@ func TestVisualMemorySaveToolStoresCurrentSourceImages(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(store, "srv1", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(store, "srv1", 0, 0, send, react, nil, nil, deps, 2)
 
 	result, err := r.Dispatch(context.Background(), "visual_memory_save", json.RawMessage(`{"label":"Alice","description":"Alice in a red jacket","user_id":"user1"}`))
 	if err != nil {
@@ -738,7 +738,7 @@ func TestVisualMemoryRecallToolReturnsReferenceIDs(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(store, "srv1", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(store, "srv1", 0, 0, send, react, nil, nil, deps, 2)
 
 	result, err := r.Dispatch(context.Background(), "visual_memory_recall", json.RawMessage(`{"query":"alice"}`))
 	if err != nil {
@@ -802,7 +802,7 @@ func TestImageGenUsesStoredReferenceImageIDs(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(store, "srv1", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(store, "srv1", 0, 0, send, react, nil, nil, deps, 2)
 
 	_, err = r.Dispatch(context.Background(), "generate_image", json.RawMessage(fmt.Sprintf(`{"prompt":"Alice as a detective","reference_image_ids":["%s"]}`, save.ID)))
 	if err != nil {
@@ -841,7 +841,7 @@ func TestImageGenEditModeWithoutSourceImagesReturnsError(t *testing.T) {
 
 	send := func(string) error { return nil }
 	react := func(string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, deps, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, deps, 2)
 
 	result, err := r.Dispatch(context.Background(), "generate_image", json.RawMessage(`{"prompt":"make it cinematic","mode":"edit"}`))
 	if err != nil {

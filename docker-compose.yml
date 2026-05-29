@@ -8,7 +8,38 @@ services:
       - ./config:/config
     environment:
       - VESPRA_DB_PATH=/data/vespra.db
+      - VESPRA_BASH_RUNNER_URL=http://runnerd:8090
+      - VESPRA_BASH_RUNNER_TOKEN=${VESPRA_BASH_RUNNER_TOKEN:-change-me}
     command: ["/app/vespra", "--config", "/config/config.toml", "--log-level", "debug"]
     dns:
       - 192.168.1.1
     restart: unless-stopped
+    depends_on:
+      - runnerd
+    networks:
+      - default
+      - vespra-control
+
+  runnerd:
+    build: .
+    command: ["/app/vespra-runnerd"]
+    environment:
+      - VESPRARUNNER_ADDR=:8090
+      - VESPRARUNNER_TOKEN=${VESPRA_BASH_RUNNER_TOKEN:-change-me}
+      - VESPRARUNNER_MAX_CONCURRENT=4
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    networks:
+      - vespra-control
+
+  bash-job-image:
+    build:
+      context: .
+      target: bash-job
+    image: vespra-bash-job:latest
+    profiles: ["build-images"]
+
+networks:
+  vespra-control:
+    internal: true

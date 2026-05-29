@@ -75,10 +75,14 @@ export const API = {
   getConfig:     ()              => request('GET', '/api/config'),
   setConfig:     (toml)          => request('POST', '/api/config', toml, 'text'),
 
-  // Image config
-  getImageConfig: ()             => get('/api/config/image'),
-  setImageConfig: (data)         => put('/api/config/image', data),
+	  // Image config
+	  getImageConfig: ()             => get('/api/config/image'),
+	  setImageConfig: (data)         => put('/api/config/image', data),
 
-  // Status
+	  // Bash config
+	  getBashConfig: ()              => get('/api/config/bash'),
+	  setBashConfig: (data)          => put('/api/config/bash', data),
+
+	  // Status
   getStatus:     ()              => get('/api/status'),
 };

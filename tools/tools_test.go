@@ -121,7 +121,7 @@ func TestReplyToolSplitMessageCap(t *testing.T) {
 	}
 	react := func(emoji string) error { return nil }
 
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, nil, 2)
 
 	// Build a message that will produce 4 parts when split at 2000 chars.
 	longContent := strings.Repeat("a", 7000)
@@ -143,7 +143,7 @@ func TestReplyToolRateLimit(t *testing.T) {
 	}
 	react := func(emoji string) error { return nil }
 
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, nil, 2)
 	ctx := context.Background()
 
 	// First call: should send.
@@ -191,7 +191,7 @@ func TestReplyToolDuplicateSuppression(t *testing.T) {
 	}
 	react := func(emoji string) error { return nil }
 
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, nil, 2)
 	ctx := context.Background()
 
 	// First reply: should send.
@@ -281,7 +281,7 @@ func TestWebSearchCalledFlagSetOnSuccessfulCAS(t *testing.T) {
 
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil, nil, 2)
 
 	if r.WebSearchCalled {
 		t.Fatal("WebSearchCalled should be false before any tool call")
@@ -317,7 +317,7 @@ func TestWebSearchCalledFlagNotSetWhenAlreadyRunning(t *testing.T) {
 
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil, nil, 2)
 
 	result, err := r.Dispatch(context.Background(), "web_search", json.RawMessage(`{"query":"concurrent query"}`))
 	if err != nil {
@@ -347,7 +347,7 @@ func TestWebSearchCalledFlagEmptyQueryReturnsEarly(t *testing.T) {
 
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, deps, nil, nil, 2)
 
 	result, err := r.Dispatch(context.Background(), "web_search", json.RawMessage(`{"query":""}`))
 	if err != nil {
@@ -372,7 +372,7 @@ func TestWebSearchCalledFlagEmptyQueryReturnsEarly(t *testing.T) {
 func TestRegistryLoopBreakConditionBothFlagsSet(t *testing.T) {
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, nil, 2)
 
 	// Initially neither flag is set.
 	if r.WebSearchCalled || r.Replied {
@@ -448,7 +448,7 @@ func TestRegistryWebSearchCalledIsStickyLatch(t *testing.T) {
 func TestReactToolSetsReactedFlag(t *testing.T) {
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, nil, 2)
 
 	if r.Reacted {
 		t.Fatal("Reacted should be false before any tool call")
@@ -469,7 +469,7 @@ func TestReactToolSetsReactedFlag(t *testing.T) {
 func TestReactToolDoesNotSetReactedOnError(t *testing.T) {
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { return fmt.Errorf("discord error") }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, nil, 2)
 
 	_, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"👍"}`))
 	if err == nil {
@@ -484,7 +484,7 @@ func TestReactToolSanitizesCustomEmoji(t *testing.T) {
 	var gotEmoji string
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { gotEmoji = emoji; return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, nil, 2)
 
 	_, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"<:fire:971088588706033684>"}`))
 	if err != nil {
@@ -499,7 +499,7 @@ func TestReactToolSanitizesAnimatedEmoji(t *testing.T) {
 	var gotEmoji string
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { gotEmoji = emoji; return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, nil, 2)
 
 	_, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"<a:wave:456>"}`))
 	if err != nil {
@@ -514,7 +514,7 @@ func TestReactToolPassesUnicodeEmojiThrough(t *testing.T) {
 	var gotEmoji string
 	send := func(content string) error { return nil }
 	react := func(emoji string) error { gotEmoji = emoji; return nil }
-	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, nil, 2)
 
 	_, err := r.Dispatch(context.Background(), "react", json.RawMessage(`{"emoji":"👍"}`))
 	if err != nil {
@@ -528,7 +528,9 @@ func TestReactToolPassesUnicodeEmojiThrough(t *testing.T) {
 // noopTool is a minimal Tool implementation used in sticky-latch tests.
 type noopTool struct{}
 
-func (n *noopTool) Name() string                                          { return "noop" }
-func (n *noopTool) Description() string                                   { return "does nothing" }
-func (n *noopTool) Parameters() json.RawMessage                           { return json.RawMessage(`{"type":"object","properties":{}}`) }
+func (n *noopTool) Name() string        { return "noop" }
+func (n *noopTool) Description() string { return "does nothing" }
+func (n *noopTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
 func (n *noopTool) Call(_ context.Context, _ json.RawMessage) (string, error) { return "ok", nil }

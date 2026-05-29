@@ -21,6 +21,7 @@ import (
 const (
 	ToolNameWebSearch          = "web_search"
 	ToolNameWebFetch           = "web_fetch"
+	ToolNameBashExec           = "bash_exec"
 	ToolNameImageGen           = "generate_image"
 	ToolNameVisualMemorySave   = "visual_memory_save"
 	ToolNameVisualMemoryRecall = "visual_memory_recall"
@@ -41,6 +42,7 @@ type Registry struct {
 	ReplyText       string // the content argument passed to the reply tool
 	ReplyCount      int    // number of reply tool calls in this turn
 	WebSearchCalled bool   // set to true when web_search is invoked
+	BashCalled      bool   // set to true when bash_exec is invoked
 	ImageGenCalled  bool   // set to true when generate_image is invoked
 	Reacted         bool   // set to true when the react tool is called
 }
@@ -491,7 +493,7 @@ func NewReplyOnlyRegistry(send SendFunc, react ReactFunc, maxReplyParts int) *Re
 
 // NewDefaultRegistry creates a registry with standard tools.
 // If searchDeps is non-nil, the async web_search and web_fetch tools are also registered.
-func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps, imageGenDeps *ImageGenDeps, maxReplyParts int) *Registry {
+func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold float64, defaultRecallLimit int, send SendFunc, react ReactFunc, searchDeps *WebSearchDeps, bashDeps *BashDeps, imageGenDeps *ImageGenDeps, maxReplyParts int) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID, dedupThreshold: dedupThreshold})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID, defaultTopN: defaultRecallLimit})
@@ -501,6 +503,9 @@ func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold flo
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps, searchCalled: &r.WebSearchCalled})
 		r.Register(&webFetchTool{timeoutSeconds: searchDeps.TimeoutSeconds})
+	}
+	if bashDeps != nil {
+		r.Register(&bashExecTool{deps: bashDeps, bashCalled: &r.BashCalled})
 	}
 	if imageGenDeps != nil {
 		r.Register(&imageGenTool{deps: imageGenDeps, imageCalled: &r.ImageGenCalled})

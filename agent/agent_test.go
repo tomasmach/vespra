@@ -1283,6 +1283,7 @@ func TestShouldSendFallback(t *testing.T) {
 		replied    bool
 		imageGen   bool
 		webSearch  bool
+		bash       bool
 		reacted    bool
 		hasContent bool
 		addressed  bool
@@ -1318,6 +1319,12 @@ func TestShouldSendFallback(t *testing.T) {
 			want:      false,
 		},
 		{
+			name:      "bash does not send fallback",
+			addressed: true,
+			bash:      true,
+			want:      false,
+		},
+		{
 			name:       "has content does not send fallback",
 			addressed:  true,
 			hasContent: true,
@@ -1339,11 +1346,55 @@ func TestShouldSendFallback(t *testing.T) {
 			reg.Replied = tt.replied
 			reg.ImageGenCalled = tt.imageGen
 			reg.WebSearchCalled = tt.webSearch
+			reg.BashCalled = tt.bash
 			reg.Reacted = tt.reacted
 			got := shouldSendFallback(tt.internal, reg, tt.hasContent, tt.addressed)
 			if got != tt.want {
 				t.Errorf("shouldSendFallback() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBashDepsOnlyForEnabledGuildAgents(t *testing.T) {
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			Bash: config.BashConfig{
+				RunnerURL:            "http://runnerd:8090",
+				RunnerToken:          "token",
+				JobImage:             "vespra-bash-job:latest",
+				VolumePrefix:         "vespra-bash-workspace",
+				EgressNetwork:        "vespra-bash-egress",
+				TimeoutSeconds:       30,
+				MaxOutputBytes:       1024,
+				MaxCommandBytes:      256,
+				GlobalConcurrency:    4,
+				PerServerConcurrency: 1,
+				PerUserRateLimit:     10,
+			},
+		},
+		Agents: []config.AgentConfig{
+			{ID: "enabled", ServerID: "srv1", Bash: config.AgentBashConfig{Enabled: true}},
+			{ID: "disabled", ServerID: "srv2"},
+		},
+	}
+	store := config.NewStoreFromConfig(cfg)
+
+	enabled := (&ChannelAgent{serverID: "srv1", cfgStore: store}).bashDeps("chan1", "user1", "msg1")
+	if enabled == nil {
+		t.Fatal("bashDeps should be present for enabled guild agent")
+	}
+	if enabled.ServerID != "srv1" || enabled.ChannelID != "chan1" || enabled.UserID != "user1" {
+		t.Fatalf("unexpected bash deps: %+v", enabled)
+	}
+
+	disabled := (&ChannelAgent{serverID: "srv2", cfgStore: store}).bashDeps("chan1", "user1", "msg1")
+	if disabled != nil {
+		t.Fatal("bashDeps should be nil for disabled agent")
+	}
+
+	dm := (&ChannelAgent{serverID: "DM:user1", cfgStore: store}).bashDeps("chan1", "user1", "msg1")
+	if dm != nil {
+		t.Fatal("bashDeps should be nil for DMs")
 	}
 }

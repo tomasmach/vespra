@@ -275,9 +275,49 @@ export async function render(container, params) {
       ),
     ),
   );
-  wrap.appendChild(imageSection);
+	  wrap.appendChild(imageSection);
 
-  // ── Action buttons ──
+	  // ── BASH section ──
+	  const agentBash = agent.bash || {};
+	  const bashEnabledInput = el('input', {
+	    type: 'checkbox',
+	    checked: !!agentBash.enabled,
+	  });
+	  const bashTimeoutInput = el('input', {
+	    className: 'input',
+	    type: 'number',
+	    min: '0',
+	    value: agentBash.timeout_seconds || '',
+	    placeholder: 'Inherit global',
+	  });
+	  const bashOutputInput = el('input', {
+	    className: 'input',
+	    type: 'number',
+	    min: '0',
+	    value: agentBash.max_output_bytes || '',
+	    placeholder: 'Inherit global',
+	  });
+	  const bashSection = section('BASH SANDBOX',
+	    el('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
+	      el('label', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--text-sm)' } },
+	        bashEnabledInput,
+	        el('span', {}, 'Enable bash_exec for this server'),
+	      ),
+	      el('div', { className: 'form-grid' },
+	        el('div', { className: 'input-group' },
+	          el('label', { className: 'input-label' }, 'Timeout Seconds'),
+	          bashTimeoutInput,
+	        ),
+	        el('div', { className: 'input-group' },
+	          el('label', { className: 'input-label' }, 'Max Output Bytes'),
+	          bashOutputInput,
+	        ),
+	      ),
+	    ),
+	  );
+	  wrap.appendChild(bashSection);
+
+	  // ── Action buttons ──
   const saveBtn = el('button', {
     className: 'btn btn-primary',
     type: 'button',
@@ -296,13 +336,18 @@ export async function render(container, params) {
           model: modelInput.value.trim(),
           db_path: dbPathInput.value.trim(),
           ignore_users: state.ignore_users,
-          image: {
-            ...(imgApiKeyVal && { api_key: imgApiKeyVal }),
-            ...(imgModelVal && { model: imgModelVal }),
-            ...(imgEditModelVal && { edit_model: imgEditModelVal }),
-            ...(agentImgSafetyState.value !== null && agentImgSafetyState.value !== undefined && { enable_safety_checker: agentImgSafetyState.value }),
-          },
-        };
+	          image: {
+	            ...(imgApiKeyVal && { api_key: imgApiKeyVal }),
+	            ...(imgModelVal && { model: imgModelVal }),
+	            ...(imgEditModelVal && { edit_model: imgEditModelVal }),
+	            ...(agentImgSafetyState.value !== null && agentImgSafetyState.value !== undefined && { enable_safety_checker: agentImgSafetyState.value }),
+	          },
+	          bash: {
+	            enabled: bashEnabledInput.checked,
+	            ...(bashTimeoutInput.value && { timeout_seconds: Number(bashTimeoutInput.value) }),
+	            ...(bashOutputInput.value && { max_output_bytes: Number(bashOutputInput.value) }),
+	          },
+	        };
         const tokenVal = tokenInput.value.trim();
         if (tokenVal) {
           data.token = tokenVal;
