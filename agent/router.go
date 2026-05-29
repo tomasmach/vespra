@@ -100,13 +100,16 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 		return
 	}
 
-	// Check spam rate limit.
-	blocked, justBlocked := r.checkSpam(serverID, msg.Author.ID)
-	if blocked {
-		if justBlocked && resources.Session != nil {
-			go resources.Session.ChannelMessageSend(channelID, fmt.Sprintf("<@%s> You've been sending too many messages. I'll be back in %s.", msg.Author.ID, spamCooldown))
+	// Check spam rate limit only for messages directed at the bot. The limit is
+	// meant to stop rapid bot-pinging, not normal channel chatter in smart/all modes.
+	if r.shouldCheckSpam(msg, resources) {
+		blocked, justBlocked := r.checkSpam(serverID, msg.Author.ID)
+		if blocked {
+			if justBlocked && resources.Session != nil {
+				go resources.Session.ChannelMessageSend(channelID, fmt.Sprintf("<@%s> You've been sending too many messages. I'll be back in %s.", msg.Author.ID, spamCooldown))
+			}
+			return
 		}
-		return
 	}
 
 	if agent, ok := r.agents[channelID]; ok {
@@ -267,6 +270,17 @@ func (r *Router) checkSpam(serverID, userID string) (blocked bool, justBlocked b
 	}
 
 	return false, false
+}
+
+func (r *Router) shouldCheckSpam(msg *discordgo.MessageCreate, resources *AgentResources) bool {
+	if msg.GuildID == "" {
+		return true
+	}
+	if resources == nil || resources.Session == nil || resources.Session.State == nil || resources.Session.State.User == nil {
+		return false
+	}
+	bot := resources.Session.State.User
+	return isAddressedToBot(msg, bot.ID, bot.Username)
 }
 
 // WaitForDrain waits for all active agents to finish, up to 30 seconds.
