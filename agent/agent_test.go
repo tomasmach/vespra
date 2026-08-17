@@ -14,6 +14,7 @@ import (
 
 	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/soul"
 	"github.com/tomasmach/vespra/tools"
 )
 
@@ -1345,5 +1346,15 @@ func TestShouldSendFallback(t *testing.T) {
 				t.Errorf("shouldSendFallback() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildSystemPromptAlwaysIncludesHumanizer(t *testing.T) {
+	a := &ChannelAgent{soulText: "You are a test bot."}
+	for _, mode := range []string{"always", "mention", "smart"} {
+		got := a.buildSystemPrompt(&config.Config{}, mode, "test-chan", nil, "TestBot", false, false)
+		if !strings.Contains(got, soul.Humanizer) {
+			t.Errorf("mode %q: system prompt is missing the humanizer block", mode)
+		}
 	}
 }

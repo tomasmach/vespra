@@ -528,7 +528,9 @@ func TestReactToolPassesUnicodeEmojiThrough(t *testing.T) {
 // noopTool is a minimal Tool implementation used in sticky-latch tests.
 type noopTool struct{}
 
-func (n *noopTool) Name() string                                          { return "noop" }
-func (n *noopTool) Description() string                                   { return "does nothing" }
-func (n *noopTool) Parameters() json.RawMessage                           { return json.RawMessage(`{"type":"object","properties":{}}`) }
+func (n *noopTool) Name() string        { return "noop" }
+func (n *noopTool) Description() string { return "does nothing" }
+func (n *noopTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
 func (n *noopTool) Call(_ context.Context, _ json.RawMessage) (string, error) { return "ok", nil }

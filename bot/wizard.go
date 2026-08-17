@@ -17,7 +17,7 @@ const wizardTimeout = 10 * time.Minute
 type wizardStep int
 
 const (
-	wizardStepMode     wizardStep = iota
+	wizardStepMode wizardStep = iota
 	wizardStepChannels
 	wizardStepLanguage
 )
