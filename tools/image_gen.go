@@ -52,19 +52,23 @@ const maxImageEditSourceURLs = 14
 
 func (t *imageGenTool) Name() string { return ToolNameImageGen }
 func (t *imageGenTool) Description() string {
-	return "Generate an image from a text prompt, or edit attached/replied-to source images. Call this tool whenever the user asks you to draw, create, make, generate, visualize, show, edit, transform, or change an image or picture — including requests phrased as 'make an image of X', 'show me what X looks like', 'draw X', 'edit this', 'change this image', or similar. " +
-		"Do NOT describe the image generation in your text — always call this tool first. " +
-		"Include a brief status message as inline text content alongside this tool call (e.g. 'Generating your image…') — do NOT call the reply tool separately after this one."
+	return "Generate an image from a text prompt, or edit attached/replied-to source images. " +
+		"Call it whenever the user asks you to draw, create, generate, visualize, show, edit, restyle, or change an image. " +
+		"Never describe the generation in text instead of calling this. " +
+		"Send a short status message as inline text alongside the call, not via the reply tool."
 }
+
+// Parameters intentionally omits the deprecated image_size field: Call still
+// accepts it for backwards compatibility, but advertising it to the model only
+// costs prompt tokens.
 func (t *imageGenTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"prompt": {"type": "string", "description": "A detailed English prompt describing the image to generate."},
-			"mode": {"type": "string", "description": "Use edit when modifying attached or replied-to source images; otherwise use generate. Options: generate, edit."},
-			"aspect_ratio": {"type": "string", "description": "Image aspect ratio. Options: auto, 21:9, 16:9, 3:2, 4:3, 5:4, 1:1, 4:5, 3:4, 2:3, 9:16. Default: auto."},
-			"reference_image_ids": {"type": "array", "items": {"type": "string"}, "description": "IDs returned by visual_memory_recall for remembered visual references to use as source images."},
-			"image_size": {"type": "string", "description": "Deprecated legacy aspect ratio; accepted for backwards compatibility."}
+			"prompt": {"type": "string", "description": "A detailed English prompt describing the image."},
+			"mode": {"type": "string", "description": "generate, or edit when modifying attached/replied-to source images."},
+			"aspect_ratio": {"type": "string", "description": "One of: auto, 21:9, 16:9, 3:2, 4:3, 5:4, 1:1, 4:5, 3:4, 2:3, 9:16. Default auto."},
+			"reference_image_ids": {"type": "array", "items": {"type": "string"}, "description": "IDs from visual_memory_recall to use as source images."}
 		},
 		"required": ["prompt"]
 	}`)

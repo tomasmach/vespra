@@ -1132,6 +1132,8 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 			fmt.Fprintf(&sb, "- [%s] (importance: %.1f, %s) %s\n", m.ID, m.Importance, ageStr, m.Content)
 		}
 	}
+	sb.WriteString("\n\n")
+	sb.WriteString(soul.Humanizer)
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
