@@ -749,3 +749,62 @@ func TestMessageMarshalContentParts(t *testing.T) {
 		t.Errorf("expected second part type=image_url, got %v", second["type"])
 	}
 }
+
+func TestReasoningEffortSentForTextRequests(t *testing.T) {
+	srv, capturedBody := captureBodyServer(t)
+	client := clientWithVisionModel(t, srv.URL)
+	opts := &llm.ChatOptions{MaxTokens: 8192, ReasoningEffort: "medium"}
+
+	if _, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	reasoning, _ := (*capturedBody)["reasoning"].(map[string]any)
+	if reasoning["effort"] != "medium" {
+		t.Errorf("expected reasoning.effort=medium, got %v", (*capturedBody)["reasoning"])
+	}
+
+	srv, capturedBody = captureBodyServer(t) // fresh capture: decoding into the old map would keep "reasoning"
+	client = clientWithVisionModel(t, srv.URL)
+	image := llm.Message{Role: "user", ContentParts: []llm.ContentPart{
+		{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://example.com/img.png"}},
+	}}
+	if _, err := client.Chat(context.Background(), []llm.Message{image}, nil, opts); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := (*capturedBody)["reasoning"]; ok {
+		t.Errorf("reasoning must not be sent to the vision model, got %v", (*capturedBody)["reasoning"])
+	}
+}
+
+func TestChatReturnsResponseMetadata(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id": "gen-123",
+			"model": "openai/gpt-6-luna",
+			"provider": "OpenAI",
+			"choices": [{
+				"finish_reason": "length",
+				"native_finish_reason": "max_output_tokens",
+				"message": {"role": "assistant", "content": null, "refusal": "I can't help with that."}
+			}],
+			"usage": {"prompt_tokens": 900, "completion_tokens": 1024, "completion_tokens_details": {"reasoning_tokens": 1024}}
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := clientWithBaseURL(t, srv.URL)
+
+	choice, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if choice.Message.Content != "" || choice.FinishReason != "length" || choice.NativeFinishReason != "max_output_tokens" {
+		t.Errorf("unexpected choice: %+v", choice)
+	}
+	if choice.Message.Refusal != "I can't help with that." {
+		t.Errorf("refusal = %q", choice.Message.Refusal)
+	}
+	if choice.GenerationID != "gen-123" || choice.Provider != "OpenAI" || choice.Usage.CompletionTokensDetails.ReasoningTokens != 1024 {
+		t.Errorf("unexpected metadata: id=%q provider=%q usage=%+v", choice.GenerationID, choice.Provider, choice.Usage)
+	}
+}

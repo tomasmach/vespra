@@ -1227,15 +1227,15 @@ func (a *ChannelAgent) chatOptions() *llm.ChatOptions {
 	globalCfg := a.cfgStore.Get()
 	agentCfg := a.currentAgentConfig()
 
-	maxTokens := globalCfg.LLM.MaxTokens
-
-	if agentCfg == nil || (agentCfg.Provider == "" && agentCfg.Model == "") {
-		if maxTokens <= 0 {
-			return nil
-		}
-		return &llm.ChatOptions{MaxTokens: maxTokens}
+	opts := &llm.ChatOptions{
+		MaxTokens:       globalCfg.LLM.MaxTokens,
+		ReasoningEffort: globalCfg.LLM.ReasoningEffort,
 	}
-	return &llm.ChatOptions{Provider: agentCfg.Provider, Model: agentCfg.Model, MaxTokens: maxTokens}
+	if agentCfg != nil {
+		opts.Provider = agentCfg.Provider
+		opts.Model = agentCfg.Model
+	}
+	return opts
 }
 
 // webSearchDeps returns the dependency bundle for the async web search tool,
@@ -1369,13 +1369,12 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	var toolCalls []toolCallRecord
 	var assistantContent string
-	var replyToolText string // captures the text sent via the reply tool before ReplyText is zeroed
-	postReplyIter := -1      // iteration at which the reply tool first fired
+	var lastChoice llm.Choice // most recent LLM response, kept for diagnostics
+	var replyToolText string  // captures the text sent via the reply tool before ReplyText is zeroed
+	postReplyIter := -1       // iteration at which the reply tool first fired
 	for iter := 0; ; iter++ {
 		if iter >= maxIter {
-			if err := tp.sendFn("I got stuck in a loop. Please try again."); err != nil {
-				a.logger.Error("send message", "error", err)
-			}
+			a.logger.Warn("tool loop exhausted; staying silent", append([]any{"max_iterations", maxIter}, lastChoice.LogAttrs()...)...)
 			return
 		}
 
@@ -1386,11 +1385,9 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 				effectiveModel = chatOpts.Model
 			}
 			a.logger.Error("llm chat error", "error", err, "model", effectiveModel)
-			if err := tp.sendFn("I encountered an error. Please try again."); err != nil {
-				a.logger.Error("send message", "error", err)
-			}
 			return
 		}
+		lastChoice = choice
 
 		if len(choice.Message.ToolCalls) == 0 {
 			assistantContent = choice.Message.Content
@@ -1476,11 +1473,6 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	if assistantContent != "" && looksLikeToolCall(assistantContent, tp.reg.Definitions()) {
 		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
 		assistantContent = ""
-		if !tp.reg.Replied && tp.mode != config.ModeSmart {
-			if err := tp.sendFn("I'm not sure how to respond. Please try again."); err != nil {
-				a.logger.Error("send message", "error", err)
-			}
-		}
 	}
 
 	// In smart mode the model should only communicate via reply/react tools.
@@ -1525,14 +1517,11 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 	}
 
-	// Fallback: if the bot produced no reply at all and the user directly addressed it,
-	// send an error nudge rather than going silent. This catches cases where the LLM
-	// returns empty content with no tool calls (e.g. confused by malformed history).
-	if shouldSendFallback(tp.internal, tp.reg, assistantContent != "", tp.addressed) {
-		a.logger.Warn("LLM produced no output for addressed message; sending fallback")
-		if err := tp.sendFn("I'm having trouble responding. Please try again."); err != nil {
-			a.logger.Error("send message", "error", err)
-		}
+	// Never send a generic error message to Discord. When the bot was addressed but
+	// produced nothing (empty content, refusal, token limit), stay silent and log
+	// the response metadata so the cause can be diagnosed.
+	if producedNoOutput(tp.internal, tp.reg, assistantContent != "", tp.addressed) {
+		a.logger.Warn("LLM produced no output for addressed message; staying silent", lastChoice.LogAttrs()...)
 	}
 
 	if assistantContent != "" {
@@ -1574,11 +1563,10 @@ func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, 
 	return !reg.WebSearchCalled && !reg.ImageGenCalled
 }
 
-// shouldSendFallback reports whether the error fallback ("I'm having trouble
-// responding") should be sent. It fires only when the bot was directly addressed
-// but produced no visible output at all — no reply, no image, no reaction, and
-// no plain-text content.
-func shouldSendFallback(internal bool, reg *tools.Registry, hasContent, addressed bool) bool {
+// producedNoOutput reports whether the bot was directly addressed but produced
+// no visible output at all — no reply, no image, no reaction, and no plain-text
+// content.
+func producedNoOutput(internal bool, reg *tools.Registry, hasContent, addressed bool) bool {
 	return !internal && !reg.Replied && !reg.ImageGenCalled && !reg.WebSearchCalled && !reg.Reacted && !hasContent && addressed
 }
 

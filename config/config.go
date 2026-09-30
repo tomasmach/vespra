@@ -62,7 +62,8 @@ type LLMConfig struct {
 	BaseURL               string `toml:"base_url" json:"-"`
 	EmbeddingBaseURL      string `toml:"embedding_base_url" json:"-"`
 	MediaDescriptions     *bool  `toml:"media_descriptions"` // nil = enabled when vision_model set
-	MaxTokens             int    `toml:"max_tokens"`
+	MaxTokens             int    `toml:"max_tokens"`         // includes reasoning tokens
+	ReasoningEffort       string `toml:"reasoning_effort"`   // OpenRouter reasoning.effort; "" = model default
 }
 
 type MemoryConfig struct {
@@ -248,7 +249,7 @@ func Load(path string) (*Config, error) {
 		cfg.Agent.MaxReplyParts = 2
 	}
 	if cfg.LLM.MaxTokens <= 0 {
-		cfg.LLM.MaxTokens = 1024
+		cfg.LLM.MaxTokens = 8192
 	}
 	if cfg.Tools.WebTimeoutSeconds <= 0 {
 		cfg.Tools.WebTimeoutSeconds = 120

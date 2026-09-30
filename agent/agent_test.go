@@ -1277,7 +1277,7 @@ func TestIsAddressedToBotNameMention(t *testing.T) {
 	}
 }
 
-func TestShouldSendFallback(t *testing.T) {
+func TestProducedNoOutput(t *testing.T) {
 	tests := []struct {
 		name       string
 		internal   bool
@@ -1290,47 +1290,47 @@ func TestShouldSendFallback(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:      "addressed with no response sends fallback",
+			name:      "addressed with no response produced no output",
 			addressed: true,
 			want:      true,
 		},
 		{
-			name:      "react-only addressed turn does NOT send fallback",
+			name:      "react-only addressed turn produced output",
 			addressed: true,
 			reacted:   true,
 			want:      false,
 		},
 		{
-			name:      "replied does not send fallback",
+			name:      "replied produced output",
 			addressed: true,
 			replied:   true,
 			want:      false,
 		},
 		{
-			name:      "image gen does not send fallback",
+			name:      "image gen produced output",
 			addressed: true,
 			imageGen:  true,
 			want:      false,
 		},
 		{
-			name:      "web search does not send fallback",
+			name:      "web search produced output",
 			addressed: true,
 			webSearch: true,
 			want:      false,
 		},
 		{
-			name:       "has content does not send fallback",
+			name:       "has content produced output",
 			addressed:  true,
 			hasContent: true,
 			want:       false,
 		},
 		{
-			name:     "internal does not send fallback",
+			name:     "internal produced output",
 			internal: true,
 			want:     false,
 		},
 		{
-			name: "non-addressed does not send fallback",
+			name: "non-addressed produced output",
 			want: false,
 		},
 	}
@@ -1341,9 +1341,9 @@ func TestShouldSendFallback(t *testing.T) {
 			reg.ImageGenCalled = tt.imageGen
 			reg.WebSearchCalled = tt.webSearch
 			reg.Reacted = tt.reacted
-			got := shouldSendFallback(tt.internal, reg, tt.hasContent, tt.addressed)
+			got := producedNoOutput(tt.internal, reg, tt.hasContent, tt.addressed)
 			if got != tt.want {
-				t.Errorf("shouldSendFallback() = %v, want %v", got, tt.want)
+				t.Errorf("producedNoOutput() = %v, want %v", got, tt.want)
 			}
 		})
 	}
