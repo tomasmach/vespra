@@ -285,6 +285,11 @@ func Load(path string) (*Config, error) {
 	if !ValidModes[cfg.Response.DefaultMode] {
 		return nil, fmt.Errorf("response.default_mode %q is invalid (must be smart, mention, all, or none)", cfg.Response.DefaultMode)
 	}
+	switch cfg.LLM.ReasoningEffort {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh":
+	default:
+		return nil, fmt.Errorf("llm.reasoning_effort %q is invalid (must be none, minimal, low, medium, high, or xhigh)", cfg.LLM.ReasoningEffort)
+	}
 	validProviders := map[string]bool{"openrouter": true, "glm": true, "fireworks": true}
 	for _, agent := range cfg.Agents {
 		if agent.ServerID == "" {
