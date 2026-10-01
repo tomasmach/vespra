@@ -100,16 +100,15 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 		return
 	}
 
-	// Check spam rate limit only for messages directed at the bot. The limit is
+	// Count only messages directed at the bot toward the spam limit. The limit is
 	// meant to stop rapid bot-pinging, not normal channel chatter in smart/all modes.
-	if r.shouldCheckSpam(msg, resources) {
-		blocked, justBlocked := r.checkSpam(serverID, msg.Author.ID)
-		if blocked {
-			if justBlocked && resources.Session != nil {
-				go resources.Session.ChannelMessageSend(channelID, fmt.Sprintf("<@%s> You've been sending too many messages. I'll be back in %s.", msg.Author.ID, spamCooldown))
-			}
-			return
+	// An active block still drops every message from the user.
+	blocked, justBlocked := r.checkSpam(serverID, msg.Author.ID, r.shouldCheckSpam(msg, resources))
+	if blocked {
+		if justBlocked && resources.Session != nil {
+			go resources.Session.ChannelMessageSend(channelID, fmt.Sprintf("<@%s> You've been sending too many messages. I'll be back in %s.", msg.Author.ID, spamCooldown))
 		}
+		return
 	}
 
 	if agent, ok := r.agents[channelID]; ok {
@@ -240,7 +239,8 @@ func (r *Router) Status() []ChannelStatus {
 // Must be called with r.mu held.
 // Returns (blocked, justBlocked): blocked=true means the message should be dropped;
 // justBlocked=true means this call is what triggered the block (send a notification).
-func (r *Router) checkSpam(serverID, userID string) (blocked bool, justBlocked bool) {
+// When count is false the message is only checked against an active block.
+func (r *Router) checkSpam(serverID, userID string, count bool) (blocked bool, justBlocked bool) {
 	key := serverID + ":" + userID
 	now := time.Now()
 
@@ -252,6 +252,9 @@ func (r *Router) checkSpam(serverID, userID string) (blocked bool, justBlocked b
 
 	if now.Before(rec.blockedUntil) {
 		return true, false
+	}
+	if !count {
+		return false, false
 	}
 
 	// Trim timestamps outside the window.
