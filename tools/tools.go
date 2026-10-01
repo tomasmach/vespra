@@ -40,7 +40,7 @@ type Registry struct {
 	Replied         bool   // set to true when the reply tool is called
 	ReplyText       string // the content argument passed to the reply tool
 	ReplyCount      int    // number of reply tool calls in this turn
-	WebFetchCalled  bool   // set to true when web_fetch is invoked; unlocks a second reply
+	WebFetchCalled  bool   // set by web_fetch, cleared by a sent reply; unlocks the next reply
 	WebSearchCalled bool   // set to true when web_search is invoked
 	ImageGenCalled  bool   // set to true when generate_image is invoked
 	Reacted         bool   // set to true when the react tool is called
@@ -282,6 +282,7 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	*t.replied = true
 	*t.replyCount++
 	*t.replyText = p.Content
+	*t.fetched = false // a further reply needs a new web_fetch
 	return "Replied.", nil
 }
 

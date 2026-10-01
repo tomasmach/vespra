@@ -261,6 +261,31 @@ func TestReplyToolBlocksRewordedSecondReply(t *testing.T) {
 	}
 }
 
+// TestReplyToolFetchBeforeFirstReplyDoesNotUnlockSecond covers web_fetch on a
+// user-provided URL before the answer: a reworded copy must still be blocked.
+func TestReplyToolFetchBeforeFirstReplyDoesNotUnlockSecond(t *testing.T) {
+	sendCount := 0
+	send := func(content string) error {
+		sendCount++
+		return nil
+	}
+	react := func(emoji string) error { return nil }
+
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	ctx := context.Background()
+
+	r.WebFetchCalled = true
+	if _, err := r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"The page says the shop opens at 9."}`)); err != nil {
+		t.Fatalf("first Dispatch() returned unexpected error: %v", err)
+	}
+	if _, err := r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"According to the page, the shop opens at 9."}`)); err != nil {
+		t.Fatalf("second Dispatch() returned unexpected error: %v", err)
+	}
+	if sendCount != 1 {
+		t.Errorf("expected 1 message sent, got %d", sendCount)
+	}
+}
+
 // newSearchDeps creates a minimal WebSearchDeps suitable for unit tests.
 // deliverResult is called when the async search goroutine finishes; pass a no-op
 // if the test does not need to observe the delivered result.

@@ -1398,8 +1398,11 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 
 		tp.llmMsgs = append(tp.llmMsgs, choice.Message)
-		var hasFetchTool bool
+		var hasFetchTool, hasWebFetch bool
 		for _, tc := range choice.Message.ToolCalls {
+			if tc.Function.Name == tools.ToolNameWebFetch {
+				hasWebFetch = true
+			}
 			if tc.Function.Name == tools.ToolNameWebFetch || tc.Function.Name == tools.ToolNameWebSearch || tc.Function.Name == tools.ToolNameImageGen {
 				hasFetchTool = true
 			}
@@ -1415,6 +1418,12 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 				Content:    result,
 				ToolCallID: tc.ID,
 			})
+		}
+
+		// A reply sent alongside web_fetch is a status message whatever the call
+		// order, so the answer that follows the fetched content may still be sent.
+		if hasWebFetch && tp.reg.Replied {
+			tp.reg.WebFetchCalled = true
 		}
 
 		// After executing tool calls, if the reply tool was used, record what was said
