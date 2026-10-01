@@ -40,6 +40,7 @@ type Registry struct {
 	Replied         bool   // set to true when the reply tool is called
 	ReplyText       string // the content argument passed to the reply tool
 	ReplyCount      int    // number of reply tool calls in this turn
+	WebFetchCalled  bool   // set to true when web_fetch is invoked; unlocks a second reply
 	WebSearchCalled bool   // set to true when web_search is invoked
 	ImageGenCalled  bool   // set to true when generate_image is invoked
 	Reacted         bool   // set to true when the react tool is called
@@ -77,6 +78,9 @@ func (r *Registry) Dispatch(ctx context.Context, name string, args json.RawMessa
 	if !ok {
 		slog.Warn("dispatch: unknown tool", "tool", name)
 		return fmt.Sprintf("Tool %q is not available. Respond to the user without it.", name), nil
+	}
+	if name == ToolNameWebFetch {
+		r.WebFetchCalled = true
 	}
 	return t.Call(ctx, args)
 }
@@ -225,6 +229,7 @@ type replyTool struct {
 	replied       *bool
 	replyText     *string
 	replyCount    *int
+	fetched       *bool
 	maxReplyParts int
 }
 
@@ -261,6 +266,12 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	// re-emits the same content in the post-reply iteration.
 	if *t.replyCount > 0 && p.Content == *t.replyText {
 		return "Replied.", nil
+	}
+	// A second reply is only legitimate after web_fetch (status message, then
+	// the answer). Otherwise the model is re-sending a reworded copy of its
+	// first reply, which shows up as a near-duplicate Discord message.
+	if *t.replyCount > 0 && !*t.fetched {
+		return "Reply already sent in this turn. Do not send another reply.", nil
 	}
 	parts := SplitAndCapMessage(p.Content, 2000, t.maxReplyParts)
 	for _, part := range parts {
@@ -484,7 +495,7 @@ func (t *webSearchTool) runSearch(query string) {
 // should just summarize and reply without calling memory or search tools.
 func NewReplyOnlyRegistry(send SendFunc, react ReactFunc, maxReplyParts int) *Registry {
 	r := NewRegistry()
-	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount, maxReplyParts: maxReplyParts})
+	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount, fetched: &r.WebFetchCalled, maxReplyParts: maxReplyParts})
 	r.Register(&reactTool{react: react, reacted: &r.Reacted})
 	return r
 }
@@ -496,7 +507,7 @@ func NewDefaultRegistry(store *memory.Store, serverID string, dedupThreshold flo
 	r.Register(&memorySaveTool{store: store, serverID: serverID, dedupThreshold: dedupThreshold})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID, defaultTopN: defaultRecallLimit})
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
-	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount, maxReplyParts: maxReplyParts})
+	r.Register(&replyTool{send: send, replied: &r.Replied, replyText: &r.ReplyText, replyCount: &r.ReplyCount, fetched: &r.WebFetchCalled, maxReplyParts: maxReplyParts})
 	r.Register(&reactTool{react: react, reacted: &r.Reacted})
 	if searchDeps != nil {
 		r.Register(&webSearchTool{deps: searchDeps, searchCalled: &r.WebSearchCalled})
