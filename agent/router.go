@@ -100,8 +100,10 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 		return
 	}
 
-	// Check spam rate limit.
-	blocked, justBlocked := r.checkSpam(serverID, msg.Author.ID)
+	// Count only messages directed at the bot toward the spam limit. The limit is
+	// meant to stop rapid bot-pinging, not normal channel chatter in smart/all modes.
+	// An active block still drops every message from the user.
+	blocked, justBlocked := r.checkSpam(serverID, msg.Author.ID, r.shouldCheckSpam(msg, resources))
 	if blocked {
 		if justBlocked && resources.Session != nil {
 			go resources.Session.ChannelMessageSend(channelID, fmt.Sprintf("<@%s> You've been sending too many messages. I'll be back in %s.", msg.Author.ID, spamCooldown))
@@ -237,7 +239,8 @@ func (r *Router) Status() []ChannelStatus {
 // Must be called with r.mu held.
 // Returns (blocked, justBlocked): blocked=true means the message should be dropped;
 // justBlocked=true means this call is what triggered the block (send a notification).
-func (r *Router) checkSpam(serverID, userID string) (blocked bool, justBlocked bool) {
+// When count is false the message is only checked against an active block.
+func (r *Router) checkSpam(serverID, userID string, count bool) (blocked bool, justBlocked bool) {
 	key := serverID + ":" + userID
 	now := time.Now()
 
@@ -249,6 +252,9 @@ func (r *Router) checkSpam(serverID, userID string) (blocked bool, justBlocked b
 
 	if now.Before(rec.blockedUntil) {
 		return true, false
+	}
+	if !count {
+		return false, false
 	}
 
 	// Trim timestamps outside the window.
@@ -267,6 +273,17 @@ func (r *Router) checkSpam(serverID, userID string) (blocked bool, justBlocked b
 	}
 
 	return false, false
+}
+
+func (r *Router) shouldCheckSpam(msg *discordgo.MessageCreate, resources *AgentResources) bool {
+	if msg.GuildID == "" {
+		return true
+	}
+	if resources == nil || resources.Session == nil || resources.Session.State == nil || resources.Session.State.User == nil {
+		return false
+	}
+	bot := resources.Session.State.User
+	return isAddressedToBot(msg, bot.ID, bot.Username)
 }
 
 // WaitForDrain waits for all active agents to finish, up to 30 seconds.

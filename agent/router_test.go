@@ -49,6 +49,20 @@ func fakeMsg(guildID, channelID, userID string) *discordgo.MessageCreate {
 	}
 }
 
+func fakeMsgWithContent(guildID, channelID, userID, content string) *discordgo.MessageCreate {
+	msg := fakeMsg(guildID, channelID, userID)
+	msg.Content = content
+	return msg
+}
+
+func newTestDiscordSession(botID, botName string) *discordgo.Session {
+	state := discordgo.NewState()
+	state.User = &discordgo.User{ID: botID, Username: botName}
+	return &discordgo.Session{
+		State: state,
+	}
+}
+
 func TestRouteIgnoresUnknownServer(t *testing.T) {
 	r := newTestRouter(t)
 	// guild1 is not in agentsByServerID and not in config.Agents,
@@ -109,7 +123,7 @@ func TestSpamBlockAfterThreshold(t *testing.T) {
 	// Call checkSpam spamThreshold-1 times — should not be blocked yet.
 	r.mu.Lock()
 	for i := 0; i < spamThreshold-1; i++ {
-		blocked, _ := r.checkSpam("srv1", "user1")
+		blocked, _ := r.checkSpam("srv1", "user1", true)
 		if blocked {
 			r.mu.Unlock()
 			t.Fatalf("user blocked early at call %d", i+1)
@@ -117,7 +131,7 @@ func TestSpamBlockAfterThreshold(t *testing.T) {
 	}
 
 	// The threshold-th call triggers the block.
-	blocked, justBlocked := r.checkSpam("srv1", "user1")
+	blocked, justBlocked := r.checkSpam("srv1", "user1", true)
 	r.mu.Unlock()
 
 	if !blocked {
@@ -129,7 +143,7 @@ func TestSpamBlockAfterThreshold(t *testing.T) {
 
 	// Subsequent call should return blocked but not justBlocked.
 	r.mu.Lock()
-	blocked2, justBlocked2 := r.checkSpam("srv1", "user1")
+	blocked2, justBlocked2 := r.checkSpam("srv1", "user1", true)
 	r.mu.Unlock()
 
 	if !blocked2 {
@@ -148,11 +162,70 @@ func TestSpamBlockExpires(t *testing.T) {
 	r.spamMap["srv1:user1"] = &spamRecord{
 		blockedUntil: time.Now().Add(-1 * time.Second),
 	}
-	blocked, _ := r.checkSpam("srv1", "user1")
+	blocked, _ := r.checkSpam("srv1", "user1", true)
 	r.mu.Unlock()
 
 	if blocked {
 		t.Error("expired block should not still block the user")
+	}
+}
+
+func TestRouteDoesNotSpamBlockUnaddressedGuildMessages(t *testing.T) {
+	r := newTestRouter(t)
+
+	r.mu.Lock()
+	r.agentsByServerID["srv1"] = &AgentResources{
+		Config:  &config.AgentConfig{},
+		Memory:  nil,
+		Session: newTestDiscordSession("bot1", "Vespra"),
+	}
+	r.agents["chan1"] = &ChannelAgent{
+		channelID: "chan1",
+		serverID:  "srv1",
+		msgCh:     make(chan *discordgo.MessageCreate, 100),
+		cancel:    func() {},
+	}
+	r.mu.Unlock()
+
+	for i := 0; i < spamThreshold+1; i++ {
+		r.Route(fakeMsgWithContent("srv1", "chan1", "user1", "random channel chatter"))
+	}
+
+	r.mu.Lock()
+	rec, exists := r.spamMap["srv1:user1"]
+	r.mu.Unlock()
+
+	if exists && rec.blockedUntil.After(time.Now()) {
+		t.Error("unaddressed guild messages should not trigger a spam block")
+	}
+	if exists && len(rec.timestamps) != 0 {
+		t.Errorf("unaddressed guild messages should not be counted as spam, got %d timestamps", len(rec.timestamps))
+	}
+}
+
+func TestRouteDropsUnaddressedMessagesDuringSpamBlock(t *testing.T) {
+	r := newTestRouter(t)
+
+	msgCh := make(chan *discordgo.MessageCreate, 100)
+	r.mu.Lock()
+	r.agentsByServerID["srv1"] = &AgentResources{
+		Config:  &config.AgentConfig{},
+		Memory:  nil,
+		Session: newTestDiscordSession("bot1", "Vespra"),
+	}
+	r.agents["chan1"] = &ChannelAgent{
+		channelID: "chan1",
+		serverID:  "srv1",
+		msgCh:     msgCh,
+		cancel:    func() {},
+	}
+	r.spamMap["srv1:user1"] = &spamRecord{blockedUntil: time.Now().Add(spamCooldown)}
+	r.mu.Unlock()
+
+	r.Route(fakeMsgWithContent("srv1", "chan1", "user1", "random channel chatter"))
+
+	if len(msgCh) != 0 {
+		t.Errorf("blocked user's unaddressed message should be dropped, got %d queued", len(msgCh))
 	}
 }
 
