@@ -158,7 +158,8 @@ func TestReplyToolRateLimit(t *testing.T) {
 		t.Errorf("first call: expected send count 1, got %d", sendCount)
 	}
 
-	// Second call: should also send (limit is 2).
+	// Second call after web_fetch: should also send (limit is 2).
+	r.WebFetchCalled = true
 	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"the real answer"}`))
 	if err != nil {
 		t.Fatalf("second Dispatch() returned unexpected error: %v", err)
@@ -218,7 +219,8 @@ func TestReplyToolDuplicateSuppression(t *testing.T) {
 		t.Errorf("duplicate call: expected send count still 1, got %d", sendCount)
 	}
 
-	// Different content: should send.
+	// Different content after web_fetch: should send.
+	r.WebFetchCalled = true
 	result, err = r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"something else"}`))
 	if err != nil {
 		t.Fatalf("third Dispatch() returned unexpected error: %v", err)
@@ -228,6 +230,59 @@ func TestReplyToolDuplicateSuppression(t *testing.T) {
 	}
 	if sendCount != 2 {
 		t.Errorf("third call: expected send count 2, got %d", sendCount)
+	}
+}
+
+// TestReplyToolBlocksRewordedSecondReply covers the reported double message:
+// without web_fetch in between, a reworded second reply must not reach Discord.
+func TestReplyToolBlocksRewordedSecondReply(t *testing.T) {
+	var sent []string
+	send := func(content string) error {
+		sent = append(sent, content)
+		return nil
+	}
+	react := func(emoji string) error { return nil }
+
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	ctx := context.Background()
+
+	if _, err := r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"The meniscus was treated in the same operation."}`)); err != nil {
+		t.Fatalf("first Dispatch() returned unexpected error: %v", err)
+	}
+	result, err := r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"They treated the meniscus in the same operation."}`))
+	if err != nil {
+		t.Fatalf("second Dispatch() returned unexpected error: %v", err)
+	}
+	if result != "Reply already sent in this turn. Do not send another reply." {
+		t.Errorf("second call: unexpected result %q", result)
+	}
+	if len(sent) != 1 {
+		t.Errorf("expected 1 message sent, got %d: %q", len(sent), sent)
+	}
+}
+
+// TestReplyToolFetchBeforeFirstReplyDoesNotUnlockSecond covers web_fetch on a
+// user-provided URL before the answer: a reworded copy must still be blocked.
+func TestReplyToolFetchBeforeFirstReplyDoesNotUnlockSecond(t *testing.T) {
+	sendCount := 0
+	send := func(content string) error {
+		sendCount++
+		return nil
+	}
+	react := func(emoji string) error { return nil }
+
+	r := tools.NewDefaultRegistry(nil, "", 0, 0, send, react, nil, nil, 2)
+	ctx := context.Background()
+
+	r.WebFetchCalled = true
+	if _, err := r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"The page says the shop opens at 9."}`)); err != nil {
+		t.Fatalf("first Dispatch() returned unexpected error: %v", err)
+	}
+	if _, err := r.Dispatch(ctx, "reply", json.RawMessage(`{"content":"According to the page, the shop opens at 9."}`)); err != nil {
+		t.Fatalf("second Dispatch() returned unexpected error: %v", err)
+	}
+	if sendCount != 1 {
+		t.Errorf("expected 1 message sent, got %d", sendCount)
 	}
 }
 
