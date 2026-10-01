@@ -62,7 +62,8 @@ type LLMConfig struct {
 	BaseURL               string `toml:"base_url" json:"-"`
 	EmbeddingBaseURL      string `toml:"embedding_base_url" json:"-"`
 	MediaDescriptions     *bool  `toml:"media_descriptions"` // nil = enabled when vision_model set
-	MaxTokens             int    `toml:"max_tokens"`
+	MaxTokens             int    `toml:"max_tokens"`         // includes reasoning tokens
+	ReasoningEffort       string `toml:"reasoning_effort"`   // OpenRouter reasoning.effort; "" = model default
 }
 
 type MemoryConfig struct {
@@ -248,7 +249,7 @@ func Load(path string) (*Config, error) {
 		cfg.Agent.MaxReplyParts = 2
 	}
 	if cfg.LLM.MaxTokens <= 0 {
-		cfg.LLM.MaxTokens = 1024
+		cfg.LLM.MaxTokens = 8192
 	}
 	if cfg.Tools.WebTimeoutSeconds <= 0 {
 		cfg.Tools.WebTimeoutSeconds = 120
@@ -283,6 +284,11 @@ func Load(path string) (*Config, error) {
 	// Validate response mode values
 	if !ValidModes[cfg.Response.DefaultMode] {
 		return nil, fmt.Errorf("response.default_mode %q is invalid (must be smart, mention, all, or none)", cfg.Response.DefaultMode)
+	}
+	switch cfg.LLM.ReasoningEffort {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh":
+	default:
+		return nil, fmt.Errorf("llm.reasoning_effort %q is invalid (must be none, minimal, low, medium, high, or xhigh)", cfg.LLM.ReasoningEffort)
 	}
 	validProviders := map[string]bool{"openrouter": true, "glm": true, "fireworks": true}
 	for _, agent := range cfg.Agents {

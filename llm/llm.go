@@ -24,6 +24,7 @@ type Message struct {
 	ToolCallID   string        `json:"tool_call_id,omitempty"`
 	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
 	Name         string        `json:"name,omitempty"`
+	Refusal      string        `json:"-"` // set only on API responses; never sent back
 }
 
 // MarshalJSON serializes content as a string when no image parts are present,
@@ -55,6 +56,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 		ToolCallID string          `json:"tool_call_id,omitempty"`
 		ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
 		Name       string          `json:"name,omitempty"`
+		Refusal    string          `json:"refusal,omitempty"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -63,6 +65,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	m.ToolCallID = raw.ToolCallID
 	m.ToolCalls = raw.ToolCalls
 	m.Name = raw.Name
+	m.Refusal = raw.Refusal
 	if len(raw.Content) > 0 {
 		var s string
 		if err := json.Unmarshal(raw.Content, &s); err == nil {
@@ -113,12 +116,50 @@ type FunctionDef struct {
 }
 
 type ChatResponse struct {
-	Choices []Choice `json:"choices"`
+	ID       string   `json:"id"`
+	Model    string   `json:"model"`
+	Provider string   `json:"provider"`
+	Choices  []Choice `json:"choices"`
+	Usage    Usage    `json:"usage"`
+}
+
+type Usage struct {
+	PromptTokens            int `json:"prompt_tokens"`
+	CompletionTokens        int `json:"completion_tokens"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
 }
 
 type Choice struct {
-	Message      Message `json:"message"`
-	FinishReason string  `json:"finish_reason"`
+	Message            Message         `json:"message"`
+	FinishReason       string          `json:"finish_reason"`
+	NativeFinishReason string          `json:"native_finish_reason"`
+	Error              json.RawMessage `json:"error,omitempty"` // provider error reported inside a 200 response
+
+	// Response-level metadata copied from ChatResponse for diagnostics.
+	GenerationID string `json:"-"`
+	Model        string `json:"-"`
+	Provider     string `json:"-"`
+	Usage        Usage  `json:"-"`
+}
+
+// LogAttrs returns response metadata for diagnosing empty or failed completions.
+func (c Choice) LogAttrs() []any {
+	return []any{
+		"generation_id", c.GenerationID,
+		"model", c.Model,
+		"provider", c.Provider,
+		"finish_reason", c.FinishReason,
+		"native_finish_reason", c.NativeFinishReason,
+		"content_len", len(c.Message.Content),
+		"tool_calls", len(c.Message.ToolCalls),
+		"refusal", c.Message.Refusal,
+		"error", string(c.Error),
+		"prompt_tokens", c.Usage.PromptTokens,
+		"completion_tokens", c.Usage.CompletionTokens,
+		"reasoning_tokens", c.Usage.CompletionTokensDetails.ReasoningTokens,
+	}
 }
 
 // ChatOptions allows per-request provider and model overrides.
@@ -128,6 +169,9 @@ type ChatOptions struct {
 	Model      string            // override model name; "" = use global
 	ExtraTools []json.RawMessage // raw tool objects appended to the tools array (e.g. GLM native tools)
 	MaxTokens  int               // max_tokens cap for this request; 0 means no cap
+	// ReasoningEffort is sent as OpenRouter's reasoning.effort ("low", "medium", ...);
+	// "" leaves the model default. Ignored for vision, GLM and Fireworks requests.
+	ReasoningEffort string
 }
 
 type Client struct {
@@ -192,8 +236,10 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	}
 
 	last := len(messages) - 1
+	vision := false
 	switch {
 	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "":
+		vision = true
 		// Vision model takes priority over per-agent provider. Default to the
 		// OpenRouter endpoint/key, but if VisionBaseURL matches the GLM base, use
 		// the GLM key instead.
@@ -233,6 +279,9 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	if opts != nil && opts.MaxTokens > 0 {
 		body["max_tokens"] = opts.MaxTokens
 	}
+	if opts != nil && opts.ReasoningEffort != "" && !vision && apiBase != cfg.GLMBaseURL && apiBase != cfg.FireworksBaseURL {
+		body["reasoning"] = map[string]string{"effort": opts.ReasoningEffort}
+	}
 
 	// GLM vision models don't support function-calling tools alongside
 	// multimodal content. Omit tools when the request goes to GLM with images.
@@ -269,7 +318,13 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	if len(result.Choices) == 0 {
 		return Choice{}, fmt.Errorf("no choices in response")
 	}
-	return result.Choices[0], nil
+	choice := result.Choices[0]
+	choice.GenerationID = result.ID
+	choice.Model = result.Model
+	choice.Provider = result.Provider
+	choice.Usage = result.Usage
+	slog.Debug("llm response", choice.LogAttrs()...)
+	return choice, nil
 }
 
 const mediaDescriptionPrompt = `Briefly describe what is shown in the attached media in 1-2 sentences. Be factual and concise. If there are multiple images or videos, describe each briefly.`
