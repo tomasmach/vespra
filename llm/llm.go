@@ -327,7 +327,12 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 	return choice, nil
 }
 
-const mediaDescriptionPrompt = `Briefly describe what is shown in the attached media in 1-2 sentences. Be factual and concise. If there are multiple images or videos, describe each briefly.`
+const mediaDescriptionPrompt = `You describe media for an assistant that cannot see it. The assistant answers the user's message using only your description, so include everything it needs.
+
+- Transcribe all readable text verbatim: comments, captions, usernames, labels, meme text. Keep who wrote what.
+- Describe people, objects, setting, and anything the user's message asks about.
+- Stay factual. Never guess unreadable text or unclear details; say they are unreadable.
+- Keep it short when the media is simple. When there are several images or videos, describe each one separately.`
 
 // DescribeMedia makes a lightweight vision call to produce a text description
 // of the given media content parts. Returns "" if no vision model is configured.
