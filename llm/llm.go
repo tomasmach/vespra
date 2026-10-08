@@ -11,7 +11,9 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tomasmach/vespra/config"
@@ -177,11 +179,15 @@ type ChatOptions struct {
 type Client struct {
 	cfgStore          *config.Store
 	openRouterBaseURL string // for testing: overrides the hardcoded OpenRouter endpoint
+
+	mu         sync.Mutex
+	imageInput map[string]bool // whether a model takes image input, keyed by API base and model
 }
 
 func New(cfgStore *config.Store) *Client {
 	return &Client{
-		cfgStore: cfgStore,
+		cfgStore:   cfgStore,
+		imageInput: make(map[string]bool),
 	}
 }
 
@@ -203,89 +209,191 @@ func (c *Client) embeddingBase() string {
 	return c.apiBase()
 }
 
-func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, opts *ChatOptions) (Choice, error) {
-	cfg := c.cfgStore.Get().LLM
-	model := cfg.Model
-	apiBase := c.apiBase()
-	apiKey := c.chatKey()
+// route is the endpoint, key and model a chat request goes to.
+type route struct {
+	apiBase string
+	apiKey  string
+	model   string
+}
 
-	// Apply per-request provider override before vision logic.
-	if opts != nil {
-		switch opts.Provider {
-		case "openrouter":
-			if c.openRouterBaseURL != "" {
-				apiBase = c.openRouterBaseURL
-			} else {
-				apiBase = "https://openrouter.ai/api/v1"
-			}
-		case "glm":
-			apiBase = cfg.GLMBaseURL
-			apiKey = cfg.GLMKey
-			// Only reset the model when the global model is not a GLM model,
-			// to avoid sending e.g. an OpenRouter model name to the GLM API.
-			if !strings.HasPrefix(model, "glm-") {
-				model = "glm-4.7"
-			}
-		case "fireworks":
-			apiBase = cfg.FireworksBaseURL
-			apiKey = cfg.FireworksKey
+// mainRoute resolves where a main chat request goes, applying the per-request
+// provider and model overrides in opts.
+func (c *Client) mainRoute(opts *ChatOptions) route {
+	cfg := c.cfgStore.Get().LLM
+	r := route{apiBase: c.apiBase(), apiKey: c.chatKey(), model: cfg.Model}
+	if opts == nil {
+		return r
+	}
+	switch opts.Provider {
+	case "openrouter":
+		if c.openRouterBaseURL != "" {
+			r.apiBase = c.openRouterBaseURL
+		} else {
+			r.apiBase = "https://openrouter.ai/api/v1"
 		}
-		if opts.Model != "" {
-			model = opts.Model
+	case "glm":
+		r.apiBase = cfg.GLMBaseURL
+		r.apiKey = cfg.GLMKey
+		// Only reset the model when the global model is not a GLM model,
+		// to avoid sending e.g. an OpenRouter model name to the GLM API.
+		if !strings.HasPrefix(r.model, "glm-") {
+			r.model = "glm-4.7"
+		}
+	case "fireworks":
+		r.apiBase = cfg.FireworksBaseURL
+		r.apiKey = cfg.FireworksKey
+	}
+	if opts.Model != "" {
+		r.model = opts.Model
+	}
+	return r
+}
+
+// visionRoute resolves where requests for the configured vision model go: the
+// OpenRouter endpoint and key by default, or VisionBaseURL, which uses the GLM
+// key when it matches the GLM base.
+func (c *Client) visionRoute() route {
+	cfg := c.cfgStore.Get().LLM
+	r := route{apiBase: c.apiBase(), apiKey: c.chatKey(), model: cfg.VisionModel}
+	if cfg.VisionBaseURL != "" {
+		r.apiBase = cfg.VisionBaseURL
+		if cfg.VisionBaseURL == cfg.GLMBaseURL {
+			r.apiKey = cfg.GLMKey
 		}
 	}
+	return r
+}
+
+// SeesImages reports whether the main chat model for opts takes image input.
+// Chat then sends it images directly in every step of a turn instead of
+// routing them to the vision model.
+func (c *Client) SeesImages(ctx context.Context, opts *ChatOptions) bool {
+	return c.seesImages(ctx, c.mainRoute(opts))
+}
+
+// seesImages reports whether the model behind r takes image input, according
+// to its OpenRouter model metadata. Answers are cached per API base and model.
+// GLM and Fireworks publish no such metadata, and a failed lookup counts as no,
+// so media then goes through the vision model.
+func (c *Client) seesImages(ctx context.Context, r route) bool {
+	cfg := c.cfgStore.Get().LLM
+	if r.apiBase == "" || r.apiBase == cfg.GLMBaseURL || r.apiBase == cfg.FireworksBaseURL {
+		return false
+	}
+	key := r.apiBase + " " + r.model
+	c.mu.Lock()
+	sees, ok := c.imageInput[key]
+	c.mu.Unlock()
+	if ok {
+		return sees
+	}
+	sees, err := c.fetchImageInput(ctx, r)
+	if err != nil {
+		slog.Warn("model metadata lookup failed; media goes through the vision model", "model", r.model, "error", err)
+		return false
+	}
+	slog.Info("model image input", "model", r.model, "base_url", r.apiBase, "sees_images", sees)
+	c.mu.Lock()
+	c.imageInput[key] = sees
+	c.mu.Unlock()
+	return sees
+}
+
+// fetchImageInput reads the model's input modalities from OpenRouter's
+// /models/{model}/endpoints. A 404 means the endpoint has no metadata for the
+// model (e.g. a custom base_url) and counts as no image input.
+func (c *Client) fetchImageInput(ctx context.Context, r route) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.apiBase+"/models/"+r.model+"/endpoints", nil)
+	if err != nil {
+		return false, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+r.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var meta struct {
+		Data struct {
+			Architecture struct {
+				InputModalities []string `json:"input_modalities"`
+			} `json:"architecture"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		return false, fmt.Errorf("decode response: %w", err)
+	}
+	return slices.Contains(meta.Data.Architecture.InputModalities, "image"), nil
+}
+
+func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, opts *ChatOptions) (Choice, error) {
+	cfg := c.cfgStore.Get().LLM
+	r := c.mainRoute(opts)
 
 	last := len(messages) - 1
 	vision := false
+	// Video in the current message still goes to the vision model, the only
+	// one that can watch it.
+	videoForVision := cfg.VisionModel != "" && last >= 0 &&
+		slices.ContainsFunc(messages[last].ContentParts, func(p ContentPart) bool { return p.Type == "video_url" })
 	switch {
-	case last >= 0 && len(messages[last].ContentParts) > 0 && cfg.VisionModel != "":
+	case !messagesHaveImages(messages):
+	case !videoForVision && c.seesImages(ctx, r):
+		// The main model sees the images itself, in every step of the turn.
+		// Only video, which it cannot take, is replaced by a note.
+		messages = stripMedia(messages, true)
+	case len(messages[last].ContentParts) > 0 && cfg.VisionModel != "":
 		vision = true
-		// Vision model takes priority over per-agent provider. Default to the
-		// OpenRouter endpoint/key, but if VisionBaseURL matches the GLM base, use
-		// the GLM key instead.
-		model = cfg.VisionModel
-		apiBase = c.apiBase()
-		apiKey = c.chatKey()
-		if cfg.VisionBaseURL != "" {
-			apiBase = cfg.VisionBaseURL
-			// If vision routes through the same endpoint as GLM, use the GLM key.
-			if cfg.VisionBaseURL == cfg.GLMBaseURL {
-				apiKey = cfg.GLMKey
-			}
-		}
+		// Vision model takes priority over per-agent provider.
+		r = c.visionRoute()
 		// Strip stale media from older history messages — only the current
 		// message needs its content parts; re-sending old base64 blobs wastes
 		// tokens and may confuse the vision model.
 		if last > 0 && messagesHaveImages(messages[:last]) {
-			stripped := stripImages(messages[:last])
+			stripped := stripMedia(messages[:last], false)
 			messages = append(stripped, messages[last])
 		}
-	case messagesHaveImages(messages):
-		messages = stripImages(messages)
+	default:
+		messages = stripMedia(messages, false)
 	}
 
 	// GLM doesn't support the OpenAI multimodal content format for
 	// non-vision models. Strip images that would otherwise be sent to
 	// a GLM endpoint with a model that isn't the configured vision model.
-	if cfg.GLMBaseURL != "" && apiBase == cfg.GLMBaseURL &&
-		model != cfg.VisionModel && messagesHaveImages(messages) {
-		messages = stripImages(messages)
+	if cfg.GLMBaseURL != "" && r.apiBase == cfg.GLMBaseURL &&
+		r.model != cfg.VisionModel && messagesHaveImages(messages) {
+		messages = stripMedia(messages, false)
 	}
 
+	return c.complete(ctx, r, messages, tools, opts, vision)
+}
+
+// complete sends one chat completion request to r and returns the first choice.
+// vision marks a request to the vision model, which gets no reasoning effort.
+func (c *Client) complete(ctx context.Context, r route, messages []Message, tools []ToolDefinition, opts *ChatOptions, vision bool) (Choice, error) {
+	cfg := c.cfgStore.Get().LLM
 	body := map[string]any{
-		"model":    model,
+		"model":    r.model,
 		"messages": messages,
 	}
 	if opts != nil && opts.MaxTokens > 0 {
 		body["max_tokens"] = opts.MaxTokens
 	}
-	if opts != nil && opts.ReasoningEffort != "" && !vision && apiBase != cfg.GLMBaseURL && apiBase != cfg.FireworksBaseURL {
+	if opts != nil && opts.ReasoningEffort != "" && !vision && r.apiBase != cfg.GLMBaseURL && r.apiBase != cfg.FireworksBaseURL {
 		body["reasoning"] = map[string]string{"effort": opts.ReasoningEffort}
 	}
 
 	// GLM vision models don't support function-calling tools alongside
 	// multimodal content. Omit tools when the request goes to GLM with images.
-	glmVision := cfg.GLMBaseURL != "" && apiBase == cfg.GLMBaseURL && messagesHaveImages(messages)
+	glmVision := cfg.GLMBaseURL != "" && r.apiBase == cfg.GLMBaseURL && messagesHaveImages(messages)
 
 	if !glmVision {
 		if opts != nil && len(opts.ExtraTools) > 0 {
@@ -304,8 +412,8 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		}
 	}
 
-	slog.Debug("llm chat dispatch", "model", model, "base_url", apiBase)
-	respBody, err := c.post(ctx, apiBase+"/chat/completions", apiKey, body)
+	slog.Debug("llm chat dispatch", "model", r.model, "base_url", r.apiBase)
+	respBody, err := c.post(ctx, r.apiBase+"/chat/completions", r.apiKey, body)
 	if err != nil {
 		return Choice{}, err
 	}
@@ -347,7 +455,7 @@ func (c *Client) DescribeMedia(ctx context.Context, parts []ContentPart) (string
 		{Role: "system", Content: mediaDescriptionPrompt},
 		{Role: "user", ContentParts: parts},
 	}
-	choice, err := c.Chat(ctx, messages, nil, nil)
+	choice, err := c.complete(ctx, c.visionRoute(), messages, nil, nil, true)
 	if err != nil {
 		return "", err
 	}
@@ -470,10 +578,11 @@ func messagesHaveImages(messages []Message) bool {
 	return false
 }
 
-// stripImages returns a copy of messages with image and video content parts removed.
-// Each stripped message gets a short text note so the model knows media was
-// shared even though it cannot see it.
-func stripImages(messages []Message) []Message {
+// stripMedia returns a copy of messages without the media parts the model
+// cannot take: videos always, images unless keepImages is set. Each message
+// that loses media gets a short text note so the model knows it was shared
+// even though it cannot see it.
+func stripMedia(messages []Message, keepImages bool) []Message {
 	out := make([]Message, len(messages))
 	copy(out, messages)
 	for i := range out {
@@ -481,13 +590,18 @@ func stripImages(messages []Message) []Message {
 			continue
 		}
 		var text string
+		var images []ContentPart
 		var imageCount, videoCount int
 		for _, p := range out[i].ContentParts {
 			switch p.Type {
 			case "text":
 				text = p.Text
 			case "image_url":
-				imageCount++
+				if keepImages {
+					images = append(images, p)
+				} else {
+					imageCount++
+				}
 			case "video_url":
 				videoCount++
 			}
@@ -508,6 +622,10 @@ func stripImages(messages []Message) []Message {
 			text += "\n" + note
 		} else {
 			text = note
+		}
+		if len(images) > 0 {
+			out[i].ContentParts = append([]ContentPart{{Type: "text", Text: text}}, images...)
+			continue
 		}
 		out[i].ContentParts = nil
 		out[i].Content = text

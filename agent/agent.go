@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,9 @@ const maxMediaDescriptionRunes = 3000
 // mediaDescriptionLabel prefixes the vision model's description in the user
 // message. The wording tells the main model that it saw the media itself.
 const mediaDescriptionLabel = "[What you see in the attached media: "
+
+// mediaGoneNote replaces media in history when no description of it exists.
+const mediaGoneNote = "[Media was attached here. It is no longer visible to you.]"
 
 // toolCallRecord is used to log tool calls made during a conversation turn.
 type toolCallRecord struct {
@@ -722,6 +726,9 @@ type turnParams struct {
 	maxIter         int    // override cfg.Agent.MaxToolIterations; 0 = use config default
 	addressed       bool   // true when the user directly @mentioned the bot
 	directedAtOther bool   // true when the message targets a specific other user (not the bot); zero-value (false) is safe for internal paths
+	// mediaDescription waits for the vision model's description of media the
+	// main model saw directly; nil when there is none. See prepareMedia.
+	mediaDescription func() string
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
@@ -779,32 +786,51 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn, sourceImageURLs, msg.ChannelID, msg.ID), cfg.Agent.MaxReplyParts)
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
-	a.annotateAndStripMedia(ctx, cfg, &userMsg)
+	mediaDescription := a.prepareMedia(ctx, cfg, &userMsg)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
 	llmMsgs = append(llmMsgs, userMsg)
 
 	a.processTurn(ctx, cfg, turnParams{
-		mode:            mode,
-		systemPrompt:    systemPrompt,
-		sendFn:          sendFn,
-		reg:             reg,
-		llmMsgs:         llmMsgs,
-		userMsgText:     historyUserContent(msg.Message, botID, botName),
-		addressed:       addressed,
-		directedAtOther: directedAtOther,
+		mode:             mode,
+		systemPrompt:     systemPrompt,
+		sendFn:           sendFn,
+		reg:              reg,
+		llmMsgs:          llmMsgs,
+		userMsgText:      historyUserContent(msg.Message, botID, botName),
+		addressed:        addressed,
+		directedAtOther:  directedAtOther,
+		mediaDescription: mediaDescription,
 	})
 }
 
-// annotateAndStripMedia calls the vision model to describe any media in msg,
-// then removes the raw media blobs so the main chat model only sees the text
-// description.
-func (a *ChannelAgent) annotateAndStripMedia(ctx context.Context, cfg *config.Config, msg *llm.Message) {
-	if hasMediaParts(msg.ContentParts) && cfg.LLM.VisionModel != "" &&
-		(cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions) {
-		a.annotateMediaDescription(ctx, cfg, msg)
-		stripMediaParts(msg)
+// prepareMedia readies the media in msg for the main model. A main model that
+// sees images keeps them in msg for the whole turn, and the vision model
+// describes them in the background so history can keep what they showed. The
+// returned function waits for that description; it is nil when there is none
+// to wait for. Media the main model cannot see (videos, or images for a
+// text-only model) is replaced by the vision model's description before the
+// turn.
+func (a *ChannelAgent) prepareMedia(ctx context.Context, cfg *config.Config, msg *llm.Message) func() string {
+	if !hasMediaParts(msg.ContentParts) {
+		return nil
 	}
+	describe := cfg.LLM.VisionModel != "" && (cfg.LLM.MediaDescriptions == nil || *cfg.LLM.MediaDescriptions)
+	seesImages := a.llm.SeesImages(ctx, a.chatOptions())
+	if seesImages && !hasVideoParts(msg.ContentParts) {
+		if !describe {
+			return nil
+		}
+		parts := slices.Clone(msg.ContentParts)
+		done := make(chan string, 1)
+		go func() { done <- a.describeMedia(ctx, cfg, parts) }()
+		return sync.OnceValue(func() string { return <-done })
+	}
+	if describe {
+		a.annotateMediaDescription(ctx, cfg, msg)
+		stripMediaParts(msg, seesImages)
+	}
+	return nil
 }
 
 // hasMediaParts reports whether parts contains at least one image or video part.
@@ -817,44 +843,89 @@ func hasMediaParts(parts []llm.ContentPart) bool {
 	return false
 }
 
-// stripMediaParts removes image and video content parts from msg and turns the
-// remaining text into plain Content. Called after annotateMediaDescription so
-// that the main chat model sees the injected text description without the raw
-// media blobs. Plain Content matters: Chat() routes any message that still has
-// content parts to the vision model.
-func stripMediaParts(msg *llm.Message) {
-	var texts []string
-	for _, p := range msg.ContentParts {
-		if p.Type == "text" {
-			texts = append(texts, p.Text)
-		}
-	}
-	msg.Content = strings.Join(texts, "\n")
-	msg.ContentParts = nil
+// hasVideoParts reports whether parts contains at least one video part.
+func hasVideoParts(parts []llm.ContentPart) bool {
+	return slices.ContainsFunc(parts, func(p llm.ContentPart) bool { return p.Type == "video_url" })
 }
 
-// annotateMediaDescription calls the vision model to produce a text description
-// of the media in msg.ContentParts and injects it into the text content part.
-// This description survives stripMediaParts() so the main model can reference it later.
-// The full msg.ContentParts slice (including any user text) is passed to DescribeMedia
-// intentionally — this gives the vision model context about what the user said.
-func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, cfg *config.Config, msg *llm.Message) {
+// stripMediaParts removes media parts from msg; keepImages leaves the image
+// parts for a main model that sees them. A message left with text only becomes
+// plain Content: while the current message has content parts and the main
+// model cannot see images, Chat() routes the turn to the vision model.
+func stripMediaParts(msg *llm.Message, keepImages bool) {
+	var texts []string
+	var images []llm.ContentPart
+	for _, p := range msg.ContentParts {
+		switch {
+		case p.Type == "text":
+			texts = append(texts, p.Text)
+		case p.Type == "image_url" && keepImages:
+			images = append(images, p)
+		}
+	}
+	text := strings.Join(texts, "\n")
+	if len(images) == 0 {
+		msg.Content = text
+		msg.ContentParts = nil
+		return
+	}
+	parts := make([]llm.ContentPart, 0, 1+len(images))
+	if text != "" {
+		parts = append(parts, llm.ContentPart{Type: "text", Text: text})
+	}
+	msg.ContentParts = append(parts, images...)
+}
+
+// forgetMedia turns messages that still carry media into plain text, so
+// history keeps no base64 blobs. description, when set, returns the vision
+// model's description of the media the main model saw during the turn, and
+// that description stays in history in place of the media. Without one, a
+// note keeps later turns from inventing what the media showed.
+func forgetMedia(msgs []llm.Message, description func() string) {
+	for i := range msgs {
+		if !hasMediaParts(msgs[i].ContentParts) {
+			continue
+		}
+		stripMediaParts(&msgs[i], false)
+		note := mediaGoneNote
+		if description != nil {
+			if desc := description(); desc != "" {
+				note = mediaDescriptionLabel + desc + "]"
+			}
+		}
+		msgs[i].Content = strings.TrimSpace(msgs[i].Content + "\n" + note)
+	}
+}
+
+// describeMedia asks the vision model to describe the media in parts and
+// returns the trimmed, length-capped description, or "" when the call fails.
+// parts includes the user's text on purpose: it tells the vision model what
+// the user asked about.
+func (a *ChannelAgent) describeMedia(ctx context.Context, cfg *config.Config, parts []llm.ContentPart) string {
 	// 4x: 1 per retry attempt (up to 3 retries) plus 1 buffer for backoff delays.
 	timeout := time.Duration(cfg.LLM.RequestTimeoutSeconds) * time.Second * 4
 	descCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	desc, err := a.llm.DescribeMedia(descCtx, msg.ContentParts)
+	desc, err := a.llm.DescribeMedia(descCtx, parts)
 	if err != nil {
 		a.logger.Warn("media description failed", "error", err)
-		return
+		return ""
 	}
 	desc = strings.TrimSpace(desc)
-	if desc == "" {
-		return
-	}
 	if runes := []rune(desc); len(runes) > maxMediaDescriptionRunes {
 		desc = string(runes[:maxMediaDescriptionRunes]) + "..."
+	}
+	return desc
+}
+
+// annotateMediaDescription injects the vision model's description of the media
+// in msg.ContentParts into its text part. The description survives
+// stripMediaParts(), so the main model can answer from it and reference it later.
+func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, cfg *config.Config, msg *llm.Message) {
+	desc := a.describeMedia(ctx, cfg, msg.ContentParts)
+	if desc == "" {
+		return
 	}
 	for i := range msg.ContentParts {
 		if msg.ContentParts[i].Type == "text" {
@@ -969,7 +1040,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs, lastMsg.ChannelID, lastMsg.ID), cfg.Agent.MaxReplyParts)
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
-	a.annotateAndStripMedia(ctx, cfg, &combinedUserMsg)
+	mediaDescription := a.prepareMedia(ctx, cfg, &combinedUserMsg)
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
@@ -981,14 +1052,15 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 
 	a.processTurn(ctx, cfg, turnParams{
-		mode:            mode,
-		systemPrompt:    systemPrompt,
-		sendFn:          sendFn,
-		reg:             reg,
-		llmMsgs:         llmMsgs,
-		userMsgText:     strings.Join(userLogLines, "\n"),
-		addressed:       anyAddressed,
-		directedAtOther: allDirectedAtOther,
+		mode:             mode,
+		systemPrompt:     systemPrompt,
+		sendFn:           sendFn,
+		reg:              reg,
+		llmMsgs:          llmMsgs,
+		userMsgText:      strings.Join(userLogLines, "\n"),
+		addressed:        anyAddressed,
+		directedAtOther:  allDirectedAtOther,
+		mediaDescription: mediaDescription,
 	})
 }
 
@@ -1494,6 +1566,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	if assistantContent != "" {
 		tp.llmMsgs = append(tp.llmMsgs, llm.Message{Role: "assistant", Content: assistantContent})
 	}
+	forgetMedia(tp.llmMsgs, tp.mediaDescription)
 	if len(tp.llmMsgs) > cfg.Agent.HistoryLimit {
 		tp.llmMsgs = tp.llmMsgs[len(tp.llmMsgs)-cfg.Agent.HistoryLimit:]
 	}
@@ -1544,7 +1617,7 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 		return // extraction already in progress
 	}
 
-	snapshot := stripImageParts(history)
+	snapshot := slices.Clone(history)
 	reg := tools.NewMemoryOnlyRegistry(a.resources.Memory, a.serverID, a.cfgStore.Get().Agent.MemoryDedupThreshold, a.cfgStore.Get().Agent.MemoryRecallLimit)
 
 	a.extractionWg.Add(1)
@@ -1583,27 +1656,6 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 		}
 		a.logger.Warn("memory extraction hit max iterations")
 	}()
-}
-
-// stripImageParts returns a copy of history with ContentParts replaced by their
-// text-only Content equivalent, suitable for the extraction LLM which has no use
-// for image or video data.
-func stripImageParts(history []llm.Message) []llm.Message {
-	snapshot := make([]llm.Message, len(history))
-	copy(snapshot, history)
-	for i := range snapshot {
-		if len(snapshot[i].ContentParts) == 0 {
-			continue
-		}
-		for _, p := range snapshot[i].ContentParts {
-			if p.Type == "text" {
-				snapshot[i].Content = p.Text
-				break
-			}
-		}
-		snapshot[i].ContentParts = nil
-	}
-	return snapshot
 }
 
 // startTyping sends a typing indicator immediately and refreshes every 8 seconds
