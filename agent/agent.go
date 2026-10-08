@@ -25,8 +25,13 @@ import (
 	"github.com/tomasmach/vespra/tools"
 )
 
-// maxMediaDescriptionRunes is the maximum length of a media description before truncation.
-const maxMediaDescriptionRunes = 500
+// maxMediaDescriptionRunes is the maximum length of a media description before
+// truncation. It leaves room for text transcribed from screenshots.
+const maxMediaDescriptionRunes = 3000
+
+// mediaDescriptionLabel prefixes the vision model's description in the user
+// message. The wording tells the main model that it saw the media itself.
+const mediaDescriptionLabel = "[What you see in the attached media: "
 
 // toolCallRecord is used to log tool calls made during a conversation turn.
 type toolCallRecord struct {
@@ -233,68 +238,66 @@ func classifyAttachments(attachments []*discordgo.MessageAttachment) (images, vi
 	return images, videos
 }
 
-// buildUserMessage converts a Discord message into an llm.Message, downloading
-// any image, video attachments, or GIF embed thumbnails as base64 data URLs for vision content parts.
-// Discord CDN URLs require authentication, so media must be fetched server-side.
+// buildUserMessage converts a Discord message into an llm.Message, attaching
+// media from the message and the message it replies to as vision content parts.
 func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
 	text := historyUserContent(msg.Message, botID, botName)
+	return userMessageWithMedia(text, downloadMediaParts(ctx, httpClient, msg.Message, msg.ReferencedMessage))
+}
 
-	images, videos := classifyAttachments(msg.Attachments)
-	if msg.ReferencedMessage != nil {
-		refImages, refVideos := classifyAttachments(msg.ReferencedMessage.Attachments)
-		images = append(images, refImages...)
-		videos = append(videos, refVideos...)
-	}
-
-	gifURLs := gifEmbedURLs(msg.Message)
-	if msg.ReferencedMessage != nil {
-		gifURLs = append(gifURLs, gifEmbedURLs(msg.ReferencedMessage)...)
-	}
-
-	if len(images) == 0 && len(videos) == 0 && len(gifURLs) == 0 {
+// userMessageWithMedia builds a user message from text and optional media parts.
+func userMessageWithMedia(text string, media []llm.ContentPart) llm.Message {
+	if len(media) == 0 {
 		return llm.Message{Role: "user", Content: text}
 	}
-
-	parts := make([]llm.ContentPart, 0, 1+len(images)+len(videos)+len(gifURLs))
+	parts := make([]llm.ContentPart, 0, 1+len(media))
 	parts = append(parts, llm.ContentPart{Type: "text", Text: text})
-	for _, a := range images {
-		dataURL, err := downloadImageAsDataURL(ctx, httpClient, a)
-		if err != nil {
-			slog.Warn("failed to download image attachment, skipping", "error", err, "url", a.URL)
-			continue
-		}
-		parts = append(parts, llm.ContentPart{
-			Type:     "image_url",
-			ImageURL: &llm.ImageURL{URL: dataURL},
-		})
-	}
-	for _, a := range videos {
-		dataURL, err := downloadImageAsDataURL(ctx, httpClient, a)
-		if err != nil {
-			slog.Warn("failed to download video attachment, skipping", "error", err, "url", a.URL)
-			continue
-		}
-		parts = append(parts, llm.ContentPart{
-			Type:     "video_url",
-			VideoURL: &llm.VideoURL{URL: dataURL},
-		})
-	}
-	for _, u := range gifURLs {
-		dataURL, err := downloadURLAsDataURL(ctx, httpClient, u, "")
-		if err != nil {
-			slog.Warn("failed to download gif embed thumbnail, skipping", "error", err, "url", u)
-			continue
-		}
-		parts = append(parts, llm.ContentPart{
-			Type:     "image_url",
-			ImageURL: &llm.ImageURL{URL: dataURL},
-		})
-	}
-	if len(parts) == 1 {
-		// all media downloads failed; fall back to plain text
-		return llm.Message{Role: "user", Content: text}
-	}
+	parts = append(parts, media...)
 	return llm.Message{Role: "user", ContentParts: parts}
+}
+
+// downloadMediaParts downloads image and video attachments and GIF embed
+// thumbnails from msgs as base64 data URL content parts. Discord CDN URLs
+// require authentication, so media must be fetched server-side. Media shared by
+// several messages (e.g. two replies to the same message) is included once, and
+// media that fails to download is skipped. Nil messages are ignored.
+func downloadMediaParts(ctx context.Context, httpClient *http.Client, msgs ...*discordgo.Message) []llm.ContentPart {
+	var parts []llm.ContentPart
+	seen := make(map[string]bool)
+	add := func(partType, url, contentType string) {
+		if seen[url] {
+			return
+		}
+		seen[url] = true
+		dataURL, err := downloadURLAsDataURL(ctx, httpClient, url, contentType)
+		if err != nil {
+			slog.Warn("failed to download media, skipping", "error", err, "url", url)
+			return
+		}
+		part := llm.ContentPart{Type: partType}
+		if partType == "video_url" {
+			part.VideoURL = &llm.VideoURL{URL: dataURL}
+		} else {
+			part.ImageURL = &llm.ImageURL{URL: dataURL}
+		}
+		parts = append(parts, part)
+	}
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		images, videos := classifyAttachments(m.Attachments)
+		for _, a := range images {
+			add("image_url", a.URL, a.ContentType)
+		}
+		for _, a := range videos {
+			add("video_url", a.URL, a.ContentType)
+		}
+		for _, u := range gifEmbedURLs(m) {
+			add("image_url", u, "")
+		}
+	}
+	return parts
 }
 
 // downloadURLAsDataURL fetches url and returns it encoded as a base64 data URL.
@@ -814,22 +817,23 @@ func hasMediaParts(parts []llm.ContentPart) bool {
 	return false
 }
 
-// stripMediaParts removes image and video content parts from msg, keeping only
-// text parts. Called after annotateMediaDescription so that the main chat model
-// sees the injected text description without the raw media blobs — preventing
-// Chat() from switching to the vision model for the main completion.
+// stripMediaParts removes image and video content parts from msg and turns the
+// remaining text into plain Content. Called after annotateMediaDescription so
+// that the main chat model sees the injected text description without the raw
+// media blobs. Plain Content matters: Chat() routes any message that still has
+// content parts to the vision model.
 func stripMediaParts(msg *llm.Message) {
-	filtered := msg.ContentParts[:0]
+	var texts []string
 	for _, p := range msg.ContentParts {
-		if p.Type != "image_url" && p.Type != "video_url" {
-			filtered = append(filtered, p)
+		if p.Type == "text" {
+			texts = append(texts, p.Text)
 		}
 	}
-	clear(msg.ContentParts[len(filtered):])
-	msg.ContentParts = filtered
+	msg.Content = strings.Join(texts, "\n")
+	msg.ContentParts = nil
 }
 
-// annotateMediaDescription calls the vision model to produce a short text description
+// annotateMediaDescription calls the vision model to produce a text description
 // of the media in msg.ContentParts and injects it into the text content part.
 // This description survives stripMediaParts() so the main model can reference it later.
 // The full msg.ContentParts slice (including any user text) is passed to DescribeMedia
@@ -854,13 +858,13 @@ func (a *ChannelAgent) annotateMediaDescription(ctx context.Context, cfg *config
 	}
 	for i := range msg.ContentParts {
 		if msg.ContentParts[i].Type == "text" {
-			msg.ContentParts[i].Text += "\n[Media description: " + desc + "]"
+			msg.ContentParts[i].Text += "\n" + mediaDescriptionLabel + desc + "]"
 			return
 		}
 	}
 	// No text part found (image-only message): prepend a new text part so the
 	// description is not silently dropped.
-	msg.ContentParts = append([]llm.ContentPart{{Type: "text", Text: "[Media description: " + desc + "]"}}, msg.ContentParts...)
+	msg.ContentParts = append([]llm.ContentPart{{Type: "text", Text: mediaDescriptionLabel + desc + "]"}}, msg.ContentParts...)
 	a.logger.Debug("prepended media description text part for image-only message")
 }
 
@@ -1150,59 +1154,13 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 }
 
 // buildCombinedUserMessage builds an LLM user message from a batch of coalesced
-// Discord messages, collecting text, image, and video attachments.
+// Discord messages, attaching media from each message and the message it replies to.
 func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*discordgo.MessageCreate, botID, botName string) llm.Message {
-	combinedContent := buildCombinedContent(msgs, botID, botName)
-
-	var mediaParts []llm.ContentPart
+	sources := make([]*discordgo.Message, 0, 2*len(msgs))
 	for _, m := range msgs {
-		for _, att := range m.Attachments {
-			if strings.HasPrefix(att.ContentType, "image/") {
-				dataURL, err := downloadImageAsDataURL(ctx, a.httpClient, att)
-				if err != nil {
-					a.logger.Warn("failed to download image attachment, skipping", "error", err, "url", att.URL)
-					continue
-				}
-				mediaParts = append(mediaParts, llm.ContentPart{
-					Type:     "image_url",
-					ImageURL: &llm.ImageURL{URL: dataURL},
-				})
-			} else if strings.HasPrefix(att.ContentType, "video/") {
-				if att.Size > maxVideoBytes {
-					a.logger.Warn("skipping oversized video attachment", "size", att.Size, "url", att.URL)
-					continue
-				}
-				dataURL, err := downloadImageAsDataURL(ctx, a.httpClient, att)
-				if err != nil {
-					a.logger.Warn("failed to download video attachment, skipping", "error", err, "url", att.URL)
-					continue
-				}
-				mediaParts = append(mediaParts, llm.ContentPart{
-					Type:     "video_url",
-					VideoURL: &llm.VideoURL{URL: dataURL},
-				})
-			}
-		}
-		for _, gifURL := range gifEmbedURLs(m.Message) {
-			dataURL, err := downloadURLAsDataURL(ctx, a.httpClient, gifURL, "")
-			if err != nil {
-				a.logger.Warn("failed to download gif embed thumbnail, skipping", "error", err, "url", gifURL)
-				continue
-			}
-			mediaParts = append(mediaParts, llm.ContentPart{
-				Type:     "image_url",
-				ImageURL: &llm.ImageURL{URL: dataURL},
-			})
-		}
+		sources = append(sources, m.Message, m.ReferencedMessage)
 	}
-
-	if len(mediaParts) == 0 {
-		return llm.Message{Role: "user", Content: combinedContent}
-	}
-	parts := make([]llm.ContentPart, 0, 1+len(mediaParts))
-	parts = append(parts, llm.ContentPart{Type: "text", Text: combinedContent})
-	parts = append(parts, mediaParts...)
-	return llm.Message{Role: "user", ContentParts: parts}
+	return userMessageWithMedia(buildCombinedContent(msgs, botID, botName), downloadMediaParts(ctx, a.httpClient, sources...))
 }
 
 // currentAgentConfig looks up the current per-agent config from the live

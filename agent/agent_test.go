@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -646,6 +648,85 @@ func TestBuildCombinedUserMessageWithGifEmbed(t *testing.T) {
 	}
 	if !hasImageURL {
 		t.Error("expected an image_url part for the GIF thumbnail")
+	}
+}
+
+func TestBuildCombinedUserMessageIncludesReferencedImageOnce(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Write([]byte("screenshot bytes")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	screenshot := &discordgo.Message{
+		Author:      &discordgo.User{Username: "marko"},
+		Content:     "The internet summarized in 3 comments",
+		Attachments: []*discordgo.MessageAttachment{{ContentType: "image/png", URL: srv.URL + "/comments.png"}},
+	}
+	reply := func(content string) *discordgo.MessageCreate {
+		return &discordgo.MessageCreate{Message: &discordgo.Message{
+			Author:            &discordgo.User{Username: "mach"},
+			Content:           content,
+			ReferencedMessage: screenshot,
+		}}
+	}
+
+	a := &ChannelAgent{httpClient: srv.Client()}
+	m := a.buildCombinedUserMessage(context.Background(), []*discordgo.MessageCreate{
+		msg(":DDDDD"),
+		reply("read the comments in the picture"),
+		reply("and draw those people"),
+	}, "", "")
+
+	if len(m.ContentParts) != 2 {
+		t.Fatalf("expected text + 1 referenced image, got %d parts", len(m.ContentParts))
+	}
+	if m.ContentParts[1].Type != "image_url" {
+		t.Errorf("expected second part type=image_url, got %q", m.ContentParts[1].Type)
+	}
+	if requests != 1 {
+		t.Errorf("expected the shared referenced image to be downloaded once, got %d requests", requests)
+	}
+}
+
+func TestDescribedImageMessageIsAnsweredByMainModel(t *testing.T) {
+	var models []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		models = append(models, body.Model)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"@krisstanton5736: I can fart in three octaves."}}]}`)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{LLM: config.LLMConfig{BaseURL: srv.URL, Model: "main-model", VisionModel: "vision-model", RequestTimeoutSeconds: 5}}
+	store := config.NewStoreFromConfig(cfg)
+	a := &ChannelAgent{cfgStore: store, llm: llm.New(store), logger: slog.Default()}
+	userMsg := llm.Message{Role: "user", ContentParts: []llm.ContentPart{
+		{Type: "text", Text: "mach: read the comments in the picture"},
+		{Type: "image_url", ImageURL: &llm.ImageURL{URL: "data:image/png;base64,AAAA"}},
+	}}
+
+	a.annotateAndStripMedia(context.Background(), cfg, &userMsg)
+	if len(userMsg.ContentParts) != 0 {
+		t.Fatalf("expected plain text message after description, got %d content parts", len(userMsg.ContentParts))
+	}
+	if !strings.Contains(userMsg.Content, "mach: read the comments in the picture") ||
+		!strings.Contains(userMsg.Content, mediaDescriptionLabel+"@krisstanton5736: I can fart in three octaves.]") {
+		t.Fatalf("expected user text and media description, got %q", userMsg.Content)
+	}
+
+	if _, err := a.llm.Chat(context.Background(), buildMessages("system", []llm.Message{userMsg}), nil, nil); err != nil {
+		t.Fatalf("main chat: %v", err)
+	}
+	if len(models) != 2 || models[0] != "vision-model" || models[1] != "main-model" {
+		t.Errorf("expected description by vision-model and answer by main-model, got %v", models)
 	}
 }
 
