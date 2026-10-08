@@ -340,9 +340,13 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 
 	last := len(messages) - 1
 	vision := false
+	// Video in the current message still goes to the vision model, the only
+	// one that can watch it.
+	videoForVision := cfg.VisionModel != "" && last >= 0 &&
+		slices.ContainsFunc(messages[last].ContentParts, func(p ContentPart) bool { return p.Type == "video_url" })
 	switch {
 	case !messagesHaveImages(messages):
-	case c.seesImages(ctx, r):
+	case !videoForVision && c.seesImages(ctx, r):
 		// The main model sees the images itself, in every step of the turn.
 		// Only video, which it cannot take, is replaced by a note.
 		messages = stripMedia(messages, true)

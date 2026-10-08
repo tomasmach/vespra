@@ -902,3 +902,28 @@ func TestDescribeMediaUsesVisionModelWhenMainModelSeesImages(t *testing.T) {
 		t.Errorf("expected one vision-model request, got %v", *bodies)
 	}
 }
+
+func TestChatSendsCurrentVideoToVisionModelWhenMainModelSeesImages(t *testing.T) {
+	srv, _, bodies := imageModelServer(t)
+	client := newTestClientWithConfig(t, &config.Config{LLM: config.LLMConfig{
+		Model:                 "sees-images",
+		VisionModel:           "vision-model",
+		BaseURL:               srv.URL,
+		RequestTimeoutSeconds: 5,
+	}})
+
+	video := llm.Message{Role: "user", ContentParts: []llm.ContentPart{
+		{Type: "text", Text: "what happens in this clip?"},
+		{Type: "video_url", VideoURL: &llm.VideoURL{URL: "data:video/mp4;base64,BBBB"}},
+	}}
+	if _, err := client.Chat(context.Background(), []llm.Message{video}, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(*bodies) != 1 || (*bodies)[0]["model"] != "vision-model" {
+		t.Fatalf("expected the video to go to vision-model, got %v", *bodies)
+	}
+	parts, _ := capturedMessages(t, &(*bodies)[0])[0].(map[string]any)["content"].([]any)
+	if len(parts) != 2 || parts[1].(map[string]any)["type"] != "video_url" {
+		t.Errorf("expected the video part to reach the vision model, got %v", parts)
+	}
+}
