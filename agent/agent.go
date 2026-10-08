@@ -34,6 +34,9 @@ const maxMediaDescriptionRunes = 3000
 // message. The wording tells the main model that it saw the media itself.
 const mediaDescriptionLabel = "[What you see in the attached media: "
 
+// mediaGoneNote replaces media in history when no description of it exists.
+const mediaGoneNote = "[Media was attached here. It is no longer visible to you.]"
+
 // toolCallRecord is used to log tool calls made during a conversation turn.
 type toolCallRecord struct {
 	Name   string `json:"name"`
@@ -876,19 +879,21 @@ func stripMediaParts(msg *llm.Message, keepImages bool) {
 // forgetMedia turns messages that still carry media into plain text, so
 // history keeps no base64 blobs. description, when set, returns the vision
 // model's description of the media the main model saw during the turn, and
-// that description stays in history in place of the media.
+// that description stays in history in place of the media. Without one, a
+// note keeps later turns from inventing what the media showed.
 func forgetMedia(msgs []llm.Message, description func() string) {
 	for i := range msgs {
 		if !hasMediaParts(msgs[i].ContentParts) {
 			continue
 		}
 		stripMediaParts(&msgs[i], false)
-		if description == nil {
-			continue
+		note := mediaGoneNote
+		if description != nil {
+			if desc := description(); desc != "" {
+				note = mediaDescriptionLabel + desc + "]"
+			}
 		}
-		if desc := description(); desc != "" {
-			msgs[i].Content = strings.TrimSpace(msgs[i].Content + "\n" + mediaDescriptionLabel + desc + "]")
-		}
+		msgs[i].Content = strings.TrimSpace(msgs[i].Content + "\n" + note)
 	}
 }
 
@@ -1612,7 +1617,7 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 		return // extraction already in progress
 	}
 
-	snapshot := stripImageParts(history)
+	snapshot := slices.Clone(history)
 	reg := tools.NewMemoryOnlyRegistry(a.resources.Memory, a.serverID, a.cfgStore.Get().Agent.MemoryDedupThreshold, a.cfgStore.Get().Agent.MemoryRecallLimit)
 
 	a.extractionWg.Add(1)
@@ -1651,27 +1656,6 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 		}
 		a.logger.Warn("memory extraction hit max iterations")
 	}()
-}
-
-// stripImageParts returns a copy of history with ContentParts replaced by their
-// text-only Content equivalent, suitable for the extraction LLM which has no use
-// for image or video data.
-func stripImageParts(history []llm.Message) []llm.Message {
-	snapshot := make([]llm.Message, len(history))
-	copy(snapshot, history)
-	for i := range snapshot {
-		if len(snapshot[i].ContentParts) == 0 {
-			continue
-		}
-		for _, p := range snapshot[i].ContentParts {
-			if p.Type == "text" {
-				snapshot[i].Content = p.Text
-				break
-			}
-		}
-		snapshot[i].ContentParts = nil
-	}
-	return snapshot
 }
 
 // startTyping sends a typing indicator immediately and refreshes every 8 seconds

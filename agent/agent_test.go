@@ -1591,3 +1591,16 @@ func TestBuildSystemPromptAlwaysIncludesHumanizer(t *testing.T) {
 		}
 	}
 }
+
+func TestForgetMediaWithoutDescriptionLeavesNote(t *testing.T) {
+	msgs := []llm.Message{{Role: "user", ContentParts: []llm.ContentPart{
+		{Type: "text", Text: "mach: remember this"},
+		{Type: "image_url", ImageURL: &llm.ImageURL{URL: "data:image/png;base64,AAAA"}},
+	}}}
+
+	forgetMedia(msgs, nil)
+
+	if len(msgs[0].ContentParts) != 0 || msgs[0].Content != "mach: remember this\n"+mediaGoneNote {
+		t.Errorf("got %+v, want user text and the no-longer-visible note", msgs[0])
+	}
+}
