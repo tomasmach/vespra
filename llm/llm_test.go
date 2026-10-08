@@ -808,3 +808,97 @@ func TestChatReturnsResponseMetadata(t *testing.T) {
 		t.Errorf("unexpected metadata: id=%q provider=%q usage=%+v", choice.GenerationID, choice.Provider, choice.Usage)
 	}
 }
+
+// imageModelServer serves OpenRouter metadata saying "sees-images" takes image
+// input, counts metadata lookups, and captures chat completion request bodies.
+func imageModelServer(t *testing.T) (*httptest.Server, *atomic.Int32, *[]map[string]any) {
+	t.Helper()
+	var lookups atomic.Int32
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			lookups.Add(1)
+			if r.URL.Path != "/models/sees-images/endpoints" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Write([]byte(`{"data":{"architecture":{"input_modalities":["text","image"]}}}`))
+			return
+		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &lookups, &bodies
+}
+
+func TestChatSendsImagesToMainModelThatSeesThem(t *testing.T) {
+	srv, lookups, bodies := imageModelServer(t)
+	client := newTestClientWithConfig(t, &config.Config{LLM: config.LLMConfig{
+		OpenRouterKey:         "or-key",
+		Model:                 "global-model",
+		VisionModel:           "vision-model",
+		BaseURL:               "http://should-not-be-used.invalid",
+		RequestTimeoutSeconds: 5,
+	}})
+	t.Cleanup(llm.SetOpenRouterBaseURL(client, srv.URL))
+	opts := &llm.ChatOptions{Provider: "openrouter", Model: "sees-images", ReasoningEffort: "medium"}
+
+	// The step after a tool call: the image must still reach the main model.
+	messages := []llm.Message{
+		{Role: "user", ContentParts: []llm.ContentPart{
+			{Type: "text", Text: "what is this?"},
+			{Type: "image_url", ImageURL: &llm.ImageURL{URL: "data:image/png;base64,AAAA"}},
+			{Type: "video_url", VideoURL: &llm.VideoURL{URL: "data:video/mp4;base64,BBBB"}},
+		}},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "reply", Arguments: `{"content":"hi"}`}}}},
+		{Role: "tool", ToolCallID: "call_1", Content: "Replied."},
+	}
+	for range 2 {
+		if _, err := client.Chat(context.Background(), messages, nil, opts); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	if lookups.Load() != 1 {
+		t.Errorf("expected 1 cached metadata lookup, got %d", lookups.Load())
+	}
+	body := (*bodies)[1]
+	if body["model"] != "sees-images" {
+		t.Errorf("expected the main model, got %v", body["model"])
+	}
+	if reasoning, _ := body["reasoning"].(map[string]any); reasoning["effort"] != "medium" {
+		t.Errorf("expected reasoning.effort=medium, got %v", body["reasoning"])
+	}
+	parts, ok := capturedMessages(t, &body)[0].(map[string]any)["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("expected text + image parts, got %v", capturedMessages(t, &body)[0])
+	}
+	if text := parts[0].(map[string]any)["text"].(string); !strings.Contains(text, "what is this?") || !strings.Contains(text, "1 video(s) attached") {
+		t.Errorf("expected user text and a note for the dropped video, got %q", text)
+	}
+	if parts[1].(map[string]any)["type"] != "image_url" {
+		t.Errorf("expected the image part to be kept, got %v", parts[1])
+	}
+}
+
+func TestDescribeMediaUsesVisionModelWhenMainModelSeesImages(t *testing.T) {
+	srv, _, bodies := imageModelServer(t)
+	client := newTestClientWithConfig(t, &config.Config{LLM: config.LLMConfig{
+		Model:                 "sees-images",
+		VisionModel:           "vision-model",
+		BaseURL:               srv.URL,
+		RequestTimeoutSeconds: 5,
+	}})
+
+	parts := []llm.ContentPart{{Type: "video_url", VideoURL: &llm.VideoURL{URL: "data:video/mp4;base64,BBBB"}}}
+	if _, err := client.DescribeMedia(context.Background(), parts); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(*bodies) != 1 || (*bodies)[0]["model"] != "vision-model" {
+		t.Errorf("expected one vision-model request, got %v", *bodies)
+	}
+}

@@ -5,10 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +20,7 @@ import (
 
 	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/memory"
 	"github.com/tomasmach/vespra/soul"
 	"github.com/tomasmach/vespra/tools"
 )
@@ -690,44 +695,191 @@ func TestBuildCombinedUserMessageIncludesReferencedImageOnce(t *testing.T) {
 	}
 }
 
-func TestDescribedImageMessageIsAnsweredByMainModel(t *testing.T) {
-	var models []string
+// recordedChat is one chat completion request seen by fakeOpenRouter.
+type recordedChat struct {
+	model string
+	body  string
+}
+
+// fakeOpenRouter serves OpenRouter metadata saying main-model takes images.
+// vision-model answers with a transcript of the screenshot; main-model first
+// replies through the reply tool and then stops. It records every chat request.
+func fakeOpenRouter(t *testing.T) (*httptest.Server, func() []recordedChat) {
+	t.Helper()
+	var mu sync.Mutex
+	var chats []recordedChat
+	mainCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			if r.URL.Path != "/models/main-model/endpoints" {
+				http.NotFound(w, r)
+				return
+			}
+			fmt.Fprint(w, `{"data":{"architecture":{"input_modalities":["file","image","text"]}}}`)
+			return
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+		}
 		var body struct {
 			Model string `json:"model"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := json.Unmarshal(raw, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		models = append(models, body.Model)
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"@krisstanton5736: I can fart in three octaves."}}]}`)
+		mu.Lock()
+		chats = append(chats, recordedChat{model: body.Model, body: string(raw)})
+		if body.Model == "main-model" {
+			mainCalls++
+		}
+		call := mainCalls
+		mu.Unlock()
+		switch {
+		case body.Model == "vision-model":
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"@krisstanton5736: I can fart in three octaves."}}]}`)
+		case call == 1:
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"reply","arguments":"{\"content\":\"three octaves, respect\"}"}}]}}]}`)
+		default:
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":""}}]}`)
+		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return srv, func() []recordedChat {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(chats)
+	}
+}
 
-	cfg := &config.Config{LLM: config.LLMConfig{BaseURL: srv.URL, Model: "main-model", VisionModel: "vision-model", RequestTimeoutSeconds: 5}}
+// runMediaTurn prepares userMsg's media and runs one addressed turn against
+// fakeOpenRouter, as handleMessage does. It returns the replies sent to Discord.
+func runMediaTurn(t *testing.T, baseURL string, userMsg llm.Message) (*ChannelAgent, []string) {
+	t.Helper()
+	cfg := &config.Config{
+		LLM: config.LLMConfig{
+			BaseURL:               baseURL,
+			Model:                 "main-model",
+			VisionModel:           "vision-model",
+			ReasoningEffort:       "high",
+			RequestTimeoutSeconds: 5,
+		},
+		Agent: config.TurnConfig{HistoryLimit: 20, MaxToolIterations: 5, MaxReplyParts: 2},
+	}
 	store := config.NewStoreFromConfig(cfg)
-	a := &ChannelAgent{cfgStore: store, llm: llm.New(store), logger: slog.Default()}
-	userMsg := llm.Message{Role: "user", ContentParts: []llm.ContentPart{
+	client := llm.New(store)
+	mem, err := memory.New(&config.MemoryConfig{DBPath: filepath.Join(t.TempDir(), "memory.db")}, client)
+	if err != nil {
+		t.Fatalf("memory.New: %v", err)
+	}
+	a := &ChannelAgent{channelID: "c1", serverID: "s1", cfgStore: store, llm: client, resources: &AgentResources{Memory: mem}, logger: slog.Default()}
+
+	var sent []string
+	send := func(s string) error {
+		sent = append(sent, s)
+		return nil
+	}
+	ctx := context.Background()
+	mediaDescription := a.prepareMedia(ctx, cfg, &userMsg)
+	a.processTurn(ctx, cfg, turnParams{
+		mode:             config.ModeAll,
+		systemPrompt:     "system",
+		sendFn:           send,
+		reg:              tools.NewReplyOnlyRegistry(send, func(string) error { return nil }, cfg.Agent.MaxReplyParts),
+		llmMsgs:          []llm.Message{userMsg},
+		userMsgText:      "mach: read the comments in the picture",
+		addressed:        true,
+		mediaDescription: mediaDescription,
+	})
+	return a, sent
+}
+
+func chatsFor(chats []recordedChat, model string) []recordedChat {
+	var out []recordedChat
+	for _, c := range chats {
+		if c.model == model {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// assertHistoryRemembersMedia checks that history keeps the vision model's
+// description of the media and no base64 media.
+func assertHistoryRemembersMedia(t *testing.T, history []llm.Message) {
+	t.Helper()
+	if len(history) == 0 {
+		t.Fatal("expected the turn in history")
+	}
+	for _, m := range history {
+		if len(m.ContentParts) > 0 || strings.Contains(m.Content, "base64") {
+			t.Errorf("history must not keep media, got %+v", m)
+		}
+	}
+	want := "mach: read the comments in the picture\n" + mediaDescriptionLabel + "@krisstanton5736: I can fart in three octaves.]"
+	if history[0].Content != want {
+		t.Errorf("history user message = %q, want %q", history[0].Content, want)
+	}
+}
+
+func TestImageGoesToMainModelInEveryStepOfTurn(t *testing.T) {
+	srv, chats := fakeOpenRouter(t)
+	a, sent := runMediaTurn(t, srv.URL, llm.Message{Role: "user", ContentParts: []llm.ContentPart{
 		{Type: "text", Text: "mach: read the comments in the picture"},
-		{Type: "image_url", ImageURL: &llm.ImageURL{URL: "data:image/png;base64,AAAA"}},
-	}}
+		{Type: "image_url", ImageURL: &llm.ImageURL{URL: "data:image/png;base64,SCREENSHOT"}},
+	}})
 
-	a.annotateAndStripMedia(context.Background(), cfg, &userMsg)
-	if len(userMsg.ContentParts) != 0 {
-		t.Fatalf("expected plain text message after description, got %d content parts", len(userMsg.ContentParts))
+	if len(sent) != 1 || sent[0] != "three octaves, respect" {
+		t.Errorf("sent = %q, want the reply tool's text", sent)
 	}
-	if !strings.Contains(userMsg.Content, "mach: read the comments in the picture") ||
-		!strings.Contains(userMsg.Content, mediaDescriptionLabel+"@krisstanton5736: I can fart in three octaves.]") {
-		t.Fatalf("expected user text and media description, got %q", userMsg.Content)
+	main := chatsFor(chats(), "main-model")
+	if len(main) != 2 {
+		t.Fatalf("expected 2 main-model steps (reply tool call, then stop), got %d", len(main))
 	}
+	for i, c := range main {
+		if !strings.Contains(c.body, `"image_url":{"url":"data:image/png;base64,SCREENSHOT"}`) {
+			t.Errorf("main-model step %d did not get the image: %s", i, c.body)
+		}
+		if !strings.Contains(c.body, `"reasoning":{"effort":"high"}`) {
+			t.Errorf("main-model step %d lost reasoning effort: %s", i, c.body)
+		}
+		if strings.Contains(c.body, mediaDescriptionLabel) {
+			t.Errorf("main-model step %d got the vision transcript instead of only the image: %s", i, c.body)
+		}
+	}
+	if vision := chatsFor(chats(), "vision-model"); len(vision) != 1 || !strings.Contains(vision[0].body, "SCREENSHOT") {
+		t.Errorf("expected one vision-model description of the image for history, got %v", vision)
+	}
+	assertHistoryRemembersMedia(t, a.history)
+}
 
-	if _, err := a.llm.Chat(context.Background(), buildMessages("system", []llm.Message{userMsg}), nil, nil); err != nil {
-		t.Fatalf("main chat: %v", err)
+func TestVideoGoesToVisionModel(t *testing.T) {
+	srv, chats := fakeOpenRouter(t)
+	a, sent := runMediaTurn(t, srv.URL, llm.Message{Role: "user", ContentParts: []llm.ContentPart{
+		{Type: "text", Text: "mach: read the comments in the picture"},
+		{Type: "video_url", VideoURL: &llm.VideoURL{URL: "data:video/mp4;base64,CLIP"}},
+	}})
+
+	if len(sent) != 1 {
+		t.Errorf("sent = %q, want one reply", sent)
 	}
-	if len(models) != 2 || models[0] != "vision-model" || models[1] != "main-model" {
-		t.Errorf("expected description by vision-model and answer by main-model, got %v", models)
+	if vision := chatsFor(chats(), "vision-model"); len(vision) != 1 || !strings.Contains(vision[0].body, `"video_url":{"url":"data:video/mp4;base64,CLIP"}`) {
+		t.Fatalf("expected the video to go to vision-model once, got %v", vision)
 	}
+	main := chatsFor(chats(), "main-model")
+	if len(main) == 0 {
+		t.Fatal("expected main-model to answer")
+	}
+	for i, c := range main {
+		if strings.Contains(c.body, "video_url") {
+			t.Errorf("main-model step %d got the video: %s", i, c.body)
+		}
+		if !strings.Contains(c.body, "I can fart in three octaves.") {
+			t.Errorf("main-model step %d did not get the video description: %s", i, c.body)
+		}
+	}
+	assertHistoryRemembersMedia(t, a.history)
 }
 
 func TestFormatMessageContent(t *testing.T) {
