@@ -1606,22 +1606,29 @@ func TestForgetMediaWithoutDescriptionLeavesNote(t *testing.T) {
 }
 
 // pathEchoServer answers each request with its path, so a test can tell which
-// attachment a downloaded data URL came from.
-func pathEchoServer(t *testing.T) *httptest.Server {
+// attachment a downloaded data URL came from. It also returns the requested paths.
+func pathEchoServer(t *testing.T) (*httptest.Server, func() []string) {
 	t.Helper()
+	var mu sync.Mutex
+	var requested []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requested = append(requested, r.URL.Path)
+		mu.Unlock()
 		fmt.Fprint(w, r.URL.Path)
 	}))
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(requested)
+	}
 }
 
 func channelMsg(author *discordgo.User, at time.Time, content string, attachments ...*discordgo.MessageAttachment) *discordgo.Message {
 	return &discordgo.Message{Author: author, Timestamp: at, Content: content, Attachments: attachments}
 }
 
-// partSummaries renders text parts as "text:<text>" and image parts as
-// "image:<downloaded body>".
 func partSummaries(t *testing.T, parts []llm.ContentPart) []string {
 	t.Helper()
 	out := make([]string, 0, len(parts))
@@ -1644,7 +1651,7 @@ func partSummaries(t *testing.T, parts []llm.ContentPart) []string {
 }
 
 func TestEarlierMediaPartsSeesImageFromEarlierMessage(t *testing.T) {
-	srv := pathEchoServer(t)
+	srv, _ := pathEchoServer(t)
 	askedAt := time.Date(2026, 10, 12, 12, 7, 0, 0, time.UTC)
 	bot := &discordgo.User{ID: "bot", Username: "Machmonstrum", Bot: true}
 	otherBot := &discordgo.User{ID: "b2", Username: "imagebot", Bot: true}
@@ -1669,7 +1676,7 @@ func TestEarlierMediaPartsSeesImageFromEarlierMessage(t *testing.T) {
 }
 
 func TestEarlierMediaPartsLimits(t *testing.T) {
-	srv := pathEchoServer(t)
+	srv, requested := pathEchoServer(t)
 	askedAt := time.Date(2026, 10, 12, 12, 7, 0, 0, time.UTC)
 	alice := &discordgo.User{ID: "u1", Username: "alice"}
 	img := func(name string) *discordgo.MessageAttachment { return attachment("image/png", srv.URL+"/"+name) }
@@ -1685,6 +1692,9 @@ func TestEarlierMediaPartsLimits(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("parts = %q, want the newest %d media in chronological order %q", got, earlierMediaMaxParts, want)
+	}
+	if slices.Contains(requested(), "/e") {
+		t.Errorf("downloaded media past the limit: %q", requested())
 	}
 
 	stale := []*discordgo.Message{channelMsg(alice, askedAt.Add(-earlierMediaMaxAge-time.Minute), "old", img("old"))}
