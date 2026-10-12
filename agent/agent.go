@@ -305,8 +305,6 @@ func downloadMediaParts(ctx context.Context, httpClient *http.Client, limit int,
 	return parts
 }
 
-// Limits for media from earlier messages that an addressed user message
-// without media of its own gets (see earlierMediaParts).
 const (
 	earlierMediaLookback = 30
 	earlierMediaMaxParts = 4
