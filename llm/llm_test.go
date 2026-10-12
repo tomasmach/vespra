@@ -283,6 +283,8 @@ func TestNoVisionModelStripsImages(t *testing.T) {
 			ContentParts: []llm.ContentPart{
 				{Type: "text", Text: "what's in this image?"},
 				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://cdn.discordapp.com/img.png"}},
+				{Type: "text", Text: "[Earlier message in the channel] roytak: look"},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://cdn.discordapp.com/earlier.png"}},
 			},
 		},
 	}
@@ -302,8 +304,8 @@ func TestNoVisionModelStripsImages(t *testing.T) {
 	if !strings.Contains(content, "image(s) attached") {
 		t.Errorf("expected note about image in content, got %q", content)
 	}
-	if !strings.Contains(content, "what's in this image?") {
-		t.Errorf("expected original text preserved in content, got %q", content)
+	if !strings.Contains(content, "what's in this image?") || !strings.Contains(content, "roytak: look") {
+		t.Errorf("expected every text part preserved in content, got %q", content)
 	}
 }
 

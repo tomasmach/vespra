@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"regexp"
 	"slices"
@@ -243,14 +242,11 @@ func classifyAttachments(attachments []*discordgo.MessageAttachment) (images, vi
 	return images, videos
 }
 
-// buildUserMessage converts a Discord message into an llm.Message, attaching
-// media from the message and the message it replies to as vision content parts.
 func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
 	text := historyUserContent(msg.Message, botID, botName)
-	return userMessageWithMedia(text, downloadMediaParts(ctx, httpClient, math.MaxInt, msg.Message, msg.ReferencedMessage))
+	return userMessageWithMedia(text, downloadMediaParts(ctx, httpClient, msg.Message, msg.ReferencedMessage))
 }
 
-// userMessageWithMedia builds a user message from text and optional media parts.
 func userMessageWithMedia(text string, media []llm.ContentPart) llm.Message {
 	if len(media) == 0 {
 		return llm.Message{Role: "user", Content: text}
@@ -261,16 +257,16 @@ func userMessageWithMedia(text string, media []llm.ContentPart) llm.Message {
 	return llm.Message{Role: "user", ContentParts: parts}
 }
 
-// downloadMediaParts downloads up to limit image and video attachments and GIF
-// embed thumbnails from msgs as base64 data URL content parts. Discord CDN URLs
+// downloadMediaParts downloads image and video attachments and GIF embed
+// thumbnails from msgs as base64 data URL content parts. Discord CDN URLs
 // require authentication, so media must be fetched server-side. Media shared by
 // several messages (e.g. two replies to the same message) is included once, and
 // media that fails to download is skipped. Nil messages are ignored.
-func downloadMediaParts(ctx context.Context, httpClient *http.Client, limit int, msgs ...*discordgo.Message) []llm.ContentPart {
+func downloadMediaParts(ctx context.Context, httpClient *http.Client, msgs ...*discordgo.Message) []llm.ContentPart {
 	var parts []llm.ContentPart
 	seen := make(map[string]bool)
 	add := func(partType, url, contentType string) {
-		if len(parts) == limit || seen[url] {
+		if seen[url] {
 			return
 		}
 		seen[url] = true
@@ -305,61 +301,47 @@ func downloadMediaParts(ctx context.Context, httpClient *http.Client, limit int,
 	return parts
 }
 
-const (
-	earlierMediaLookback = 30
-	earlierMediaMaxParts = 4
-)
+const earlierMediaLookback = 30
 
-// earlierMediaParts returns the media a user may be asking about without
-// replying to it. msgs are channel messages before the question, newest first
-// as Discord returns them. Media counts when it was posted since the bot last
-// spoke; other bots' media is skipped. Each message's media follows a text part
-// with its author and text, and messages are in chronological order.
-func earlierMediaParts(ctx context.Context, httpClient *http.Client, msgs []*discordgo.Message, botID, botName string) []llm.ContentPart {
-	var groups [][]llm.ContentPart
-	count := 0
-	for _, m := range msgs {
-		if m.Author == nil {
+// earlierMediaParts returns the media in msgs, the channel messages before the
+// current one, newest first as Discord returns them. Messages in attached are
+// skipped because the user message already has their media. Each message's
+// media follows a text part with its author and text, and messages are in
+// chronological order.
+func earlierMediaParts(ctx context.Context, httpClient *http.Client, msgs, attached []*discordgo.Message, botID, botName string) []llm.ContentPart {
+	var parts []llm.ContentPart
+	for _, m := range slices.Backward(msgs) {
+		if m.Author == nil || slices.ContainsFunc(attached, func(a *discordgo.Message) bool { return a != nil && a.ID == m.ID }) {
 			continue
 		}
-		if m.Author.ID == botID {
-			break
-		}
-		if m.Author.Bot {
-			continue
-		}
-		media := downloadMediaParts(ctx, httpClient, earlierMediaMaxParts-count, m)
+		media := downloadMediaParts(ctx, httpClient, m)
 		if len(media) == 0 {
 			continue
 		}
-		label := llm.ContentPart{Type: "text", Text: "[Earlier message in the channel] " + historyUserContent(m, botID, botName)}
-		groups = append(groups, append([]llm.ContentPart{label}, media...))
-		count += len(media)
-		if count == earlierMediaMaxParts {
-			break
-		}
+		parts = append(parts, llm.ContentPart{Type: "text", Text: "[Earlier message in the channel] " + historyUserContent(m, botID, botName)})
+		parts = append(parts, media...)
 	}
-	slices.Reverse(groups)
-	return slices.Concat(groups...)
+	return parts
 }
 
-// withEarlierMedia attaches media from the messages before beforeID to a user
-// message that carries none, so users can ask the bot about an image without
-// replying to it.
-func (a *ChannelAgent) withEarlierMedia(ctx context.Context, userMsg llm.Message, beforeID, botID, botName string) llm.Message {
-	if hasMediaParts(userMsg.ContentParts) {
-		return userMsg
-	}
+// withEarlierMedia adds the media from the earlierMediaLookback messages before
+// beforeID to userMsg, so the bot sees every recent image in the channel.
+// attached are the messages whose media userMsg already has.
+func (a *ChannelAgent) withEarlierMedia(ctx context.Context, userMsg llm.Message, beforeID, botID, botName string, attached ...*discordgo.Message) llm.Message {
 	msgs, err := a.resources.Session.ChannelMessages(a.channelID, earlierMediaLookback, beforeID, "", "", discordgo.WithContext(ctx))
 	if err != nil {
 		a.logger.Warn("failed to fetch earlier messages for media", "error", err)
 		return userMsg
 	}
-	media := earlierMediaParts(ctx, a.httpClient, msgs, botID, botName)
+	media := earlierMediaParts(ctx, a.httpClient, msgs, attached, botID, botName)
 	if len(media) == 0 {
 		return userMsg
 	}
-	return userMessageWithMedia(userMsg.Content, media)
+	if len(userMsg.ContentParts) == 0 {
+		return userMessageWithMedia(userMsg.Content, media)
+	}
+	userMsg.ContentParts = append(userMsg.ContentParts, media...)
+	return userMsg
 }
 
 // downloadURLAsDataURL fetches url and returns it encoded as a base64 data URL.
@@ -844,9 +826,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn, sourceImageURLs, msg.ChannelID, msg.ID), cfg.Agent.MaxReplyParts)
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
-	if addressed {
-		userMsg = a.withEarlierMedia(ctx, userMsg, msg.ID, botID, botName)
-	}
+	userMsg = a.withEarlierMedia(ctx, userMsg, msg.ID, botID, botName, msg.ReferencedMessage)
 	mediaDescription := a.prepareMedia(ctx, cfg, &userMsg)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
@@ -1101,9 +1081,13 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs, lastMsg.ChannelID, lastMsg.ID), cfg.Agent.MaxReplyParts)
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
-	if anyAddressed {
-		combinedUserMsg = a.withEarlierMedia(ctx, combinedUserMsg, msgs[0].ID, botID, botName)
+	// Looking back from the last message also covers messages posted between
+	// the batch messages that never reached the agent, such as other bots'.
+	attached := make([]*discordgo.Message, 0, 2*len(msgs))
+	for _, m := range msgs {
+		attached = append(attached, m.Message, m.ReferencedMessage)
 	}
+	combinedUserMsg = a.withEarlierMedia(ctx, combinedUserMsg, lastMsg.ID, botID, botName, attached...)
 	mediaDescription := a.prepareMedia(ctx, cfg, &combinedUserMsg)
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
@@ -1289,14 +1273,12 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	return sb.String()
 }
 
-// buildCombinedUserMessage builds an LLM user message from a batch of coalesced
-// Discord messages, attaching media from each message and the message it replies to.
 func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*discordgo.MessageCreate, botID, botName string) llm.Message {
 	sources := make([]*discordgo.Message, 0, 2*len(msgs))
 	for _, m := range msgs {
 		sources = append(sources, m.Message, m.ReferencedMessage)
 	}
-	return userMessageWithMedia(buildCombinedContent(msgs, botID, botName), downloadMediaParts(ctx, a.httpClient, math.MaxInt, sources...))
+	return userMessageWithMedia(buildCombinedContent(msgs, botID, botName), downloadMediaParts(ctx, a.httpClient, sources...))
 }
 
 // currentAgentConfig looks up the current per-agent config from the live

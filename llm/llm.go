@@ -589,13 +589,13 @@ func stripMedia(messages []Message, keepImages bool) []Message {
 		if len(out[i].ContentParts) == 0 {
 			continue
 		}
-		var text string
+		var texts []string
 		var images []ContentPart
 		var imageCount, videoCount int
 		for _, p := range out[i].ContentParts {
 			switch p.Type {
 			case "text":
-				text = p.Text
+				texts = append(texts, p.Text)
 			case "image_url":
 				if keepImages {
 					images = append(images, p)
@@ -609,6 +609,7 @@ func stripMedia(messages []Message, keepImages bool) []Message {
 		if imageCount == 0 && videoCount == 0 {
 			continue
 		}
+		text := strings.Join(texts, "\n")
 		var note string
 		switch {
 		case imageCount > 0 && videoCount > 0:
