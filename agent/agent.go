@@ -242,14 +242,11 @@ func classifyAttachments(attachments []*discordgo.MessageAttachment) (images, vi
 	return images, videos
 }
 
-// buildUserMessage converts a Discord message into an llm.Message, attaching
-// media from the message and the message it replies to as vision content parts.
 func buildUserMessage(ctx context.Context, httpClient *http.Client, msg *discordgo.MessageCreate, botID, botName string) llm.Message {
 	text := historyUserContent(msg.Message, botID, botName)
 	return userMessageWithMedia(text, downloadMediaParts(ctx, httpClient, msg.Message, msg.ReferencedMessage))
 }
 
-// userMessageWithMedia builds a user message from text and optional media parts.
 func userMessageWithMedia(text string, media []llm.ContentPart) llm.Message {
 	if len(media) == 0 {
 		return llm.Message{Role: "user", Content: text}
@@ -1084,11 +1081,13 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs, lastMsg.ChannelID, lastMsg.ID), cfg.Agent.MaxReplyParts)
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
-	referenced := make([]*discordgo.Message, 0, len(msgs))
+	// Looking back from the last message also covers messages posted between
+	// the batch messages that never reached the agent, such as other bots'.
+	attached := make([]*discordgo.Message, 0, 2*len(msgs))
 	for _, m := range msgs {
-		referenced = append(referenced, m.ReferencedMessage)
+		attached = append(attached, m.Message, m.ReferencedMessage)
 	}
-	combinedUserMsg = a.withEarlierMedia(ctx, combinedUserMsg, msgs[0].ID, botID, botName, referenced...)
+	combinedUserMsg = a.withEarlierMedia(ctx, combinedUserMsg, lastMsg.ID, botID, botName, attached...)
 	mediaDescription := a.prepareMedia(ctx, cfg, &combinedUserMsg)
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
@@ -1274,8 +1273,6 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	return sb.String()
 }
 
-// buildCombinedUserMessage builds an LLM user message from a batch of coalesced
-// Discord messages, attaching media from each message and the message it replies to.
 func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*discordgo.MessageCreate, botID, botName string) llm.Message {
 	sources := make([]*discordgo.Message, 0, 2*len(msgs))
 	for _, m := range msgs {
