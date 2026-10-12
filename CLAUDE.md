@@ -76,6 +76,7 @@ go test -tags sqlite_fts5 ./...
 - One goroutine per active Discord channel; idle timeout after `IdleTimeoutMinutes`
 - Conversation history is in-memory only (not persisted across restarts)
 - Images go straight to the main model when its OpenRouter metadata lists image input (cached per model); videos and text-only models get the `vision_model` description instead. The vision model also describes images in the background so history keeps their content without base64
+- An addressed message without media of its own (or in the message it replies to) gets the media from the last 10 channel messages posted since the bot last spoke, at most 30 minutes old and 4 items, so users can ask about an image without replying to it
 - Embeddings stored as little-endian float32 blobs in SQLite
 - Soft-delete only for memories (`forgotten=1` flag)
 - Tool-call loop repeats until LLM produces plain text (no tool calls)

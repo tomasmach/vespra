@@ -304,6 +304,69 @@ func downloadMediaParts(ctx context.Context, httpClient *http.Client, msgs ...*d
 	return parts
 }
 
+// Limits for media from earlier messages that an addressed user message
+// without media of its own gets (see earlierMediaParts). The age limit keeps
+// an old image in a quiet channel off an unrelated question.
+const (
+	earlierMediaLookback = 10
+	earlierMediaMaxAge   = 30 * time.Minute
+	earlierMediaMaxParts = 4
+)
+
+// earlierMediaParts returns the media a user may be asking about without
+// replying to it. msgs are channel messages before the question, newest first
+// as Discord returns them. Media counts when it was posted since the bot last
+// spoke and at most earlierMediaMaxAge before askedAt; other bots' media is
+// skipped. Each message's media follows a text part with its author and text,
+// and messages are in chronological order.
+func earlierMediaParts(ctx context.Context, httpClient *http.Client, msgs []*discordgo.Message, botID, botName string, askedAt time.Time) []llm.ContentPart {
+	var groups [][]llm.ContentPart
+	count := 0
+	for _, m := range msgs {
+		if m.Author == nil {
+			continue
+		}
+		if m.Author.ID == botID || askedAt.Sub(m.Timestamp) > earlierMediaMaxAge {
+			break
+		}
+		if m.Author.Bot {
+			continue
+		}
+		media := downloadMediaParts(ctx, httpClient, m)
+		if len(media) == 0 {
+			continue
+		}
+		media = media[:min(len(media), earlierMediaMaxParts-count)]
+		label := llm.ContentPart{Type: "text", Text: "[Earlier message in the channel] " + historyUserContent(m, botID, botName)}
+		groups = append(groups, append([]llm.ContentPart{label}, media...))
+		count += len(media)
+		if count == earlierMediaMaxParts {
+			break
+		}
+	}
+	slices.Reverse(groups)
+	return slices.Concat(groups...)
+}
+
+// withEarlierMedia attaches media from the messages before beforeID to a user
+// message that carries none, so users can ask the bot about an image without
+// replying to it.
+func (a *ChannelAgent) withEarlierMedia(ctx context.Context, userMsg llm.Message, beforeID string, askedAt time.Time, botID, botName string) llm.Message {
+	if hasMediaParts(userMsg.ContentParts) {
+		return userMsg
+	}
+	msgs, err := a.resources.Session.ChannelMessages(a.channelID, earlierMediaLookback, beforeID, "", "", discordgo.WithContext(ctx))
+	if err != nil {
+		a.logger.Warn("failed to fetch earlier messages for media", "error", err)
+		return userMsg
+	}
+	media := earlierMediaParts(ctx, a.httpClient, msgs, botID, botName, askedAt)
+	if len(media) == 0 {
+		return userMsg
+	}
+	return userMessageWithMedia(userMsg.Content, media)
+}
+
 // downloadURLAsDataURL fetches url and returns it encoded as a base64 data URL.
 // If contentType is empty, the response Content-Type header is used, defaulting to "image/jpeg".
 func downloadURLAsDataURL(ctx context.Context, client *http.Client, url, contentType string) (string, error) {
@@ -786,6 +849,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn, sourceImageURLs, msg.ChannelID, msg.ID), cfg.Agent.MaxReplyParts)
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
+	if addressed {
+		userMsg = a.withEarlierMedia(ctx, userMsg, msg.ID, msg.Timestamp, botID, botName)
+	}
 	mediaDescription := a.prepareMedia(ctx, cfg, &userMsg)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(llmMsgs, a.history)
@@ -1040,6 +1106,9 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs, lastMsg.ChannelID, lastMsg.ID), cfg.Agent.MaxReplyParts)
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
+	if anyAddressed {
+		combinedUserMsg = a.withEarlierMedia(ctx, combinedUserMsg, msgs[0].ID, msgs[0].Timestamp, botID, botName)
+	}
 	mediaDescription := a.prepareMedia(ctx, cfg, &combinedUserMsg)
 
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
