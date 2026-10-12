@@ -1604,3 +1604,101 @@ func TestForgetMediaWithoutDescriptionLeavesNote(t *testing.T) {
 		t.Errorf("got %+v, want user text and the no-longer-visible note", msgs[0])
 	}
 }
+
+// pathEchoServer answers each request with its path, so a test can tell which
+// attachment a downloaded data URL came from. It also returns the requested paths.
+func pathEchoServer(t *testing.T) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var requested []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requested = append(requested, r.URL.Path)
+		mu.Unlock()
+		fmt.Fprint(w, r.URL.Path)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(requested)
+	}
+}
+
+func channelMsg(author *discordgo.User, at time.Time, content string, attachments ...*discordgo.MessageAttachment) *discordgo.Message {
+	return &discordgo.Message{Author: author, Timestamp: at, Content: content, Attachments: attachments}
+}
+
+func partSummaries(t *testing.T, parts []llm.ContentPart) []string {
+	t.Helper()
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		switch p.Type {
+		case "text":
+			out = append(out, "text:"+p.Text)
+		case "image_url":
+			_, encoded, _ := strings.Cut(p.ImageURL.URL, "base64,")
+			body, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				t.Fatalf("decode image part: %v", err)
+			}
+			out = append(out, "image:"+string(body))
+		default:
+			out = append(out, p.Type)
+		}
+	}
+	return out
+}
+
+func TestEarlierMediaPartsSeesImageFromEarlierMessage(t *testing.T) {
+	srv, _ := pathEchoServer(t)
+	askedAt := time.Date(2026, 10, 12, 12, 7, 0, 0, time.UTC)
+	bot := &discordgo.User{ID: "bot", Username: "Machmonstrum", Bot: true}
+	otherBot := &discordgo.User{ID: "b2", Username: "imagebot", Bot: true}
+	roytak := &discordgo.User{ID: "u1", Username: "roytak"}
+	paulee := &discordgo.User{ID: "u2", Username: "paulee5"}
+	// Newest first, as Discord returns them.
+	msgs := []*discordgo.Message{
+		channelMsg(paulee, askedAt.Add(-time.Minute), "Učivo střední školy"),
+		channelMsg(otherBot, askedAt.Add(-2*time.Minute), "", attachment("image/png", srv.URL+"/other-bot.png")),
+		channelMsg(roytak, askedAt.Add(-4*time.Minute), "vsak to neni realna syntax"),
+		channelMsg(roytak, askedAt.Add(-4*time.Minute), "ani na sekundu neverim", attachment("image/png", srv.URL+"/manpage.png")),
+		channelMsg(bot, askedAt.Add(-10*time.Minute), "earlier reply"),
+		channelMsg(paulee, askedAt.Add(-11*time.Minute), "", attachment("image/png", srv.URL+"/before-reply.png")),
+	}
+
+	got := partSummaries(t, earlierMediaParts(context.Background(), srv.Client(), msgs, "bot", "Machmonstrum", askedAt))
+
+	want := []string{"text:[Earlier message in the channel] roytak: ani na sekundu neverim", "image:/manpage.png"}
+	if !slices.Equal(got, want) {
+		t.Errorf("parts = %q, want %q", got, want)
+	}
+}
+
+func TestEarlierMediaPartsLimits(t *testing.T) {
+	srv, requested := pathEchoServer(t)
+	askedAt := time.Date(2026, 10, 12, 12, 7, 0, 0, time.UTC)
+	alice := &discordgo.User{ID: "u1", Username: "alice"}
+	img := func(name string) *discordgo.MessageAttachment { return attachment("image/png", srv.URL+"/"+name) }
+
+	msgs := []*discordgo.Message{
+		channelMsg(alice, askedAt.Add(-time.Minute), "newer", img("a"), img("b"), img("c")),
+		channelMsg(alice, askedAt.Add(-2*time.Minute), "older", img("d"), img("e")),
+	}
+	got := partSummaries(t, earlierMediaParts(context.Background(), srv.Client(), msgs, "bot", "bot", askedAt))
+	want := []string{
+		"text:[Earlier message in the channel] alice: older", "image:/d",
+		"text:[Earlier message in the channel] alice: newer", "image:/a", "image:/b", "image:/c",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("parts = %q, want the newest %d media in chronological order %q", got, earlierMediaMaxParts, want)
+	}
+	if slices.Contains(requested(), "/e") {
+		t.Errorf("downloaded media past the limit: %q", requested())
+	}
+
+	stale := []*discordgo.Message{channelMsg(alice, askedAt.Add(-earlierMediaMaxAge-time.Minute), "old", img("old"))}
+	if parts := earlierMediaParts(context.Background(), srv.Client(), stale, "bot", "bot", askedAt); len(parts) != 0 {
+		t.Errorf("expected no media older than %s, got %q", earlierMediaMaxAge, partSummaries(t, parts))
+	}
+}
