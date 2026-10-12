@@ -1606,27 +1606,18 @@ func TestForgetMediaWithoutDescriptionLeavesNote(t *testing.T) {
 }
 
 // pathEchoServer answers each request with its path, so a test can tell which
-// attachment a downloaded data URL came from. It also returns the requested paths.
-func pathEchoServer(t *testing.T) (*httptest.Server, func() []string) {
+// attachment a downloaded data URL came from.
+func pathEchoServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	var mu sync.Mutex
-	var requested []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		requested = append(requested, r.URL.Path)
-		mu.Unlock()
 		fmt.Fprint(w, r.URL.Path)
 	}))
 	t.Cleanup(srv.Close)
-	return srv, func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return slices.Clone(requested)
-	}
+	return srv
 }
 
-func channelMsg(author *discordgo.User, content string, attachments ...*discordgo.MessageAttachment) *discordgo.Message {
-	return &discordgo.Message{Author: author, Content: content, Attachments: attachments}
+func channelMsg(id string, author *discordgo.User, content string, attachments ...*discordgo.MessageAttachment) *discordgo.Message {
+	return &discordgo.Message{ID: id, Author: author, Content: content, Attachments: attachments}
 }
 
 func partSummaries(t *testing.T, parts []llm.ContentPart) []string {
@@ -1650,48 +1641,33 @@ func partSummaries(t *testing.T, parts []llm.ContentPart) []string {
 	return out
 }
 
-func TestEarlierMediaPartsSeesImageFromEarlierMessage(t *testing.T) {
-	srv, _ := pathEchoServer(t)
+func TestEarlierMediaPartsIncludesAllRecentMedia(t *testing.T) {
+	srv := pathEchoServer(t)
+	img := func(name string) *discordgo.MessageAttachment { return attachment("image/png", srv.URL+"/"+name) }
 	bot := &discordgo.User{ID: "bot", Username: "Machmonstrum", Bot: true}
 	otherBot := &discordgo.User{ID: "b2", Username: "imagebot", Bot: true}
 	roytak := &discordgo.User{ID: "u1", Username: "roytak"}
 	paulee := &discordgo.User{ID: "u2", Username: "paulee5"}
+	mylan := &discordgo.User{ID: "u3", Username: "Mylan"}
+	replied := channelMsg("1", paulee, "this one is replied to", img("replied.png"))
 	// Newest first, as Discord returns them.
 	msgs := []*discordgo.Message{
-		channelMsg(paulee, "Učivo střední školy"),
-		channelMsg(otherBot, "", attachment("image/png", srv.URL+"/other-bot.png")),
-		channelMsg(roytak, "vsak to neni realna syntax"),
-		channelMsg(roytak, "ani na sekundu neverim", attachment("image/png", srv.URL+"/manpage.png")),
-		channelMsg(bot, "earlier reply"),
-		channelMsg(paulee, "", attachment("image/png", srv.URL+"/before-reply.png")),
+		channelMsg("7", mylan, "", img("tesla.png")),
+		channelMsg("6", bot, "Tady žádný obrázek nevidím"),
+		channelMsg("5", paulee, "vidíš tohoto chlapa?"),
+		channelMsg("4", roytak, "ani na sekundu neverim", img("manpage.png")),
+		channelMsg("3", otherBot, "", img("other-bot.png"), img("other-bot-2.png")),
+		replied,
 	}
 
-	got := partSummaries(t, earlierMediaParts(context.Background(), srv.Client(), msgs, "bot", "Machmonstrum"))
+	got := partSummaries(t, earlierMediaParts(context.Background(), srv.Client(), msgs, []*discordgo.Message{nil, replied}, "bot", "Machmonstrum"))
 
-	want := []string{"text:[Earlier message in the channel] roytak: ani na sekundu neverim", "image:/manpage.png"}
+	want := []string{
+		"text:[Earlier message in the channel] imagebot: ", "image:/other-bot.png", "image:/other-bot-2.png",
+		"text:[Earlier message in the channel] roytak: ani na sekundu neverim", "image:/manpage.png",
+		"text:[Earlier message in the channel] Mylan: ", "image:/tesla.png",
+	}
 	if !slices.Equal(got, want) {
 		t.Errorf("parts = %q, want %q", got, want)
-	}
-}
-
-func TestEarlierMediaPartsLimits(t *testing.T) {
-	srv, requested := pathEchoServer(t)
-	alice := &discordgo.User{ID: "u1", Username: "alice"}
-	img := func(name string) *discordgo.MessageAttachment { return attachment("image/png", srv.URL+"/"+name) }
-
-	msgs := []*discordgo.Message{
-		channelMsg(alice, "newer", img("a"), img("b"), img("c")),
-		channelMsg(alice, "older", img("d"), img("e")),
-	}
-	got := partSummaries(t, earlierMediaParts(context.Background(), srv.Client(), msgs, "bot", "bot"))
-	want := []string{
-		"text:[Earlier message in the channel] alice: older", "image:/d",
-		"text:[Earlier message in the channel] alice: newer", "image:/a", "image:/b", "image:/c",
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("parts = %q, want the newest %d media in chronological order %q", got, earlierMediaMaxParts, want)
-	}
-	if slices.Contains(requested(), "/e") {
-		t.Errorf("downloaded media past the limit: %q", requested())
 	}
 }
