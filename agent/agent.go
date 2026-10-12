@@ -306,28 +306,25 @@ func downloadMediaParts(ctx context.Context, httpClient *http.Client, limit int,
 }
 
 // Limits for media from earlier messages that an addressed user message
-// without media of its own gets (see earlierMediaParts). The age limit keeps
-// an old image in a quiet channel off an unrelated question.
+// without media of its own gets (see earlierMediaParts).
 const (
-	earlierMediaLookback = 10
-	earlierMediaMaxAge   = 30 * time.Minute
+	earlierMediaLookback = 30
 	earlierMediaMaxParts = 4
 )
 
 // earlierMediaParts returns the media a user may be asking about without
 // replying to it. msgs are channel messages before the question, newest first
 // as Discord returns them. Media counts when it was posted since the bot last
-// spoke and at most earlierMediaMaxAge before askedAt; other bots' media is
-// skipped. Each message's media follows a text part with its author and text,
-// and messages are in chronological order.
-func earlierMediaParts(ctx context.Context, httpClient *http.Client, msgs []*discordgo.Message, botID, botName string, askedAt time.Time) []llm.ContentPart {
+// spoke; other bots' media is skipped. Each message's media follows a text part
+// with its author and text, and messages are in chronological order.
+func earlierMediaParts(ctx context.Context, httpClient *http.Client, msgs []*discordgo.Message, botID, botName string) []llm.ContentPart {
 	var groups [][]llm.ContentPart
 	count := 0
 	for _, m := range msgs {
 		if m.Author == nil {
 			continue
 		}
-		if m.Author.ID == botID || askedAt.Sub(m.Timestamp) > earlierMediaMaxAge {
+		if m.Author.ID == botID {
 			break
 		}
 		if m.Author.Bot {
@@ -351,7 +348,7 @@ func earlierMediaParts(ctx context.Context, httpClient *http.Client, msgs []*dis
 // withEarlierMedia attaches media from the messages before beforeID to a user
 // message that carries none, so users can ask the bot about an image without
 // replying to it.
-func (a *ChannelAgent) withEarlierMedia(ctx context.Context, userMsg llm.Message, beforeID string, askedAt time.Time, botID, botName string) llm.Message {
+func (a *ChannelAgent) withEarlierMedia(ctx context.Context, userMsg llm.Message, beforeID, botID, botName string) llm.Message {
 	if hasMediaParts(userMsg.ContentParts) {
 		return userMsg
 	}
@@ -360,7 +357,7 @@ func (a *ChannelAgent) withEarlierMedia(ctx context.Context, userMsg llm.Message
 		a.logger.Warn("failed to fetch earlier messages for media", "error", err)
 		return userMsg
 	}
-	media := earlierMediaParts(ctx, a.httpClient, msgs, botID, botName, askedAt)
+	media := earlierMediaParts(ctx, a.httpClient, msgs, botID, botName)
 	if len(media) == 0 {
 		return userMsg
 	}
@@ -850,7 +847,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	if addressed {
-		userMsg = a.withEarlierMedia(ctx, userMsg, msg.ID, msg.Timestamp, botID, botName)
+		userMsg = a.withEarlierMedia(ctx, userMsg, msg.ID, botID, botName)
 	}
 	mediaDescription := a.prepareMedia(ctx, cfg, &userMsg)
 	llmMsgs := make([]llm.Message, len(a.history), len(a.history)+1)
@@ -1107,7 +1104,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 	if anyAddressed {
-		combinedUserMsg = a.withEarlierMedia(ctx, combinedUserMsg, msgs[0].ID, msgs[0].Timestamp, botID, botName)
+		combinedUserMsg = a.withEarlierMedia(ctx, combinedUserMsg, msgs[0].ID, botID, botName)
 	}
 	mediaDescription := a.prepareMedia(ctx, cfg, &combinedUserMsg)
 
