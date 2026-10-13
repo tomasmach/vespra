@@ -1028,10 +1028,13 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	mode := cfg.ResolveResponseMode(a.serverID, lastMsg.ChannelID)
 
 	var anyAddressed bool
+	var addressedAuthorID string
 	for _, m := range msgs {
 		if isAddressedToBot(m, botID, botName) {
 			anyAddressed = true
-			break
+			if m.Author != nil {
+				addressedAuthorID = m.Author.ID
+			}
 		}
 	}
 
@@ -1095,7 +1098,12 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	}
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs, lastMsg.ChannelID, lastMsg.ID), cfg.Agent.MaxReplyParts)
 	if a.scheduleStore != nil {
-		tools.RegisterScheduleTools(reg, a.scheduleStore, a.serverID, lastMsg.ChannelID, lastAuthorID)
+		// The person who addressed the bot asked for the task, not whoever wrote last.
+		requesterID := lastAuthorID
+		if addressedAuthorID != "" {
+			requesterID = addressedAuthorID
+		}
+		tools.RegisterScheduleTools(reg, a.scheduleStore, a.serverID, lastMsg.ChannelID, requesterID)
 	}
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
@@ -1132,7 +1140,20 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 // handleScheduledTask carries out a due scheduled task as an addressed turn in
 // this channel. The schedule tools are left out so a task cannot reschedule itself.
+// A one-shot task is deleted here, after its attempt, and not when it fires.
 func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Task) {
+	if a.scheduleStore != nil {
+		if exists, err := a.scheduleStore.Exists(ctx, task.ID); err == nil && !exists {
+			return // cancelled while it waited in the queue
+		}
+		if task.Cron == "" {
+			defer func() {
+				if err := a.scheduleStore.Cancel(ctx, task.ServerID, task.ID); err != nil {
+					a.logger.Warn("delete finished scheduled task", "error", err, "task_id", task.ID)
+				}
+			}()
+		}
+	}
 	a.lastActive.Store(time.Now().UnixNano())
 	cfg := a.cfgStore.Get()
 	mode := cfg.ResolveResponseMode(a.serverID, a.channelID)
@@ -1149,10 +1170,11 @@ func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Ta
 	memories := a.recallMemories(ctx, cfg, task.UserID, task.Prompt)
 	systemPrompt := a.buildSystemPrompt(cfg, mode, a.channelID, memories, botName, true, false)
 	systemPrompt += fmt.Sprintf("\n\nCarry out this scheduled task now. You MUST post a text reply in this channel using the reply tool. If the task is for the person who created it, mention them as <@%s> so Discord notifies them.", task.UserID)
-	sendFn := a.rateLimitedSendFn(func(content string) error {
+	// No send rate limit: tasks are capped per server, and a dropped reminder is lost.
+	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(a.channelID, content)
 		return err
-	})
+	}
 	reactFn := func(emoji string) error {
 		return fmt.Errorf("scheduled tasks have no message to react to; use reply")
 	}

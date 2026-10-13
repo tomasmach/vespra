@@ -30,6 +30,10 @@ CREATE INDEX IF NOT EXISTS idx_tasks_next_run ON tasks(next_run);
 CREATE INDEX IF NOT EXISTS idx_tasks_server ON tasks(server_id);
 `
 
+// oneShotRetry is how long a fired one-shot task waits before it fires again
+// when the channel agent has not run it.
+const oneShotRetry = 10 * time.Minute
+
 type Task struct {
 	ID        int64
 	ServerID  string
@@ -81,6 +85,10 @@ func (s *Store) Create(ctx context.Context, serverID, channelID, userID, prompt,
 		}
 		task.NextRun = next
 	} else {
+		// robfig/cron panics on some malformed specs such as "TZ=UTC".
+		if len(strings.Fields(cronSpec)) != 5 {
+			return task, fmt.Errorf("cron must have five fields in local time")
+		}
 		parsed, err := cron.ParseStandard(cronSpec)
 		if err != nil {
 			return task, fmt.Errorf("invalid cron: %w", err)
@@ -157,15 +165,28 @@ func (s *Store) Cancel(ctx context.Context, serverID string, id int64) error {
 	return nil
 }
 
+// Exists reports whether a task is still pending, i.e. not cancelled or done.
+func (s *Store) Exists(ctx context.Context, id int64) (bool, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE id = ?`, id).Scan(&n); err != nil {
+		return false, fmt.Errorf("check scheduled task: %w", err)
+	}
+	return n > 0, nil
+}
+
+// Finish moves a fired task to its next run. A one-shot task gets a retry time
+// instead of being deleted: the channel agent deletes it once it has run, so a
+// restart while it waits in the agent's queue does not lose it.
 func (s *Store) Finish(ctx context.Context, task Task, now time.Time) error {
-	if task.Cron == "" {
-		return s.Cancel(ctx, task.ServerID, task.ID)
+	next := now.Add(oneShotRetry)
+	if task.Cron != "" {
+		parsed, err := cron.ParseStandard(task.Cron)
+		if err != nil {
+			return fmt.Errorf("parse stored cron: %w", err)
+		}
+		next = parsed.Next(now.In(time.Local))
 	}
-	parsed, err := cron.ParseStandard(task.Cron)
-	if err != nil {
-		return fmt.Errorf("parse stored cron: %w", err)
-	}
-	_, err = s.db.ExecContext(ctx, `UPDATE tasks SET next_run = ? WHERE id = ? AND server_id = ?`, parsed.Next(now.In(time.Local)).Unix(), task.ID, task.ServerID)
+	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET next_run = ? WHERE id = ? AND server_id = ?`, next.Unix(), task.ID, task.ServerID)
 	if err != nil {
 		return fmt.Errorf("advance scheduled task: %w", err)
 	}

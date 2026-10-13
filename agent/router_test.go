@@ -405,8 +405,12 @@ func TestScheduledTaskRunsOnChannelAgent(t *testing.T) {
 			if tc.dm {
 				serverID = "DM:user1"
 			}
+			task, err := store.Create(context.Background(), serverID, "channel1", "user1", "Remind <@user1> that their tram leaves at 16:06", future, "")
+			if err != nil {
+				t.Fatal(err)
+			}
 			original := time.Now().Add(-time.Hour).Truncate(time.Minute).In(time.Local)
-			task := schedule.Task{ID: 1, ServerID: serverID, ChannelID: "channel1", UserID: "user1", Prompt: "Remind <@user1> that their tram leaves at 16:06", NextRun: original}
+			task.NextRun = original
 			if !router.FireTask(ctx, task) {
 				t.Fatal("task was dropped")
 			}
@@ -422,6 +426,7 @@ func TestScheduledTaskRunsOnChannelAgent(t *testing.T) {
 			if tc.batch {
 				router.Route(fakeMsgWithContent("server1", "channel1", "first-user", "<@bot> first message"))
 				message.Author.ID = "last-user"
+				message.Content = "ok"
 			}
 			router.Route(message)
 			select {
@@ -470,7 +475,7 @@ func TestScheduledTaskRunsOnChannelAgent(t *testing.T) {
 			}
 			wantAuthor := "user1"
 			if tc.batch {
-				wantAuthor = "last-user"
+				wantAuthor = "first-user"
 			}
 			if pending[0].UserID != wantAuthor || pending[0].ChannelID != "channel1" {
 				t.Errorf("creator/channel: %+v", pending[0])
@@ -493,8 +498,41 @@ func TestScheduledTaskSkipsDisabledChannel(t *testing.T) {
 	r := newTestRouter(t)
 	r.cfgStore.Get().Response.DefaultMode = config.ModeNone
 	a := newChannelAgent("channel", "server", r.cfgStore, r.llm, nil)
-	a.handleScheduledTask(context.Background(), schedule.Task{Prompt: "remind me"})
+	a.scheduleStore = openTestScheduleStore(t)
+	task, err := a.scheduleStore.Create(context.Background(), "server", "channel", "user", "remind me", time.Now().Add(time.Hour).Format("2006-01-02 15:04"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.handleScheduledTask(context.Background(), task)
 	if len(a.history) != 0 {
 		t.Error("disabled channel processed task")
 	}
+	if exists, err := a.scheduleStore.Exists(context.Background(), task.ID); err != nil || exists {
+		t.Errorf("skipped one-shot task kept for retry: %v, %v", exists, err)
+	}
+}
+
+func TestScheduledTaskCancelledInQueueDoesNotRun(t *testing.T) {
+	r := newTestRouter(t)
+	// nil resources: running the turn would panic, so returning early is the proof.
+	a := newChannelAgent("channel", "server", r.cfgStore, r.llm, nil)
+	a.scheduleStore = openTestScheduleStore(t)
+	task, err := a.scheduleStore.Create(context.Background(), "server", "channel", "user", "daily news", "", "0 8 * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.scheduleStore.Cancel(context.Background(), "server", task.ID); err != nil {
+		t.Fatal(err)
+	}
+	a.handleScheduledTask(context.Background(), task)
+}
+
+func openTestScheduleStore(t *testing.T) *schedule.Store {
+	t.Helper()
+	store, err := schedule.Open(filepath.Join(t.TempDir(), "schedule.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
 }

@@ -97,8 +97,11 @@ func TestDueAndFinish(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if due, err := store.Due(ctx, now); err != nil || len(due) != 0 {
+		t.Fatalf("still due after firing: %+v, %v", due, err)
+	}
 	listed, err := store.List(ctx, "server")
-	if err != nil || len(listed) != 2 {
+	if err != nil || len(listed) != 3 {
 		t.Fatalf("after firing: %+v, %v", listed, err)
 	}
 	parsed, err := cron.ParseStandard(recurring.Cron)
@@ -106,8 +109,8 @@ func TestDueAndFinish(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, task := range listed {
-		if task.ID == oneShot.ID {
-			t.Error("one-shot survived firing")
+		if task.ID == oneShot.ID && !task.NextRun.Equal(now.Add(oneShotRetry)) {
+			t.Errorf("one-shot retry = %s, want %s", task.NextRun, now.Add(oneShotRetry))
 		}
 		if task.ID == recurring.ID && !task.NextRun.Equal(parsed.Next(now.In(time.Local))) {
 			t.Errorf("next recurring run = %s", task.NextRun)
@@ -122,7 +125,7 @@ func TestSchedulerRestartSkipsRecurringAndFiresOverdueOneShot(t *testing.T) {
 	store := openTestStore(t)
 	now := time.Now().Truncate(time.Second)
 	oneShot := setDue(t, store, createTask(t, store, "server", ""), now.Add(-48*time.Hour))
-	recurring := setDue(t, store, createTask(t, store, "server", "*/15 * * * *"), now.Add(-48*time.Hour))
+	setDue(t, store, createTask(t, store, "server", "*/15 * * * *"), now.Add(-48*time.Hour))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	fired := make(chan Task, 2)
@@ -148,7 +151,7 @@ func TestSchedulerRestartSkipsRecurringAndFiresOverdueOneShot(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(listed) == 1 && listed[0].ID == recurring.ID && listed[0].NextRun.After(now) {
+		if len(listed) == 2 && listed[0].NextRun.After(now) && listed[1].NextRun.After(now) {
 			break
 		}
 		if time.Now().After(deadline) {

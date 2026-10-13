@@ -31,7 +31,7 @@ func TestScheduleToolsValidationAndServerScope(t *testing.T) {
 	}{
 		{"past", "2000-01-01 16:06", "", "future"},
 		{"bad time", "tomorrow", "", "YYYY-MM-DD HH:MM"},
-		{"bad cron", "", "bad cron", "invalid cron"},
+		{"bad cron", "", "bad cron", "five fields"},
 		{"invalid field", "", "90 * * * *", "invalid cron"},
 		{"both", future, "0 9 * * *", "exactly one"},
 		{"neither", "", "", "exactly one"},
@@ -39,6 +39,9 @@ func TestScheduleToolsValidationAndServerScope(t *testing.T) {
 		{"every ten minutes", "", "*/10 * * * *", "15 minutes"},
 		{"later close pair", "", "0,40,50 * * * *", "15 minutes"},
 		{"midnight close pair", "", "0,59 0,23 * * *", "15 minutes"},
+		{"descriptor", "", "@every 1h", "five fields"},
+		{"timezone without schedule", "", "TZ=UTC", "five fields"},
+		{"timezone override", "", "CRON_TZ=UTC 0 9 * * *", "five fields"},
 		{"impossible date", "", "0 9 31 2 *", "no next occurrence"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
