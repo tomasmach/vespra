@@ -1446,7 +1446,6 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	var toolCalls []toolCallRecord
 	var assistantContent string
 	var lastChoice llm.Choice // most recent LLM response, kept for diagnostics
-	var replyToolText string  // captures the text sent via the reply tool before ReplyText is zeroed
 	postReplyIter := -1       // iteration at which the reply tool first fired
 	for iter := 0; ; iter++ {
 		if iter >= maxIter {
@@ -1497,15 +1496,6 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		// order, so the answer that follows the fetched content may still be sent.
 		if hasWebFetch && tp.reg.Replied {
 			tp.reg.WebFetchCalled = true
-		}
-
-		// After executing tool calls, if the reply tool was used, record what was said
-		// so subsequent LLM calls have context of what the assistant replied.
-		// Reset ReplyText after appending so this only fires once (Replied is a sticky latch).
-		if tp.reg.Replied && tp.reg.ReplyText != "" {
-			replyToolText = tp.reg.ReplyText
-			tp.llmMsgs = append(tp.llmMsgs, llm.Message{Role: "assistant", Content: tp.reg.ReplyText})
-			tp.reg.ReplyText = ""
 		}
 
 		// If the LLM produced multi-line content alongside only side-effect tool calls
@@ -1586,7 +1576,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 		responseText := assistantContent
 		if responseText == "" && tp.reg.Replied {
-			responseText = replyToolText
+			responseText = tp.reg.ReplyText
 		}
 		if err := a.resources.Memory.LogConversation(ctx, a.channelID, tp.userMsgText, toolCallsJSON, responseText); err != nil {
 			a.logger.Warn("log conversation error", "error", err)
