@@ -882,6 +882,31 @@ func TestVideoGoesToVisionModel(t *testing.T) {
 	assertHistoryRemembersMedia(t, a.history)
 }
 
+// Anthropic models reject a conversation that ends with an assistant message.
+func TestRequestsNeverEndWithAssistantMessage(t *testing.T) {
+	srv, chats := fakeOpenRouter(t)
+	a, _ := runMediaTurn(t, srv.URL, llm.Message{Role: "user", Content: "mach: remember that I like oolong"})
+
+	a.runMemoryExtraction(context.Background(), a.history)
+	a.extractionWg.Wait()
+
+	main := chatsFor(chats(), "main-model")
+	if len(main) != 3 {
+		t.Fatalf("expected the reply step, the step after it and the extraction, got %d requests", len(main))
+	}
+	for i, c := range main {
+		var req struct {
+			Messages []llm.Message `json:"messages"`
+		}
+		if err := json.Unmarshal([]byte(c.body), &req); err != nil {
+			t.Fatalf("decode request %d: %v", i, err)
+		}
+		if last := req.Messages[len(req.Messages)-1]; last.Role == "assistant" {
+			t.Errorf("request %d ends with an assistant message: %+v", i, last)
+		}
+	}
+}
+
 func TestFormatMessageContent(t *testing.T) {
 	tests := []struct {
 		name    string
