@@ -1674,7 +1674,10 @@ func (a *ChannelAgent) runMemoryExtraction(ctx context.Context, history []llm.Me
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
 
-		msgs := buildMessages(extractionPrompt, snapshot)
+		msgs := append(buildMessages(extractionPrompt, snapshot), llm.Message{
+			Role:    "user",
+			Content: "Save the important information from the conversation above.",
+		})
 		cfg := a.cfgStore.Get()
 
 		for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
