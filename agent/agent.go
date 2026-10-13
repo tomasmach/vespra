@@ -1148,7 +1148,8 @@ func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Ta
 		}
 		if task.Cron == "" {
 			defer func() {
-				if err := a.scheduleStore.Cancel(ctx, task.ServerID, task.ID); err != nil {
+				// Shutdown cancels ctx mid-turn; the reminder was already sent and must not repeat.
+				if err := a.scheduleStore.Cancel(context.WithoutCancel(ctx), task.ServerID, task.ID); err != nil {
 					a.logger.Warn("delete finished scheduled task", "error", err, "task_id", task.ID)
 				}
 			}()
@@ -1166,7 +1167,11 @@ func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Ta
 		a.history = sanitizeHistory(a.backfillHistory(ctx, ""))
 	}
 	botName := a.resources.Session.State.User.Username
-	content := fmt.Sprintf("[Scheduled task created by <@%s>, scheduled for %s]\n%s", task.UserID, task.NextRun.Format("2006-01-02 15:04 MST (UTC-07:00)"), task.Prompt)
+	when := task.NextRun.Format("2006-01-02 15:04 MST (UTC-07:00)")
+	if task.At != "" {
+		when = task.At // a retried one-shot task has a later NextRun
+	}
+	content := fmt.Sprintf("[Scheduled task created by <@%s>, scheduled for %s]\n%s", task.UserID, when, task.Prompt)
 	memories := a.recallMemories(ctx, cfg, task.UserID, task.Prompt)
 	systemPrompt := a.buildSystemPrompt(cfg, mode, a.channelID, memories, botName, true, false)
 	systemPrompt += fmt.Sprintf("\n\nCarry out this scheduled task now. You MUST post a text reply in this channel using the reply tool. If the task is for the person who created it, mention them as <@%s> so Discord notifies them.", task.UserID)

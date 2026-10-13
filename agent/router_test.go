@@ -409,8 +409,7 @@ func TestScheduledTaskRunsOnChannelAgent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			original := time.Now().Add(-time.Hour).Truncate(time.Minute).In(time.Local)
-			task.NextRun = original
+			task.NextRun = time.Now().Add(10 * time.Minute) // a retried one-shot keeps its original time
 			if !router.FireTask(ctx, task) {
 				t.Fatal("task was dropped")
 			}
@@ -464,7 +463,7 @@ func TestScheduledTaskRunsOnChannelAgent(t *testing.T) {
 			for _, message := range chats[1].Messages {
 				followUpContext.WriteString(message.Content)
 			}
-			for _, want := range []string{"earlier conversation", "Scheduled task created by <@user1>", original.Format("2006-01-02 15:04"), task.Prompt, "Tram reminder sent."} {
+			for _, want := range []string{"earlier conversation", "Scheduled task created by <@user1>", task.At, task.Prompt, "Tram reminder sent."} {
 				if !strings.Contains(followUpContext.String(), want) {
 					t.Errorf("follow-up missing %q", want)
 				}
@@ -503,12 +502,15 @@ func TestScheduledTaskSkipsDisabledChannel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.handleScheduledTask(context.Background(), task)
+	// A cancelled context, as during shutdown, must still delete the finished task.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a.handleScheduledTask(ctx, task)
 	if len(a.history) != 0 {
 		t.Error("disabled channel processed task")
 	}
 	if exists, err := a.scheduleStore.Exists(context.Background(), task.ID); err != nil || exists {
-		t.Errorf("skipped one-shot task kept for retry: %v, %v", exists, err)
+		t.Errorf("finished one-shot task kept for retry: %v, %v", exists, err)
 	}
 }
 

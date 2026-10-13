@@ -42,6 +42,7 @@ func TestScheduleToolsValidationAndServerScope(t *testing.T) {
 		{"descriptor", "", "@every 1h", "five fields"},
 		{"timezone without schedule", "", "TZ=UTC", "five fields"},
 		{"timezone override", "", "CRON_TZ=UTC 0 9 * * *", "five fields"},
+		{"timezone with tabs", "", "TZ=UTC\t0\t9\t*\t*", "five fields"},
 		{"impossible date", "", "0 9 31 2 *", "no next occurrence"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

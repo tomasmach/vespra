@@ -85,8 +85,8 @@ func (s *Store) Create(ctx context.Context, serverID, channelID, userID, prompt,
 		}
 		task.NextRun = next
 	} else {
-		// robfig/cron panics on some malformed specs such as "TZ=UTC".
-		if len(strings.Fields(cronSpec)) != 5 {
+		// Local time only. robfig/cron also panics on a TZ= prefix not followed by a space.
+		if len(strings.Fields(cronSpec)) != 5 || strings.Contains(cronSpec, "TZ=") {
 			return task, fmt.Errorf("cron must have five fields in local time")
 		}
 		parsed, err := cron.ParseStandard(cronSpec)
