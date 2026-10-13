@@ -22,6 +22,7 @@ import (
 	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
 	"github.com/tomasmach/vespra/memory"
+	"github.com/tomasmach/vespra/schedule"
 	"github.com/tomasmach/vespra/soul"
 	"github.com/tomasmach/vespra/tools"
 )
@@ -93,11 +94,12 @@ type ChannelAgent struct {
 	channelID string
 	serverID  string
 
-	cfgStore   *config.Store
-	llm        *llm.Client
-	httpClient *http.Client
-	resources  *AgentResources
-	logger     *slog.Logger
+	cfgStore      *config.Store
+	llm           *llm.Client
+	httpClient    *http.Client
+	scheduleStore *schedule.Store
+	resources     *AgentResources
+	logger        *slog.Logger
 
 	soulText          string
 	history           []llm.Message  // capped to cfg.Agent.HistoryLimit
@@ -113,8 +115,9 @@ type ChannelAgent struct {
 
 	ctx        context.Context               // agent's own context; set at the start of run()
 	msgCh      chan *discordgo.MessageCreate // buffered 100
-	internalCh chan string                   // buffered; receives system messages (e.g., web search results)
-	cancel     context.CancelFunc            // cancels this agent's context
+	taskCh     chan schedule.Task
+	internalCh chan string        // buffered; receives system messages (e.g., web search results)
+	cancel     context.CancelFunc // cancels this agent's context
 }
 
 // resolveMentions replaces raw Discord mention syntax (<@ID> and <@!ID>) with
@@ -481,6 +484,7 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 		soulText:   soul.Load(cfgStore.Get(), serverID),
 		msgCh:      make(chan *discordgo.MessageCreate, 100),
 		internalCh: make(chan string, 10),
+		taskCh:     make(chan schedule.Task, 100),
 		logger:     slog.With("server_id", serverID, "channel_id", channelID),
 	}
 }
@@ -559,6 +563,11 @@ func (a *ChannelAgent) run(ctx context.Context) {
 				}
 			}
 
+		case task := <-a.taskCh:
+			flush(ctx)
+			resetIdleTimer()
+			a.handleScheduledTask(ctx, task)
+
 		case intMsg := <-a.internalCh:
 			flush(ctx)
 			resetIdleTimer()
@@ -595,6 +604,9 @@ func (a *ChannelAgent) run(ctx context.Context) {
 			drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			flush(drainCtx)
+			for len(a.taskCh) > 0 {
+				a.handleScheduledTask(drainCtx, <-a.taskCh)
+			}
 			n := len(a.msgCh)
 			for i := 0; i < n; i++ {
 				msg := <-a.msgCh
@@ -824,6 +836,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		sourceImageURLs = collectImageDataURLs(ctx, a.httpClient, msg.Message)
 	}
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(msg.ChannelID), sendFn, sourceImageURLs, msg.ChannelID, msg.ID), cfg.Agent.MaxReplyParts)
+	if a.scheduleStore != nil {
+		tools.RegisterScheduleTools(reg, a.scheduleStore, a.serverID, msg.ChannelID, userID)
+	}
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	userMsg = a.withEarlierMedia(ctx, userMsg, msg.ID, botID, botName, msg.ReferencedMessage)
@@ -1013,10 +1028,13 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	mode := cfg.ResolveResponseMode(a.serverID, lastMsg.ChannelID)
 
 	var anyAddressed bool
+	var addressedAuthorID string
 	for _, m := range msgs {
 		if isAddressedToBot(m, botID, botName) {
 			anyAddressed = true
-			break
+			if m.Author != nil {
+				addressedAuthorID = m.Author.ID
+			}
 		}
 	}
 
@@ -1079,6 +1097,14 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		sourceImageURLs = collectImageDataURLsFromMessages(ctx, a.httpClient, msgs)
 	}
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(lastMsg.ChannelID), sendFn, sourceImageURLs, lastMsg.ChannelID, lastMsg.ID), cfg.Agent.MaxReplyParts)
+	if a.scheduleStore != nil {
+		// The person who addressed the bot asked for the task, not whoever wrote last.
+		requesterID := lastAuthorID
+		if addressedAuthorID != "" {
+			requesterID = addressedAuthorID
+		}
+		tools.RegisterScheduleTools(reg, a.scheduleStore, a.serverID, lastMsg.ChannelID, requesterID)
+	}
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
 	// Looking back from the last message also covers messages posted between
@@ -1109,6 +1135,64 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 		addressed:        anyAddressed,
 		directedAtOther:  allDirectedAtOther,
 		mediaDescription: mediaDescription,
+	})
+}
+
+// handleScheduledTask carries out a due scheduled task as an addressed turn in
+// this channel. The schedule tools are left out so a task cannot reschedule itself.
+// A one-shot task is deleted here, after its attempt, and not when it fires.
+func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Task) {
+	if a.scheduleStore != nil {
+		if exists, err := a.scheduleStore.Exists(ctx, task.ID); err == nil && !exists {
+			return // cancelled while it waited in the queue
+		}
+		if task.Cron == "" {
+			defer func() {
+				// Shutdown cancels ctx mid-turn; the reminder was already sent and must not repeat.
+				if err := a.scheduleStore.Cancel(context.WithoutCancel(ctx), task.ServerID, task.ID); err != nil {
+					a.logger.Warn("delete finished scheduled task", "error", err, "task_id", task.ID)
+				}
+			}()
+		}
+	}
+	a.lastActive.Store(time.Now().UnixNano())
+	cfg := a.cfgStore.Get()
+	mode := cfg.ResolveResponseMode(a.serverID, a.channelID)
+	if mode == config.ModeNone {
+		return
+	}
+	stopTyping := a.startTyping(ctx)
+	defer stopTyping()
+	if len(a.history) == 0 {
+		a.history = sanitizeHistory(a.backfillHistory(ctx, ""))
+	}
+	botName := a.resources.Session.State.User.Username
+	when := task.NextRun.Format("2006-01-02 15:04 MST (UTC-07:00)")
+	if task.At != "" {
+		when = task.At // a retried one-shot task has a later NextRun
+	}
+	content := fmt.Sprintf("[Scheduled task created by <@%s>, scheduled for %s]\n%s", task.UserID, when, task.Prompt)
+	memories := a.recallMemories(ctx, cfg, task.UserID, task.Prompt)
+	systemPrompt := a.buildSystemPrompt(cfg, mode, a.channelID, memories, botName, true, false)
+	systemPrompt += fmt.Sprintf("\n\nCarry out this scheduled task now. You MUST post a text reply in this channel using the reply tool. If the task is for the person who created it, mention them as <@%s> so Discord notifies them.", task.UserID)
+	// No send rate limit: tasks are capped per server, and a dropped reminder is lost.
+	sendFn := func(content string) error {
+		_, err := a.resources.Session.ChannelMessageSend(a.channelID, content)
+		return err
+	}
+	reactFn := func(emoji string) error {
+		return fmt.Errorf("scheduled tasks have no message to react to; use reply")
+	}
+	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(a.channelID), sendFn, nil, a.channelID, ""), cfg.Agent.MaxReplyParts)
+	llmMsgs := append(slices.Clone(a.history), llm.Message{Role: "user", Content: content})
+	a.processTurn(ctx, cfg, turnParams{
+		mode:         mode,
+		systemPrompt: systemPrompt,
+		sendFn:       sendFn,
+		reg:          reg,
+		llmMsgs:      llmMsgs,
+		userMsgText:  content,
+		addressed:    true,
 	})
 }
 
@@ -1224,7 +1308,7 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
 	}
 	now := time.Now()
-	fmt.Fprintf(&sb, "Today's date is %s.\n\n", now.Format("Monday, January 2, 2006"))
+	fmt.Fprintf(&sb, "Current date and time: %s.\n\n", now.Format("Monday, January 2, 2006 15:04 MST (UTC-07:00)"))
 	sb.WriteString(a.soulText)
 	if len(memories) > 0 {
 		sb.WriteString("\n\n## Relevant Memories\n")

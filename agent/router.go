@@ -14,6 +14,7 @@ import (
 	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
 	"github.com/tomasmach/vespra/memory"
+	"github.com/tomasmach/vespra/schedule"
 )
 
 const (
@@ -51,6 +52,7 @@ type Router struct {
 	llm              *llm.Client
 	defaultSession   *discordgo.Session
 	agentsByServerID map[string]*AgentResources
+	scheduleStore    *schedule.Store
 	dmMemory         *memory.Store
 	wg               sync.WaitGroup
 	spamMap          map[string]*spamRecord // key: "serverID:userID", protected by mu
@@ -121,10 +123,18 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 			delete(r.agents, channelID)
 		}
 	}
+	r.channelAgent(channelID, serverID, resources).msgCh <- msg // guaranteed to succeed (buffer just created, size 100)
+}
 
-	// spawn new agent
+// channelAgent returns the active agent for channelID, spawning one if needed.
+// Must be called with r.mu held.
+func (r *Router) channelAgent(channelID, serverID string, resources *AgentResources) *ChannelAgent {
+	if a, ok := r.agents[channelID]; ok {
+		return a
+	}
 	agentCtx, agentCancel := context.WithCancel(r.ctx)
 	a := newChannelAgent(channelID, serverID, r.cfgStore, r.llm, resources)
+	a.scheduleStore = r.scheduleStore
 	a.cancel = agentCancel
 	r.agents[channelID] = a
 	r.wg.Add(1)
@@ -138,7 +148,37 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 		}
 		r.mu.Unlock()
 	}()
-	a.msgCh <- msg // guaranteed to succeed (buffer just created, size 100)
+	return a
+}
+
+// SetScheduleStore gives channel agents the store behind the schedule tools.
+func (r *Router) SetScheduleStore(store *schedule.Store) {
+	r.scheduleStore = store
+}
+
+// FireTask hands a due task to its channel agent. It returns false when the
+// task's server no longer has an agent, so the task should be dropped.
+func (r *Router) FireTask(ctx context.Context, task schedule.Task) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ctx.Err() != nil {
+		return false
+	}
+	resources := r.agentsByServerID[task.ServerID]
+	if resources == nil {
+		resources = r.tryHotLoad(task.ServerID)
+		if resources == nil {
+			slog.Warn("dropping task for unavailable agent", "server_id", task.ServerID, "task_id", task.ID)
+			return false
+		}
+	}
+	a := r.channelAgent(task.ChannelID, task.ServerID, resources)
+	select {
+	case a.taskCh <- task:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // MemoryForServer returns the memory store for a configured server, or nil if not configured.

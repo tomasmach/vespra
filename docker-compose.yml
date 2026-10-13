@@ -7,6 +7,7 @@ services:
       - ./data:/data
       - ./config:/config
     environment:
+      - TZ=Europe/Prague
       - VESPRA_DB_PATH=/data/vespra.db
     command: ["/app/vespra", "--config", "/config/config.toml", "--log-level", "debug"]
     dns:

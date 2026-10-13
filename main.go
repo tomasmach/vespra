@@ -18,6 +18,7 @@ import (
 	"github.com/tomasmach/vespra/llm"
 	"github.com/tomasmach/vespra/logstore"
 	"github.com/tomasmach/vespra/memory"
+	"github.com/tomasmach/vespra/schedule"
 	"github.com/tomasmach/vespra/web"
 )
 
@@ -51,6 +52,13 @@ func main() {
 	setupLogger(*logLevel, *logFormat, ls)
 	slog.Info("config loaded", "path", cfgPath)
 	slog.Info("log store opened", "path", logsDBPath)
+
+	scheduleDBPath := filepath.Join(config.ResolveDataDir(cfg.Memory.DBPath), "schedule.db")
+	scheduleStore, err := schedule.Open(scheduleDBPath)
+	if err != nil {
+		slog.Error("failed to open schedule store", "error", err)
+		os.Exit(1)
+	}
 
 	llmClient := llm.New(cfgStore)
 
@@ -109,6 +117,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	router.SetScheduleStore(scheduleStore)
+
 	// Wire router to all bots
 	defaultBot.SetRouter(router)
 	for _, b := range customBots {
@@ -141,6 +151,14 @@ func main() {
 		slog.Info("custom bots started", "count", len(customBots))
 	}
 
+	schedulerCtx, schedulerCancel := context.WithCancel(ctx)
+	defer schedulerCancel()
+	schedulerDone := make(chan struct{})
+	go func() {
+		defer close(schedulerDone)
+		scheduleStore.Run(schedulerCtx, router.FireTask)
+	}()
+
 	webServer.StartStatusPoller(ctx)
 	go func() {
 		if err := webServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -154,6 +172,8 @@ func main() {
 	<-sigCh
 
 	slog.Info("shutting down")
+	schedulerCancel()
+	<-schedulerDone
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	_ = webServer.Shutdown(shutCtx)
@@ -167,6 +187,9 @@ func main() {
 	}
 	cancel()
 	router.WaitForDrain()
+	if err := scheduleStore.Close(); err != nil {
+		slog.Warn("failed to close schedule store", "error", err)
+	}
 	if err := ls.Close(); err != nil {
 		slog.Warn("failed to close log store", "error", err)
 	}
