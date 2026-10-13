@@ -42,6 +42,8 @@ Vespra is a Discord AI companion with persistent memory and a web management UI.
 
 **`tools/`** — Registry of AI tools: `memory_save`, `memory_recall`, `memory_forget`, `reply`, `react`, `web_search` (disabled if no API key).
 
+- `schedule_task`, `list_tasks`, `cancel_task` manage persistent reminders and recurring tasks in the current server and channel.
+
 **`web/`** — Embedded HTTP management UI (`web/static/`). REST API:
 - `GET/POST /api/config` — read/write raw TOML config (validates before applying, hot-reloads)
 - `GET/DELETE/PATCH /api/memories` — browse/delete/edit memories by `server_id`
@@ -74,6 +76,7 @@ go test -tags sqlite_fts5 ./...
 ## Key Design Decisions
 
 - One goroutine per active Discord channel; idle timeout after `IdleTimeoutMinutes`
+- Scheduled tasks persist in `schedule.db`, run on the channel agent goroutine, and use local time; recurring tasks skip missed runs after restart.
 - Conversation history is in-memory only (not persisted across restarts)
 - Embeddings stored as little-endian float32 blobs in SQLite
 - Soft-delete only for memories (`forgotten=1` flag)
