@@ -348,7 +348,9 @@ func (a *ChannelAgent) withEarlierMedia(ctx context.Context, userMsg llm.Message
 }
 
 // downloadURLAsDataURL fetches url and returns it encoded as a base64 data URL.
-// If contentType is empty, the response Content-Type header is used, defaulting to "image/jpeg".
+// When contentType is empty or an image type and the bytes show a known image
+// type, the bytes win. Otherwise contentType is used, or, when it is empty, the
+// response Content-Type header, defaulting to "image/jpeg".
 func downloadURLAsDataURL(ctx context.Context, client *http.Client, url, contentType string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -365,6 +367,12 @@ func downloadURLAsDataURL(ctx context.Context, client *http.Client, url, content
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read body: %w", err)
+	}
+	// Discord can declare a PNG as image/webp, and Anthropic rejects an image whose bytes do not match its declared type.
+	if contentType == "" || strings.HasPrefix(contentType, "image/") {
+		if detected := http.DetectContentType(data); strings.HasPrefix(detected, "image/") {
+			contentType = detected
+		}
 	}
 	if contentType == "" {
 		contentType, _, _ = strings.Cut(resp.Header.Get("Content-Type"), ";")
