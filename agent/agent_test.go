@@ -1241,6 +1241,23 @@ func TestBuildSystemPromptSmartAddressedOverridesDirectedAtOther(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptServerChannelAnswersLatestMessage(t *testing.T) {
+	const rule = "Reply only to the latest message."
+	for _, tc := range []struct {
+		serverID string
+		want     bool
+	}{
+		{"server1", true},
+		{"DM:user1", false},
+	} {
+		a := &ChannelAgent{serverID: tc.serverID, soulText: "You are a test bot."}
+		got := a.buildSystemPrompt(&config.Config{}, "mention", "test-chan", nil, "TestBot", true, false)
+		if strings.Contains(got, rule) != tc.want {
+			t.Errorf("serverID %q: prompt contains %q = %v, want %v", tc.serverID, rule, !tc.want, tc.want)
+		}
+	}
+}
+
 func TestIsDirectedAtOther(t *testing.T) {
 	const botID = "bot123"
 	const botName = "Machmonstrum"
