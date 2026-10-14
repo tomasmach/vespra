@@ -54,6 +54,22 @@ func imageServer(t *testing.T, fakeData []byte) (*httptest.Server, func()) {
 	return srv, srv.Close
 }
 
+func TestBuildUserMessageLabelsImageByItsBytes(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	srv, cleanup := imageServer(t, png)
+	defer cleanup()
+
+	m := buildUserMessage(context.Background(), srv.Client(), msg("look", attachment("image/webp", srv.URL+"/shot.webp")), "", "")
+
+	var got string
+	if len(m.ContentParts) == 2 && m.ContentParts[1].ImageURL != nil {
+		got = m.ContentParts[1].ImageURL.URL
+	}
+	if want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png); got != want {
+		t.Errorf("image part = %q, want %q", got, want)
+	}
+}
+
 func TestBuildUserMessageTextOnly(t *testing.T) {
 	m := buildUserMessage(context.Background(), nil, msg("hello"), "", "")
 	if m.Role != "user" {
