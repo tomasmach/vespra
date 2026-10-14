@@ -1345,6 +1345,9 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
+	if !strings.HasPrefix(a.serverID, "DM:") {
+		sb.WriteString("\n\nThe earlier messages in this conversation are recent channel history, and most of them were not addressed to you. Reply only to the latest message. Do not answer, revisit, or correct earlier messages unless the latest message asks about them.")
+	}
 	if mode == config.ModeSmart {
 		if addressed {
 			sb.WriteString("\n\nYou are in smart mode but the user directly mentioned or replied to you — you MUST respond using the `reply` or `react` tools. Prefer `reply` — only use `react` alone when a reaction is clearly more appropriate than words.")
