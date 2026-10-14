@@ -1698,7 +1698,15 @@ func TestEarlierMediaPartsIncludesAllRecentMedia(t *testing.T) {
 }
 
 func TestEarlierMediaPartsSkipsVideos(t *testing.T) {
-	srv := pathEchoServer(t)
+	var mu sync.Mutex
+	var fetched []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		fetched = append(fetched, r.URL.Path)
+		mu.Unlock()
+		fmt.Fprint(w, r.URL.Path)
+	}))
+	defer srv.Close()
 	roytak := &discordgo.User{ID: "u1", Username: "roytak"}
 	// Newest first, as Discord returns them.
 	msgs := []*discordgo.Message{
@@ -1711,5 +1719,10 @@ func TestEarlierMediaPartsSkipsVideos(t *testing.T) {
 	want := []string{"text:[Earlier message in the channel] roytak: photo and clip", "image:/photo.png"}
 	if !slices.Equal(got, want) {
 		t.Errorf("parts = %q, want %q", got, want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(fetched, []string{"/photo.png"}) {
+		t.Errorf("downloaded %q, want only /photo.png", fetched)
 	}
 }
