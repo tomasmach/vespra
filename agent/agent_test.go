@@ -1729,3 +1729,33 @@ func TestEarlierMediaPartsIncludesAllRecentMedia(t *testing.T) {
 		t.Errorf("parts = %q, want %q", got, want)
 	}
 }
+
+func TestEarlierMediaPartsSkipsVideos(t *testing.T) {
+	var mu sync.Mutex
+	var fetched []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		fetched = append(fetched, r.URL.Path)
+		mu.Unlock()
+		fmt.Fprint(w, r.URL.Path)
+	}))
+	defer srv.Close()
+	roytak := &discordgo.User{ID: "u1", Username: "roytak"}
+	// Newest first, as Discord returns them.
+	msgs := []*discordgo.Message{
+		channelMsg("2", roytak, "just a clip", attachment("video/mp4", srv.URL+"/clip.mp4")),
+		channelMsg("1", roytak, "photo and clip", attachment("image/png", srv.URL+"/photo.png"), attachment("video/mp4", srv.URL+"/clip2.mp4")),
+	}
+
+	got := partSummaries(t, earlierMediaParts(context.Background(), srv.Client(), msgs, nil, "bot", "Machmonstrum"))
+
+	want := []string{"text:[Earlier message in the channel] roytak: photo and clip", "image:/photo.png"}
+	if !slices.Equal(got, want) {
+		t.Errorf("parts = %q, want %q", got, want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(fetched, []string{"/photo.png"}) {
+		t.Errorf("downloaded %q, want only /photo.png", fetched)
+	}
+}

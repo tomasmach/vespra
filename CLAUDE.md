@@ -79,7 +79,7 @@ go test -tags sqlite_fts5 ./...
 - Scheduled tasks persist in `schedule.db`, run on the channel agent goroutine, and use local time; recurring tasks skip missed runs after restart.
 - Conversation history is in-memory only (not persisted across restarts)
 - Images go straight to the main model when its OpenRouter metadata lists image input (cached per model); videos and text-only models get the `vision_model` description instead. The vision model also describes images in the background so history keeps their content without base64
-- Every turn also gets the media from the last 30 channel messages, each labelled with its author and text, so the bot sees every recent image without anyone replying to it
+- Every turn also gets the images and GIFs from the last 30 channel messages, each labelled with its author and text, so the bot sees every recent image without anyone replying to it. Videos from earlier messages are left out because a few of them push a request past OpenRouter's 30 MB media limit
 - Embeddings stored as little-endian float32 blobs in SQLite
 - Soft-delete only for memories (`forgotten=1` flag)
 - Tool-call loop repeats until LLM produces plain text (no tool calls)
