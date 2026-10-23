@@ -61,6 +61,7 @@ type LLMConfig struct {
 	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
 	BaseURL               string `toml:"base_url" json:"-"`
 	EmbeddingBaseURL      string `toml:"embedding_base_url" json:"-"`
+	EmbeddingKey          string `toml:"embedding_key" json:"-"`
 	MediaDescriptions     *bool  `toml:"media_descriptions"` // nil = enabled when vision_model set
 	MaxTokens             int    `toml:"max_tokens"`         // includes reasoning tokens
 	ReasoningEffort       string `toml:"reasoning_effort"`   // "" = model default
@@ -187,6 +188,10 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("EXPLABS_API_KEY"); v != "" {
 		cfg.LLM.ExplabsKey = v
 		slog.Info("explabs api key overridden by env var", "EXPLABS_API_KEY", "***")
+	}
+	if v := os.Getenv("EMBEDDING_API_KEY"); v != "" {
+		cfg.LLM.EmbeddingKey = v
+		slog.Info("embedding api key overridden by env var", "EMBEDDING_API_KEY", "***")
 	}
 	if v := os.Getenv("FAL_API_KEY"); v != "" {
 		cfg.Tools.Image.APIKey = v
