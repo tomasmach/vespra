@@ -175,6 +175,8 @@ soul_file = "~/.config/vespra/soul.md"       # global personality fallback
 explabs_key = "..."                              # or set EXPLABS_API_KEY
 model = "deepseek-v4.1-flash-uncensored"
 embedding_model = "text-embedding-3-small"
+embedding_base_url = "https://api.openai.com/v1"  # optional: embeddings straight from OpenAI
+embedding_key = "..."                            # key for embedding_base_url, or set EMBEDDING_API_KEY
 request_timeout_seconds = 60
 
 [memory]

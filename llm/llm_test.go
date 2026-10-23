@@ -925,3 +925,52 @@ func TestChatSendsCurrentVideoToVisionModelWhenMainModelSeesImages(t *testing.T)
 		t.Errorf("expected the video part to reach the vision model, got %v", parts)
 	}
 }
+
+func TestEmbedUsesEmbeddingKeyWhenSet(t *testing.T) {
+	tests := []struct {
+		name         string
+		embeddingKey string
+		wantAuth     string
+	}{
+		{"own key", "embed-key", "Bearer embed-key"},
+		{"gateway key fallback", "", "Bearer gateway-key"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPath, gotAuth string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				gotAuth = r.Header.Get("Authorization")
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"data": []map[string]any{{"embedding": []float32{0.5, -0.5}}},
+				})
+			}))
+			t.Cleanup(srv.Close)
+
+			client := newTestClientWithConfig(t, &config.Config{
+				LLM: config.LLMConfig{
+					ExplabsKey:            "gateway-key",
+					EmbeddingModel:        "embed-model",
+					EmbeddingBaseURL:      srv.URL + "/v1",
+					EmbeddingKey:          tt.embeddingKey,
+					RequestTimeoutSeconds: 5,
+				},
+			})
+
+			vec, err := client.Embed(context.Background(), "hello")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(vec) != 2 {
+				t.Errorf("expected 2 dims, got %d", len(vec))
+			}
+			if gotPath != "/v1/embeddings" {
+				t.Errorf("expected path /v1/embeddings, got %q", gotPath)
+			}
+			if gotAuth != tt.wantAuth {
+				t.Errorf("expected Authorization %q, got %q", tt.wantAuth, gotAuth)
+			}
+		})
+	}
+}

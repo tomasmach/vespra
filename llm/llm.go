@@ -480,7 +480,11 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		"input": text,
 	}
 
-	respBody, err := c.post(ctx, c.embeddingBase()+"/embeddings", c.chatKey(), body)
+	key := cfg.EmbeddingKey
+	if key == "" {
+		key = c.chatKey()
+	}
+	respBody, err := c.post(ctx, c.embeddingBase()+"/embeddings", key, body)
 	if err != nil {
 		return nil, err
 	}
