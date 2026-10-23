@@ -21,6 +21,7 @@ import (
 const (
 	ToolNameWebSearch          = "web_search"
 	ToolNameWebFetch           = "web_fetch"
+	ToolNameSearchMessages     = "search_messages"
 	ToolNameImageGen           = "generate_image"
 	ToolNameVisualMemorySave   = "visual_memory_save"
 	ToolNameVisualMemoryRecall = "visual_memory_recall"

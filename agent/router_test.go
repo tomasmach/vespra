@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -452,6 +453,10 @@ func TestScheduledTaskRunsOnChannelAgent(t *testing.T) {
 				if strings.Contains(def.Function.Name, "task") {
 					t.Errorf("scheduled turn has schedule tool %s", def.Function.Name)
 				}
+			}
+			hasSearch := slices.ContainsFunc(chats[2].Tools, func(def llm.ToolDefinition) bool { return def.Function.Name == "search_messages" })
+			if hasSearch == tc.dm {
+				t.Errorf("follow-up turn offers search_messages: %v, dm: %v", hasSearch, tc.dm)
 			}
 			if !strings.Contains(chats[0].Messages[0].Content, "Current date and time:") || !strings.Contains(chats[0].Messages[0].Content, "UTC") {
 				t.Error("system prompt lacks local clock")

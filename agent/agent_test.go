@@ -1759,3 +1759,95 @@ func TestEarlierMediaPartsSkipsVideos(t *testing.T) {
 		t.Errorf("downloaded %q, want only /photo.png", fetched)
 	}
 }
+
+// Neither multi-line content nor a status reply sent alongside search_messages
+// may end the turn before the model has read the results and answered.
+func TestSearchMessagesTurnAnswersFromResults(t *testing.T) {
+	const (
+		search = `{"id":"s1","type":"function","function":{"name":"search_messages","arguments":"{\"content\":\"pivo\"}"}}`
+		status = `{"id":"r1","type":"function","function":{"name":"reply","arguments":"{\"content\":\"Moment, hledám.\"}"}}`
+		answer = "roytak jde na pivo v osm."
+	)
+	searchStep := `{"role":"assistant","content":"","tool_calls":[` + search + `]}`
+	for _, tc := range []struct {
+		name     string
+		steps    []string
+		wantSent []string
+	}{
+		{"multi-line content", []string{`{"role":"assistant","content":"Moment.\nProjdu historii.","tool_calls":[` + search + `]}`}, []string{answer}},
+		{"status reply before search", []string{`{"role":"assistant","content":"","tool_calls":[` + status + `,` + search + `]}`}, []string{"Moment, hledám.", answer}},
+		{"status reply after search", []string{`{"role":"assistant","content":"","tool_calls":[` + search + `,` + status + `]}`}, []string{"Moment, hledám.", answer}},
+		{"more searches after status reply", []string{`{"role":"assistant","content":"","tool_calls":[` + status + `,` + search + `]}`, searchStep, searchStep}, []string{"Moment, hledám.", answer}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var chats []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if strings.HasSuffix(r.URL.Path, "/guilds/g1/messages/search") {
+					fmt.Fprint(w, `{"total_results":1,"messages":[[{"id":"m1","channel_id":"c1","timestamp":"2026-10-20T14:03:00Z","content":"na pivo jdu v osm","author":{"id":"1","username":"roytak"}}]]}`)
+					return
+				}
+				raw, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read request: %v", err)
+				}
+				mu.Lock()
+				chats = append(chats, string(raw))
+				call := len(chats)
+				mu.Unlock()
+				switch {
+				case call <= len(tc.steps):
+					fmt.Fprintf(w, `{"choices":[{"message":%s}]}`, tc.steps[call-1])
+				case call == len(tc.steps)+1:
+					fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"r2","type":"function","function":{"name":"reply","arguments":"{\"content\":\"%s\"}"}}]}}]}`, answer)
+				default:
+					fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":""}}]}`)
+				}
+			}))
+			defer srv.Close()
+			cfg := &config.Config{
+				LLM:   config.LLMConfig{BaseURL: srv.URL, Model: "main-model", RequestTimeoutSeconds: 5},
+				Agent: config.TurnConfig{HistoryLimit: 20, MaxToolIterations: 5, MaxReplyParts: 2},
+			}
+			store := config.NewStoreFromConfig(cfg)
+			client := llm.New(store)
+			mem, err := memory.New(&config.MemoryConfig{DBPath: filepath.Join(t.TempDir(), "memory.db")}, client)
+			if err != nil {
+				t.Fatalf("memory.New: %v", err)
+			}
+			session, err := discordgo.New("Bot fake")
+			if err != nil {
+				t.Fatal(err)
+			}
+			session.Client = &http.Client{Transport: scheduledTaskTransport{baseURL: srv.URL}, Timeout: 2 * time.Second}
+			a := &ChannelAgent{channelID: "c1", serverID: "g1", cfgStore: store, llm: client, resources: &AgentResources{Memory: mem}, logger: slog.Default()}
+			var sent []string
+			send := func(s string) error {
+				sent = append(sent, s)
+				return nil
+			}
+			reg := tools.NewReplyOnlyRegistry(send, func(string) error { return nil }, cfg.Agent.MaxReplyParts)
+			tools.RegisterMessageSearch(reg, session, "g1", "c1", nil)
+
+			a.processTurn(context.Background(), cfg, turnParams{
+				mode:         config.ModeAll,
+				systemPrompt: "system",
+				sendFn:       send,
+				reg:          reg,
+				llmMsgs:      []llm.Message{{Role: "user", Content: "mach: kdy jde roytak na pivo?"}},
+				userMsgText:  "mach: kdy jde roytak na pivo?",
+				addressed:    true,
+			})
+
+			if !slices.Equal(sent, tc.wantSent) {
+				t.Errorf("sent = %q, want %q", sent, tc.wantSent)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(chats) <= len(tc.steps) || !strings.Contains(chats[len(tc.steps)], "roytak: na pivo jdu v osm") {
+				t.Errorf("the model never saw the search results in its %d steps", len(chats))
+			}
+		})
+	}
+}
