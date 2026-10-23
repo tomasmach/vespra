@@ -147,7 +147,6 @@ export function emptyState(icon, title, subtitle) {
   );
 }
 
-/** Provider picker (inherit / explabs / glm / kimi) */
 export function providerPicker(current, onChange) {
   const providers = ['', 'explabs', 'glm', 'kimi'];
   const labels = { '': 'inherit', explabs: 'explabs', glm: 'glm', kimi: 'kimi' };

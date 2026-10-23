@@ -371,9 +371,6 @@ func newTestClientWithConfig(t *testing.T, cfg *config.Config) *llm.Client {
 	return llm.New(cfgStore)
 }
 
-// TestChatOptsProviderExplabsRoutesToGatewayEndpoint verifies that when
-// opts.Provider is "explabs" the request is sent to the gateway base URL
-// rather than the default BaseURL, using explabs_key.
 func TestChatOptsProviderExplabsRoutesToGatewayEndpoint(t *testing.T) {
 	srv, capturedURL, capturedAuth, _ := captureRequestServer(t)
 

@@ -294,6 +294,12 @@ func Load(path string) (*Config, error) {
 	default:
 		return nil, fmt.Errorf("llm.reasoning_effort %q is invalid (must be none, minimal, low, medium, high, or xhigh)", cfg.LLM.ReasoningEffort)
 	}
+	// Agents saved while the bot still used OpenRouter.
+	for i := range cfg.Agents {
+		if cfg.Agents[i].Provider == "openrouter" {
+			cfg.Agents[i].Provider = "explabs"
+		}
+	}
 	validProviders := map[string]bool{"explabs": true, "glm": true, "fireworks": true}
 	for _, agent := range cfg.Agents {
 		if agent.ServerID == "" {
