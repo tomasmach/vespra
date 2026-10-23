@@ -51,7 +51,7 @@ func TestLoadVESPRA_DB_PATHEnvOverride(t *testing.T) {
 token = "test-token"
 
 [llm]
-openrouter_key = "test-key"
+explabs_key = "test-key"
 
 [memory]
 db_path = "/original/path/memory.db"
@@ -81,7 +81,7 @@ func TestLoadImageEditModelDefaultAndAgentOverride(t *testing.T) {
 token = "test-token"
 
 [llm]
-openrouter_key = "test-key"
+explabs_key = "test-key"
 
 [[agents]]
 id = "agent-1"
@@ -164,5 +164,36 @@ func TestResolveResponseModeEmptyChannelOverride(t *testing.T) {
 	got := cfg.ResolveResponseMode("srv1", "chan1")
 	if got != "mention" {
 		t.Errorf("expected agent-level 'mention' when channel override is empty, got %q", got)
+	}
+}
+
+// Configs saved before the move to the Experiential Labs gateway still carry
+// provider = "openrouter" and openrouter_key; the bot must keep starting.
+func TestLoadMapsOpenRouterProviderToGateway(t *testing.T) {
+	const savedTOML = `
+[bot]
+token = "test-token"
+
+[llm]
+openrouter_key = "sk-or-old"
+explabs_key = "test-key"
+
+[[agents]]
+id = "agent-1"
+server_id = "server-1"
+provider = "openrouter"
+model = "claude-haiku-5.5"
+`
+	cfgFile := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgFile, []byte(savedTOML), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Agents[0].Provider != "explabs" {
+		t.Errorf("Agents[0].Provider = %q, want explabs", cfg.Agents[0].Provider)
 	}
 }

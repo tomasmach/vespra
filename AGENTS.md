@@ -31,7 +31,7 @@ Vespra is a Discord AI companion with persistent memory and a web management UI.
 - `router.go`: maintains a map of per-channel goroutines. Spawns new agent or routes to existing; hot-loads newly configured agents from cfgStore without restart (custom-token agents require restart). `UnloadAgent(serverID)` evicts from cache when an agent is removed/updated.
 - `agent.go`: per-channel conversation loop. Each turn: check response mode → recall memories → build system prompt (soul + memories + history) → call LLM → execute tool calls → send reply. History capped to `HistoryLimit`.
 
-**`llm/`** — HTTP client for OpenRouter chat completions and embeddings. Retry logic: up to 3 attempts with exponential backoff; retries 5xx and 429 (rate limits)/timeouts, fails fast on other 4xx.
+**`llm/`** — HTTP client for the Experiential Labs gateway (`https://api.experientiallabs.ai/api/v1`, key `llm.explabs_key` or `EXPLABS_API_KEY`) chat completions and embeddings. Retry logic: up to 3 attempts with exponential backoff; retries 5xx and 429 (rate limits)/timeouts, fails fast on other 4xx.
 
 **`memory/`** — SQLite-backed persistent memory scoped by `server_id` (DMs use `"DM:<user_id>"`). Each agent gets its own DB file (derived from `db_path` or `agents/<server_id>/memory.db` under the default db dir):
 - `store.go`: save/forget/load/list/update operations with WAL mode
@@ -72,7 +72,7 @@ go test -tags sqlite_fts5 ./...
 ## Z.AI (GLM) API
 
 - The correct base URL for `glm-5` is `https://api.z.ai/api/coding/paas/v4` — this is the coding/agentic endpoint. Do NOT use `https://api.z.ai/api/paas/v4` (the standard endpoint) for `glm-5`.
-- Vision models (`glm-4.6v`, `glm-4.6v-flash`) live at the standard endpoint `https://api.z.ai/api/paas/v4`, but currently vision is routed through OpenRouter instead.
+- Vision models (`glm-4.6v`, `glm-4.6v-flash`) live at the standard endpoint `https://api.z.ai/api/paas/v4`, but currently vision is routed through the Experiential Labs gateway instead.
 
 ## Key Design Decisions
 

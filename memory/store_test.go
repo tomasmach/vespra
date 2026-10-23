@@ -36,7 +36,7 @@ func newTestStore(t *testing.T, embSrv *httptest.Server) *Store {
 	t.Helper()
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "test",
+			ExplabsKey:            "test",
 			EmbeddingModel:        "test-embed",
 			RequestTimeoutSeconds: 5,
 		},

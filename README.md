@@ -19,7 +19,7 @@
 
 ## How It Works
 
-Vespra runs one goroutine per active Discord channel. When a message arrives, the bot checks the configured response mode, recalls relevant memories via hybrid search, builds a system prompt from the agent's soul file and recalled memories, then calls an LLM through OpenRouter. The LLM can invoke tools — saving or recalling memories, reacting to messages, searching the web — in a loop until it produces a plain text reply.
+Vespra runs one goroutine per active Discord channel. When a message arrives, the bot checks the configured response mode, recalls relevant memories via hybrid search, builds a system prompt from the agent's soul file and recalled memories, then calls an LLM through the [Experiential Labs](https://platform.experientiallabs.ai) gateway. The LLM can invoke tools — saving or recalling memories, reacting to messages, searching the web — in a loop until it produces a plain text reply.
 
 Conversation history lives in memory per channel goroutine and is not persisted across restarts. Memories are different: they survive restarts, are scoped per server, and are stored in SQLite with vector embeddings for semantic recall. Each server gets its own database file and can have its own personality via a `soul.md` file.
 
@@ -33,7 +33,7 @@ DMs are handled automatically by the default bot using a synthetic server ID (`D
 
 - **Go** 1.21+ with CGO enabled (a C compiler is required for `go-sqlite3`)
 - A Discord bot token
-- An [OpenRouter](https://openrouter.ai) API key
+- An [Experiential Labs](https://platform.experientiallabs.ai/api-keys) API key
 
 ### Build
 
@@ -52,9 +52,9 @@ Create `config.toml`:
 token = "your-discord-bot-token"
 
 [llm]
-openrouter_key = "your-openrouter-key"
-model = "anthropic/claude-3.5-sonnet"
-embedding_model = "openai/text-embedding-3-small"
+explabs_key = "your-explabs-key"                 # or set EXPLABS_API_KEY
+model = "deepseek-v4.1-flash-uncensored"
+embedding_model = "text-embedding-3-small"
 
 [memory]
 db_path = "~/.local/share/vespra/vespra.db"
@@ -88,7 +88,7 @@ vespra/
 ├── config/
 │   └── config.go       — TOML loading, validation, thread-safe Store for hot-reload
 ├── llm/
-│   └── llm.go          — HTTP client for OpenRouter (chat + embeddings)
+│   └── llm.go          — HTTP client for the Experiential Labs gateway (chat + embeddings)
 ├── memory/
 │   ├── store.go        — SQLite save/forget/load
 │   ├── search.go       — hybrid cosine + LIKE search
@@ -106,7 +106,7 @@ vespra/
 | `agent` | Per-channel goroutines; conversation loop; tool dispatch |
 | `bot` | Discord gateway; ignores self/bot messages; routes to agent router |
 | `config` | TOML loading; thread-safe hot-reload; response mode resolution |
-| `llm` | OpenRouter HTTP client; retry logic (3 attempts, exponential backoff) |
+| `llm` | Experiential Labs gateway HTTP client; retry logic (3 attempts, exponential backoff) |
 | `memory` | SQLite store; hybrid search; RRF merging; WAL mode |
 | `soul` | Soul file resolution: per-agent → global → built-in default |
 | `tools` | `memory_save`, `memory_recall`, `memory_forget`, `reply`, `react`, `web_search` |
@@ -172,9 +172,9 @@ token = "..."                                    # default bot token (required)
 soul_file = "~/.config/vespra/soul.md"       # global personality fallback
 
 [llm]
-openrouter_key = "..."
-model = "anthropic/claude-3.5-sonnet"
-embedding_model = "openai/text-embedding-3-small"
+explabs_key = "..."                              # or set EXPLABS_API_KEY
+model = "deepseek-v4.1-flash-uncensored"
+embedding_model = "text-embedding-3-small"
 request_timeout_seconds = 60
 
 [memory]
@@ -258,7 +258,7 @@ Vespra ships an embedded HTTP management UI accessible at `http://localhost:8080
 |-------|-----------|
 | Language | **Go** |
 | Discord | `github.com/bwmarrin/discordgo` |
-| LLM | OpenRouter (chat completions + embeddings) via HTTP |
+| LLM | Experiential Labs gateway (chat completions + embeddings) via HTTP |
 | Database | SQLite via `github.com/mattn/go-sqlite3` (CGO) |
 | Vector search | Cosine similarity in Go; embeddings as float32 blobs in SQLite |
 | Config | TOML via `github.com/BurntSushi/toml` |

@@ -147,10 +147,9 @@ export function emptyState(icon, title, subtitle) {
   );
 }
 
-/** Provider picker (inherit / openrouter / glm / kimi) */
 export function providerPicker(current, onChange) {
-  const providers = ['', 'openrouter', 'glm', 'kimi'];
-  const labels = { '': 'inherit', openrouter: 'openrouter', glm: 'glm', kimi: 'kimi' };
+  const providers = ['', 'explabs', 'glm', 'kimi'];
+  const labels = { '': 'inherit', explabs: 'explabs', glm: 'glm', kimi: 'kimi' };
   const wrap = el('div', { className: 'mode-picker' });
 
   function render() {

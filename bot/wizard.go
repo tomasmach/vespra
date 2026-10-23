@@ -335,7 +335,8 @@ func (w *wizardHandler) handleLanguageSelect(s *discordgo.Session, i *discordgo.
 	globalCfg := w.ops.CfgStore().Get()
 	if globalCfg.LLM.FireworksKey != "" && strings.Contains(globalCfg.LLM.Model, "fireworks") {
 		provider = "fireworks"
-	} else if globalCfg.LLM.GLMKey != "" && strings.HasPrefix(globalCfg.LLM.Model, "glm-") {
+	} else if globalCfg.LLM.ExplabsKey == "" && globalCfg.LLM.GLMKey != "" && strings.HasPrefix(globalCfg.LLM.Model, "glm-") {
+		// Only without a gateway key: the gateway also serves glm-* models.
 		provider = "glm"
 	}
 

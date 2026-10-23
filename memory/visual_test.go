@@ -15,7 +15,7 @@ func newTestVisualStore(t *testing.T) *Store {
 	embSrv := fakeEmbeddingServer(t, 4)
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "test",
+			ExplabsKey:            "test",
 			EmbeddingModel:        "test-embed",
 			RequestTimeoutSeconds: 5,
 			BaseURL:               embSrv.URL,

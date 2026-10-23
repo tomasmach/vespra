@@ -31,7 +31,7 @@ func newTestServerWithAgents(t *testing.T, agentsTOML string) (*httptest.Server,
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
-	base := "[bot]\ntoken=\"x\"\n[llm]\nopenrouter_key=\"test\"\n"
+	base := "[bot]\ntoken=\"x\"\n[llm]\nexplabs_key=\"test\"\n"
 	if err := os.WriteFile(cfgPath, []byte(base+agentsTOML), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func newTestServerWithVisualMemory(t *testing.T, serverID string) (*httptest.Ser
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
-	cfgText := "[bot]\ntoken=\"x\"\n[llm]\nopenrouter_key=\"test\"\nembedding_model=\"test-embed\"\nbase_url=\"http://127.0.0.1\"\n[memory]\ndb_path=\"" + filepath.ToSlash(filepath.Join(dir, "dm.db")) + "\"\n"
+	cfgText := "[bot]\ntoken=\"x\"\n[llm]\nexplabs_key=\"test\"\nembedding_model=\"test-embed\"\nbase_url=\"http://127.0.0.1\"\n[memory]\ndb_path=\"" + filepath.ToSlash(filepath.Join(dir, "dm.db")) + "\"\n"
 	if err := os.WriteFile(cfgPath, []byte(cfgText), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +459,7 @@ func newTestWebServerWithAgents(t *testing.T, agentsTOML string) *web.Server {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
-	base := "[bot]\ntoken=\"x\"\n[llm]\nopenrouter_key=\"test\"\n"
+	base := "[bot]\ntoken=\"x\"\n[llm]\nexplabs_key=\"test\"\n"
 	if err := os.WriteFile(cfgPath, []byte(base+agentsTOML), 0o644); err != nil {
 		t.Fatal(err)
 	}
