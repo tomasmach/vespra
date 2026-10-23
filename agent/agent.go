@@ -851,6 +851,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if a.scheduleStore != nil {
 		tools.RegisterScheduleTools(reg, a.scheduleStore, a.serverID, msg.ChannelID, userID)
 	}
+	if msg.GuildID != "" {
+		tools.RegisterMessageSearch(reg, a.resources.Session, msg.GuildID, msg.ChannelID, msg.Mentions)
+	}
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
 	userMsg = a.withEarlierMedia(ctx, userMsg, msg.ID, botID, botName, msg.ReferencedMessage)
@@ -1116,6 +1119,13 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 			requesterID = addressedAuthorID
 		}
 		tools.RegisterScheduleTools(reg, a.scheduleStore, a.serverID, lastMsg.ChannelID, requesterID)
+	}
+	if lastMsg.GuildID != "" {
+		var mentions []*discordgo.User
+		for _, m := range msgs {
+			mentions = append(mentions, m.Mentions...)
+		}
+		tools.RegisterMessageSearch(reg, a.resources.Session, lastMsg.GuildID, lastMsg.ChannelID, mentions)
 	}
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
@@ -1569,12 +1579,12 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 
 		tp.llmMsgs = append(tp.llmMsgs, choice.Message)
-		var hasFetchTool, hasWebFetch bool
+		var hasFetchTool, readsContent bool
 		for _, tc := range choice.Message.ToolCalls {
-			if tc.Function.Name == tools.ToolNameWebFetch {
-				hasWebFetch = true
-			}
-			if tc.Function.Name == tools.ToolNameWebFetch || tc.Function.Name == tools.ToolNameWebSearch || tc.Function.Name == tools.ToolNameImageGen {
+			switch tc.Function.Name {
+			case tools.ToolNameWebFetch, tools.ToolNameSearchMessages:
+				readsContent, hasFetchTool = true, true
+			case tools.ToolNameWebSearch, tools.ToolNameImageGen:
 				hasFetchTool = true
 			}
 			a.logger.Debug("tool call", "tool", tc.Function.Name)
@@ -1591,14 +1601,14 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 			})
 		}
 
-		// A reply sent alongside web_fetch is a status message whatever the call
-		// order, so the answer that follows the fetched content may still be sent.
-		if hasWebFetch && tp.reg.Replied {
+		// A reply sent alongside web_fetch or search_messages is a status message whatever
+		// the call order, so the answer that follows the fetched content may still be sent.
+		if readsContent && tp.reg.Replied {
 			tp.reg.WebFetchCalled = true
 		}
 
 		// If the LLM produced multi-line content alongside only side-effect tool calls
-		// (memory ops, react — not web_fetch or web_search), treat it as the final reply
+		// (memory ops, react — not web_fetch, search_messages or web_search), treat it as the final reply
 		// and stop. Multi-line content indicates a structured answer (e.g. a formatted
 		// stock list); single-line content is a transitional status comment (e.g.
 		// "Ukládám si tvoji strategii...") and should not be treated as a final reply.
@@ -1634,6 +1644,10 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		// General post-reply cap: allow 1 more iteration for react/memory, then stop.
 		if tp.reg.Replied && postReplyIter < 0 {
 			postReplyIter = iter
+		}
+		// Content read after a status reply keeps the next step open for the answer.
+		if tp.reg.Replied && readsContent {
+			postReplyIter = max(postReplyIter, iter-1)
 		}
 		if postReplyIter >= 0 && iter > postReplyIter+1 {
 			break
