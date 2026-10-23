@@ -51,7 +51,7 @@ func TestLoadVESPRA_DB_PATHEnvOverride(t *testing.T) {
 token = "test-token"
 
 [llm]
-openrouter_key = "test-key"
+explabs_key = "test-key"
 
 [memory]
 db_path = "/original/path/memory.db"
@@ -81,7 +81,7 @@ func TestLoadImageEditModelDefaultAndAgentOverride(t *testing.T) {
 token = "test-token"
 
 [llm]
-openrouter_key = "test-key"
+explabs_key = "test-key"
 
 [[agents]]
 id = "agent-1"

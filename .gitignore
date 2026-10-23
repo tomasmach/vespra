@@ -12,3 +12,6 @@ CLAUDE.LOCAL.md
 /config/souls/
 /data/
 *.bak-*
+
+# Local secrets
+.env

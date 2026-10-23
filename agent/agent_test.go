@@ -711,16 +711,16 @@ func TestBuildCombinedUserMessageIncludesReferencedImageOnce(t *testing.T) {
 	}
 }
 
-// recordedChat is one chat completion request seen by fakeOpenRouter.
+// recordedChat is one chat completion request seen by fakeGateway.
 type recordedChat struct {
 	model string
 	body  string
 }
 
-// fakeOpenRouter serves OpenRouter metadata saying main-model takes images.
+// fakeGateway serves a model list saying main-model takes images.
 // vision-model answers with a transcript of the screenshot; main-model first
 // replies through the reply tool and then stops. It records every chat request.
-func fakeOpenRouter(t *testing.T) (*httptest.Server, func() []recordedChat) {
+func fakeGateway(t *testing.T) (*httptest.Server, func() []recordedChat) {
 	t.Helper()
 	var mu sync.Mutex
 	var chats []recordedChat
@@ -728,11 +728,11 @@ func fakeOpenRouter(t *testing.T) (*httptest.Server, func() []recordedChat) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
-			if r.URL.Path != "/models/main-model/endpoints" {
+			if r.URL.Path != "/models" {
 				http.NotFound(w, r)
 				return
 			}
-			fmt.Fprint(w, `{"data":{"architecture":{"input_modalities":["file","image","text"]}}}`)
+			fmt.Fprint(w, `{"data":[{"id":"main-model","canonical_slug":"main-model","architecture":{"input_modalities":["file","image","text"]}}]}`)
 			return
 		}
 		raw, err := io.ReadAll(r.Body)
@@ -770,7 +770,7 @@ func fakeOpenRouter(t *testing.T) (*httptest.Server, func() []recordedChat) {
 }
 
 // runMediaTurn prepares userMsg's media and runs one addressed turn against
-// fakeOpenRouter, as handleMessage does. It returns the replies sent to Discord.
+// fakeGateway, as handleMessage does. It returns the replies sent to Discord.
 func runMediaTurn(t *testing.T, baseURL string, userMsg llm.Message) (*ChannelAgent, []string) {
 	t.Helper()
 	cfg := &config.Config{
@@ -840,7 +840,7 @@ func assertHistoryRemembersMedia(t *testing.T, history []llm.Message) {
 }
 
 func TestImageGoesToMainModelInEveryStepOfTurn(t *testing.T) {
-	srv, chats := fakeOpenRouter(t)
+	srv, chats := fakeGateway(t)
 	a, sent := runMediaTurn(t, srv.URL, llm.Message{Role: "user", ContentParts: []llm.ContentPart{
 		{Type: "text", Text: "mach: read the comments in the picture"},
 		{Type: "image_url", ImageURL: &llm.ImageURL{URL: "data:image/png;base64,SCREENSHOT"}},
@@ -857,7 +857,7 @@ func TestImageGoesToMainModelInEveryStepOfTurn(t *testing.T) {
 		if !strings.Contains(c.body, `"image_url":{"url":"data:image/png;base64,SCREENSHOT"}`) {
 			t.Errorf("main-model step %d did not get the image: %s", i, c.body)
 		}
-		if !strings.Contains(c.body, `"reasoning":{"effort":"high"}`) {
+		if !strings.Contains(c.body, `"reasoning_effort":"high"`) {
 			t.Errorf("main-model step %d lost reasoning effort: %s", i, c.body)
 		}
 		if strings.Contains(c.body, mediaDescriptionLabel) {
@@ -871,7 +871,7 @@ func TestImageGoesToMainModelInEveryStepOfTurn(t *testing.T) {
 }
 
 func TestVideoGoesToVisionModel(t *testing.T) {
-	srv, chats := fakeOpenRouter(t)
+	srv, chats := fakeGateway(t)
 	a, sent := runMediaTurn(t, srv.URL, llm.Message{Role: "user", ContentParts: []llm.ContentPart{
 		{Type: "text", Text: "mach: read the comments in the picture"},
 		{Type: "video_url", VideoURL: &llm.VideoURL{URL: "data:video/mp4;base64,CLIP"}},
@@ -900,7 +900,7 @@ func TestVideoGoesToVisionModel(t *testing.T) {
 
 // Anthropic models reject a conversation that ends with an assistant message.
 func TestRequestsNeverEndWithAssistantMessage(t *testing.T) {
-	srv, chats := fakeOpenRouter(t)
+	srv, chats := fakeGateway(t)
 	a, _ := runMediaTurn(t, srv.URL, llm.Message{Role: "user", Content: "mach: remember that I like oolong"})
 
 	a.runMemoryExtraction(context.Background(), a.history)

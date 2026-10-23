@@ -49,7 +49,7 @@ type BotConfig struct {
 }
 
 type LLMConfig struct {
-	OpenRouterKey         string `toml:"openrouter_key" json:"-"`
+	ExplabsKey            string `toml:"explabs_key" json:"-"`
 	GLMKey                string `toml:"glm_key" json:"-"`
 	GLMBaseURL            string `toml:"glm_base_url" json:"-"`
 	FireworksKey          string `toml:"fireworks_key" json:"-"`
@@ -63,7 +63,7 @@ type LLMConfig struct {
 	EmbeddingBaseURL      string `toml:"embedding_base_url" json:"-"`
 	MediaDescriptions     *bool  `toml:"media_descriptions"` // nil = enabled when vision_model set
 	MaxTokens             int    `toml:"max_tokens"`         // includes reasoning tokens
-	ReasoningEffort       string `toml:"reasoning_effort"`   // OpenRouter reasoning.effort; "" = model default
+	ReasoningEffort       string `toml:"reasoning_effort"`   // "" = model default
 }
 
 type MemoryConfig struct {
@@ -120,7 +120,7 @@ type AgentConfig struct {
 	DBPath       string           `toml:"db_path" json:"db_path,omitempty"`
 	ResponseMode string           `toml:"response_mode" json:"response_mode,omitempty"`
 	Language     string           `toml:"language" json:"language,omitempty"`
-	Provider     string           `toml:"provider" json:"provider,omitempty"` // "openrouter" | "glm" | "fireworks" | "" (inherit global)
+	Provider     string           `toml:"provider" json:"provider,omitempty"` // "explabs" | "glm" | "fireworks" | "" (inherit global)
 	Model        string           `toml:"model" json:"model,omitempty"`       // model name override; "" = use global
 	IgnoreUsers  []string         `toml:"ignore_users,omitempty" json:"ignore_users,omitempty"`
 	Channels     []ChannelConfig  `toml:"channels" json:"channels,omitempty"`
@@ -183,6 +183,10 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("VESPRA_DB_PATH"); v != "" {
 		cfg.Memory.DBPath = v
 		slog.Info("db path overridden by env var", "VESPRA_DB_PATH", v)
+	}
+	if v := os.Getenv("EXPLABS_API_KEY"); v != "" {
+		cfg.LLM.ExplabsKey = v
+		slog.Info("explabs api key overridden by env var", "EXPLABS_API_KEY", "***")
 	}
 	if v := os.Getenv("FAL_API_KEY"); v != "" {
 		cfg.Tools.Image.APIKey = v
@@ -277,8 +281,8 @@ func Load(path string) (*Config, error) {
 	if cfg.Bot.Token == "" {
 		return nil, fmt.Errorf("bot.token is required")
 	}
-	if cfg.LLM.OpenRouterKey == "" && cfg.LLM.GLMKey == "" && cfg.LLM.FireworksKey == "" {
-		return nil, fmt.Errorf("llm.openrouter_key, llm.glm_key, or llm.fireworks_key is required")
+	if cfg.LLM.ExplabsKey == "" && cfg.LLM.GLMKey == "" && cfg.LLM.FireworksKey == "" {
+		return nil, fmt.Errorf("llm.explabs_key (or EXPLABS_API_KEY), llm.glm_key, or llm.fireworks_key is required")
 	}
 
 	// Validate response mode values
@@ -290,7 +294,7 @@ func Load(path string) (*Config, error) {
 	default:
 		return nil, fmt.Errorf("llm.reasoning_effort %q is invalid (must be none, minimal, low, medium, high, or xhigh)", cfg.LLM.ReasoningEffort)
 	}
-	validProviders := map[string]bool{"openrouter": true, "glm": true, "fireworks": true}
+	validProviders := map[string]bool{"explabs": true, "glm": true, "fireworks": true}
 	for _, agent := range cfg.Agents {
 		if agent.ServerID == "" {
 			return nil, fmt.Errorf("agent %q: server_id is required", agent.ID)
@@ -299,7 +303,7 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("agent %s response_mode %q is invalid (must be smart, mention, all, or none)", agent.ID, agent.ResponseMode)
 		}
 		if agent.Provider != "" && !validProviders[agent.Provider] {
-			return nil, fmt.Errorf("agent %s provider %q is invalid (must be openrouter, glm, or fireworks)", agent.ID, agent.Provider)
+			return nil, fmt.Errorf("agent %s provider %q is invalid (must be explabs, glm, or fireworks)", agent.ID, agent.Provider)
 		}
 		if agent.Provider == "glm" && cfg.LLM.GLMKey == "" {
 			return nil, fmt.Errorf("agent %s uses provider %q but llm.glm_key is not configured", agent.ID, agent.Provider)

@@ -17,7 +17,7 @@ Single binary. No workspace, no sub-modules. Entry point is `main.go`.
 ├── config/
 │   └── config.go       — TOML loading and validation
 ├── llm/
-│   └── llm.go          — HTTP client for OpenRouter (chat + embeddings)
+│   └── llm.go          — HTTP client for the Experiential Labs gateway (chat + embeddings)
 ├── memory/
 │   ├── store.go        — SQLite save/forget/load
 │   ├── search.go       — hybrid cosine + LIKE search

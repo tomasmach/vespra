@@ -10,10 +10,10 @@ func SetRetryDelays(d []time.Duration) func() {
 	return func() { retryDelays = orig }
 }
 
-// SetOpenRouterBaseURL overrides the OpenRouter endpoint on a Client for testing.
+// SetExplabsBaseURL overrides the gateway endpoint on a Client for testing.
 // Returns a restore function to be called via t.Cleanup.
-func SetOpenRouterBaseURL(c *Client, url string) func() {
-	orig := c.openRouterBaseURL
-	c.openRouterBaseURL = url
-	return func() { c.openRouterBaseURL = orig }
+func SetExplabsBaseURL(c *Client, url string) func() {
+	orig := c.explabsBaseURL
+	c.explabsBaseURL = url
+	return func() { c.explabsBaseURL = orig }
 }

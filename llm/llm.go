@@ -1,4 +1,5 @@
-// Package llm provides an OpenRouter HTTP client for chat completions and embeddings.
+// Package llm provides an HTTP client for the Experiential Labs gateway (OpenAI
+// Chat Completions API) for chat completions and embeddings.
 package llm
 
 import (
@@ -167,18 +168,20 @@ func (c Choice) LogAttrs() []any {
 // ChatOptions allows per-request provider and model overrides.
 // A nil pointer or zero value means "use global defaults".
 type ChatOptions struct {
-	Provider   string            // "openrouter" | "glm" | "fireworks" | "" (use global)
+	Provider   string            // "explabs" | "glm" | "fireworks" | "" (use global)
 	Model      string            // override model name; "" = use global
 	ExtraTools []json.RawMessage // raw tool objects appended to the tools array (e.g. GLM native tools)
 	MaxTokens  int               // max_tokens cap for this request; 0 means no cap
-	// ReasoningEffort is sent as OpenRouter's reasoning.effort ("low", "medium", ...);
+	// ReasoningEffort is sent as reasoning_effort ("low", "medium", ...);
 	// "" leaves the model default. Ignored for vision, GLM and Fireworks requests.
 	ReasoningEffort string
 }
 
+const explabsBaseURL = "https://api.experientiallabs.ai/api/v1"
+
 type Client struct {
-	cfgStore          *config.Store
-	openRouterBaseURL string // for testing: overrides the hardcoded OpenRouter endpoint
+	cfgStore       *config.Store
+	explabsBaseURL string // for testing: overrides explabsBaseURL
 
 	mu         sync.Mutex
 	imageInput map[string]bool // whether a model takes image input, keyed by API base and model
@@ -195,11 +198,11 @@ func (c *Client) apiBase() string {
 	if u := c.cfgStore.Get().LLM.BaseURL; u != "" {
 		return u
 	}
-	return "https://openrouter.ai/api/v1"
+	return explabsBaseURL
 }
 
 func (c *Client) chatKey() string {
-	return c.cfgStore.Get().LLM.OpenRouterKey
+	return c.cfgStore.Get().LLM.ExplabsKey
 }
 
 func (c *Client) embeddingBase() string {
@@ -225,17 +228,17 @@ func (c *Client) mainRoute(opts *ChatOptions) route {
 		return r
 	}
 	switch opts.Provider {
-	case "openrouter":
-		if c.openRouterBaseURL != "" {
-			r.apiBase = c.openRouterBaseURL
+	case "explabs":
+		if c.explabsBaseURL != "" {
+			r.apiBase = c.explabsBaseURL
 		} else {
-			r.apiBase = "https://openrouter.ai/api/v1"
+			r.apiBase = explabsBaseURL
 		}
 	case "glm":
 		r.apiBase = cfg.GLMBaseURL
 		r.apiKey = cfg.GLMKey
 		// Only reset the model when the global model is not a GLM model,
-		// to avoid sending e.g. an OpenRouter model name to the GLM API.
+		// to avoid sending e.g. a gateway model name to the GLM API.
 		if !strings.HasPrefix(r.model, "glm-") {
 			r.model = "glm-4.7"
 		}
@@ -250,7 +253,7 @@ func (c *Client) mainRoute(opts *ChatOptions) route {
 }
 
 // visionRoute resolves where requests for the configured vision model go: the
-// OpenRouter endpoint and key by default, or VisionBaseURL, which uses the GLM
+// gateway endpoint and key by default, or VisionBaseURL, which uses the GLM
 // key when it matches the GLM base.
 func (c *Client) visionRoute() route {
 	cfg := c.cfgStore.Get().LLM
@@ -272,7 +275,7 @@ func (c *Client) SeesImages(ctx context.Context, opts *ChatOptions) bool {
 }
 
 // seesImages reports whether the model behind r takes image input, according
-// to its OpenRouter model metadata. Answers are cached per API base and model.
+// to the endpoint's model list. Answers are cached per API base and model.
 // GLM and Fireworks publish no such metadata, and a failed lookup counts as no,
 // so media then goes through the vision model.
 func (c *Client) seesImages(ctx context.Context, r route) bool {
@@ -299,13 +302,14 @@ func (c *Client) seesImages(ctx context.Context, r route) bool {
 	return sees
 }
 
-// fetchImageInput reads the model's input modalities from OpenRouter's
-// /models/{model}/endpoints. A 404 means the endpoint has no metadata for the
-// model (e.g. a custom base_url) and counts as no image input.
+// fetchImageInput reads the model's input modalities from the endpoint's
+// /models list, matching the model by id or canonical slug. A 404 or a model
+// missing from the list (e.g. a custom base_url) counts as no image input.
+// The gateway's list is large and takes several seconds to arrive.
 func (c *Client) fetchImageInput(ctx context.Context, r route) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.apiBase+"/models/"+r.model+"/endpoints", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.apiBase+"/models", nil)
 	if err != nil {
 		return false, fmt.Errorf("build request: %w", err)
 	}
@@ -321,17 +325,24 @@ func (c *Client) fetchImageInput(ctx context.Context, r route) (bool, error) {
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	var meta struct {
-		Data struct {
-			Architecture struct {
+	var list struct {
+		Data []struct {
+			ID            string `json:"id"`
+			CanonicalSlug string `json:"canonical_slug"`
+			Architecture  struct {
 				InputModalities []string `json:"input_modalities"`
 			} `json:"architecture"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
 		return false, fmt.Errorf("decode response: %w", err)
 	}
-	return slices.Contains(meta.Data.Architecture.InputModalities, "image"), nil
+	for _, m := range list.Data {
+		if m.ID == r.model || m.CanonicalSlug == r.model {
+			return slices.Contains(m.Architecture.InputModalities, "image"), nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, opts *ChatOptions) (Choice, error) {
@@ -388,7 +399,7 @@ func (c *Client) complete(ctx context.Context, r route, messages []Message, tool
 		body["max_tokens"] = opts.MaxTokens
 	}
 	if opts != nil && opts.ReasoningEffort != "" && !vision && r.apiBase != cfg.GLMBaseURL && r.apiBase != cfg.FireworksBaseURL {
-		body["reasoning"] = map[string]string{"effort": opts.ReasoningEffort}
+		body["reasoning_effort"] = opts.ReasoningEffort
 	}
 
 	// GLM vision models don't support function-calling tools alongside
@@ -533,7 +544,6 @@ func (c *Client) post(ctx context.Context, url, key string, body any) (io.ReadCl
 		}
 		req.Header.Set("Authorization", "Bearer "+key)
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("HTTP-Referer", "https://github.com/tomasmach/vespra")
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

@@ -9,6 +9,7 @@ services:
     environment:
       - TZ=Europe/Prague
       - VESPRA_DB_PATH=/data/vespra.db
+      - EXPLABS_API_KEY=${EXPLABS_API_KEY:-}
     command: ["/app/vespra", "--config", "/config/config.toml", "--log-level", "debug"]
     dns:
       - 192.168.1.1

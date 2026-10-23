@@ -50,7 +50,7 @@ func clientWithBaseURL(t *testing.T, baseURL string) *llm.Client {
 	t.Helper()
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "test-key",
+			ExplabsKey:            "test-key",
 			Model:                 "test-model",
 			EmbeddingModel:        "test-embed-model",
 			RequestTimeoutSeconds: 5,
@@ -159,7 +159,7 @@ func clientWithVisionModel(t *testing.T, baseURL string) *llm.Client {
 	t.Helper()
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "test-key",
+			ExplabsKey:            "test-key",
 			Model:                 "default-model",
 			VisionModel:           "vision-model",
 			EmbeddingModel:        "test-embed-model",
@@ -371,15 +371,15 @@ func newTestClientWithConfig(t *testing.T, cfg *config.Config) *llm.Client {
 	return llm.New(cfgStore)
 }
 
-// TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint verifies that when
-// opts.Provider is "openrouter" the request is sent to the OpenRouter base URL
-// rather than the default BaseURL, using openrouter_key.
-func TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint(t *testing.T) {
+// TestChatOptsProviderExplabsRoutesToGatewayEndpoint verifies that when
+// opts.Provider is "explabs" the request is sent to the gateway base URL
+// rather than the default BaseURL, using explabs_key.
+func TestChatOptsProviderExplabsRoutesToGatewayEndpoint(t *testing.T) {
 	srv, capturedURL, capturedAuth, _ := captureRequestServer(t)
 
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "openrouter-key",
+			ExplabsKey:            "explabs-key",
 			Model:                 "global-model",
 			EmbeddingModel:        "embed-model",
 			RequestTimeoutSeconds: 5,
@@ -387,9 +387,9 @@ func TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint(t *testing.T) {
 		},
 	}
 	client := newTestClientWithConfig(t, cfg)
-	t.Cleanup(llm.SetOpenRouterBaseURL(client, srv.URL))
+	t.Cleanup(llm.SetExplabsBaseURL(client, srv.URL))
 
-	opts := &llm.ChatOptions{Provider: "openrouter"}
+	opts := &llm.ChatOptions{Provider: "explabs"}
 	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -398,8 +398,8 @@ func TestChatOptsProviderOpenRouterRoutesToOpenRouterEndpoint(t *testing.T) {
 	if *capturedURL != "/chat/completions" {
 		t.Errorf("expected request path /chat/completions, got %q", *capturedURL)
 	}
-	if *capturedAuth != "Bearer openrouter-key" {
-		t.Errorf("expected Authorization header %q, got %q", "Bearer openrouter-key", *capturedAuth)
+	if *capturedAuth != "Bearer explabs-key" {
+		t.Errorf("expected Authorization header %q, got %q", "Bearer explabs-key", *capturedAuth)
 	}
 }
 
@@ -410,7 +410,7 @@ func TestChatOptsProviderGLMRoutesToGLMEndpoint(t *testing.T) {
 
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "or-key",
+			ExplabsKey:            "or-key",
 			GLMKey:                "glm-secret",
 			GLMBaseURL:            srv.URL,
 			Model:                 "global-model",
@@ -442,7 +442,7 @@ func TestChatOptsModelOverrideIsUsed(t *testing.T) {
 
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "test-key",
+			ExplabsKey:            "test-key",
 			Model:                 "global-model",
 			EmbeddingModel:        "embed-model",
 			RequestTimeoutSeconds: 5,
@@ -491,7 +491,7 @@ func TestVisionModelWinsOverPerAgentProviderForImageContent(t *testing.T) {
 
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "or-key",
+			ExplabsKey:            "or-key",
 			GLMKey:                "glm-secret",
 			GLMBaseURL:            glmSrv.URL,
 			Model:                 "global-model",
@@ -527,7 +527,7 @@ func TestVisionModelWinsOverPerAgentProviderForImageContent(t *testing.T) {
 		t.Error("GLM server was called but vision model should have taken precedence")
 	}
 	if capturedAuth != "Bearer or-key" {
-		t.Errorf("expected OpenRouter key for vision request, got %q", capturedAuth)
+		t.Errorf("expected gateway key for vision request, got %q", capturedAuth)
 	}
 }
 
@@ -538,7 +538,7 @@ func TestChatNilOptsFallsBackToGlobalConfig(t *testing.T) {
 
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "test-key",
+			ExplabsKey:            "test-key",
 			Model:                 "global-model",
 			EmbeddingModel:        "embed-model",
 			RequestTimeoutSeconds: 5,
@@ -616,7 +616,7 @@ func TestVisionRoutesToGLMWhenVisionBaseURLMatchesGLMBaseURL(t *testing.T) {
 
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "or-key",
+			ExplabsKey:            "or-key",
 			GLMKey:                "glm-secret",
 			GLMBaseURL:            glmSrv.URL,
 			Model:                 "global-model",
@@ -760,12 +760,11 @@ func TestReasoningEffortSentForTextRequests(t *testing.T) {
 	if _, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil, opts); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	reasoning, _ := (*capturedBody)["reasoning"].(map[string]any)
-	if reasoning["effort"] != "medium" {
-		t.Errorf("expected reasoning.effort=medium, got %v", (*capturedBody)["reasoning"])
+	if (*capturedBody)["reasoning_effort"] != "medium" {
+		t.Errorf("expected reasoning_effort=medium, got %v", (*capturedBody)["reasoning_effort"])
 	}
 
-	srv, capturedBody = captureBodyServer(t) // fresh capture: decoding into the old map would keep "reasoning"
+	srv, capturedBody = captureBodyServer(t) // fresh capture: decoding into the old map would keep "reasoning_effort"
 	client = clientWithVisionModel(t, srv.URL)
 	image := llm.Message{Role: "user", ContentParts: []llm.ContentPart{
 		{Type: "image_url", ImageURL: &llm.ImageURL{URL: "https://example.com/img.png"}},
@@ -773,8 +772,8 @@ func TestReasoningEffortSentForTextRequests(t *testing.T) {
 	if _, err := client.Chat(context.Background(), []llm.Message{image}, nil, opts); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, ok := (*capturedBody)["reasoning"]; ok {
-		t.Errorf("reasoning must not be sent to the vision model, got %v", (*capturedBody)["reasoning"])
+	if _, ok := (*capturedBody)["reasoning_effort"]; ok {
+		t.Errorf("reasoning_effort must not be sent to the vision model, got %v", (*capturedBody)["reasoning_effort"])
 	}
 }
 
@@ -811,7 +810,7 @@ func TestChatReturnsResponseMetadata(t *testing.T) {
 	}
 }
 
-// imageModelServer serves OpenRouter metadata saying "sees-images" takes image
+// imageModelServer serves a model list saying "sees-images" takes image
 // input, counts metadata lookups, and captures chat completion request bodies.
 func imageModelServer(t *testing.T) (*httptest.Server, *atomic.Int32, *[]map[string]any) {
 	t.Helper()
@@ -821,11 +820,11 @@ func imageModelServer(t *testing.T) (*httptest.Server, *atomic.Int32, *[]map[str
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
 			lookups.Add(1)
-			if r.URL.Path != "/models/sees-images/endpoints" {
+			if r.URL.Path != "/models" {
 				http.NotFound(w, r)
 				return
 			}
-			w.Write([]byte(`{"data":{"architecture":{"input_modalities":["text","image"]}}}`))
+			w.Write([]byte(`{"data":[{"id":"vendor/sees-images","canonical_slug":"sees-images","architecture":{"input_modalities":["text","image"]}}]}`))
 			return
 		}
 		var body map[string]any
@@ -840,14 +839,14 @@ func imageModelServer(t *testing.T) (*httptest.Server, *atomic.Int32, *[]map[str
 func TestChatSendsImagesToMainModelThatSeesThem(t *testing.T) {
 	srv, lookups, bodies := imageModelServer(t)
 	client := newTestClientWithConfig(t, &config.Config{LLM: config.LLMConfig{
-		OpenRouterKey:         "or-key",
+		ExplabsKey:            "or-key",
 		Model:                 "global-model",
 		VisionModel:           "vision-model",
 		BaseURL:               "http://should-not-be-used.invalid",
 		RequestTimeoutSeconds: 5,
 	}})
-	t.Cleanup(llm.SetOpenRouterBaseURL(client, srv.URL))
-	opts := &llm.ChatOptions{Provider: "openrouter", Model: "sees-images", ReasoningEffort: "medium"}
+	t.Cleanup(llm.SetExplabsBaseURL(client, srv.URL))
+	opts := &llm.ChatOptions{Provider: "explabs", Model: "sees-images", ReasoningEffort: "medium"}
 
 	// The step after a tool call: the image must still reach the main model.
 	messages := []llm.Message{
@@ -872,8 +871,8 @@ func TestChatSendsImagesToMainModelThatSeesThem(t *testing.T) {
 	if body["model"] != "sees-images" {
 		t.Errorf("expected the main model, got %v", body["model"])
 	}
-	if reasoning, _ := body["reasoning"].(map[string]any); reasoning["effort"] != "medium" {
-		t.Errorf("expected reasoning.effort=medium, got %v", body["reasoning"])
+	if body["reasoning_effort"] != "medium" {
+		t.Errorf("expected reasoning_effort=medium, got %v", body["reasoning_effort"])
 	}
 	parts, ok := capturedMessages(t, &body)[0].(map[string]any)["content"].([]any)
 	if !ok || len(parts) != 2 {

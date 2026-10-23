@@ -29,7 +29,7 @@ func newToolTestStore(t *testing.T) *memory.Store {
 
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
-			OpenRouterKey:         "test",
+			ExplabsKey:            "test",
 			EmbeddingModel:        "test-embed",
 			RequestTimeoutSeconds: 5,
 			BaseURL:               embSrv.URL,

@@ -18,7 +18,7 @@ Read [GO_CODE_STYLE.md](./GO_CODE_STYLE.md) before writing any code. It covers n
 
 - Go 1.21+
 - A C compiler (CGO is required for `go-sqlite3`)
-- Discord bot token + OpenRouter API key for local testing
+- Discord bot token + Experiential Labs API key (`EXPLABS_API_KEY`) for local testing
 
 **Build and test:**
 
