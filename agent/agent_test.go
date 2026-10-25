@@ -29,7 +29,7 @@ func msg(content string, attachments ...*discordgo.MessageAttachment) *discordgo
 	return &discordgo.MessageCreate{
 		Message: &discordgo.Message{
 			Content:     content,
-			Author:      &discordgo.User{Username: "alice"},
+			Author:      &discordgo.User{ID: "1", Username: "alice"},
 			Attachments: attachments,
 		},
 	}
@@ -75,7 +75,7 @@ func TestBuildUserMessageTextOnly(t *testing.T) {
 	if m.Role != "user" {
 		t.Errorf("expected role=user, got %q", m.Role)
 	}
-	if m.Content != "alice: hello" {
+	if m.Content != "alice (<@1>): hello" {
 		t.Errorf("unexpected content: %q", m.Content)
 	}
 	if len(m.ContentParts) != 0 {
@@ -110,7 +110,7 @@ func TestBuildUserMessageNonImageAttachmentIgnored(t *testing.T) {
 	if len(m.ContentParts) != 0 {
 		t.Errorf("expected no content parts for non-image, got %d", len(m.ContentParts))
 	}
-	if m.Content != "alice: file" {
+	if m.Content != "alice (<@1>): file" {
 		t.Errorf("unexpected content: %q", m.Content)
 	}
 }
@@ -138,7 +138,7 @@ func TestBuildUserMessageImageDownloadFails(t *testing.T) {
 	if len(m.ContentParts) != 0 {
 		t.Errorf("expected no content parts when download fails, got %d", len(m.ContentParts))
 	}
-	if m.Content != "alice: look" {
+	if m.Content != "alice (<@1>): look" {
 		t.Errorf("unexpected content: %q", m.Content)
 	}
 }
@@ -153,7 +153,7 @@ func TestBuildUserMessageEmptyText(t *testing.T) {
 		t.Fatalf("expected 2 parts, got %d", len(m.ContentParts))
 	}
 	// text part should still carry the "alice: " prefix even with empty content
-	if m.ContentParts[0].Text != "alice: " {
+	if m.ContentParts[0].Text != "alice (<@1>): " {
 		t.Errorf("unexpected text part: %q", m.ContentParts[0].Text)
 	}
 	if !strings.HasPrefix(m.ContentParts[1].ImageURL.URL, "data:image/gif;base64,") {
@@ -163,11 +163,25 @@ func TestBuildUserMessageEmptyText(t *testing.T) {
 
 func TestHistoryUserContentNoReply(t *testing.T) {
 	m := &discordgo.Message{
-		Author:  &discordgo.User{Username: "alice"},
+		Author:  &discordgo.User{ID: "1", Username: "alice"},
 		Content: "hello",
 	}
 	got := historyUserContent(m, "", "")
-	want := "alice: hello"
+	want := "alice (<@1>): hello"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestHistoryUserContentShowsNicknameAndMentionTags(t *testing.T) {
+	m := &discordgo.Message{
+		Author:   &discordgo.User{ID: "1", Username: "machmonstrum", GlobalName: "Mach"},
+		Member:   &discordgo.Member{Nick: "Jsem Mach"},
+		Content:  "hele <@288374356944617472>, funguje to?",
+		Mentions: []*discordgo.User{{ID: "288374356944617472", Username: "dr3n0", GlobalName: "Dr3n0"}},
+	}
+	got := historyUserContent(m, "", "")
+	want := "Jsem Mach (<@1>): hele @Dr3n0 (<@288374356944617472>), funguje to?"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -175,15 +189,15 @@ func TestHistoryUserContentNoReply(t *testing.T) {
 
 func TestHistoryUserContentWithReply(t *testing.T) {
 	m := &discordgo.Message{
-		Author:  &discordgo.User{Username: "alice"},
+		Author:  &discordgo.User{ID: "1", Username: "alice"},
 		Content: "I agree",
 		ReferencedMessage: &discordgo.Message{
-			Author:  &discordgo.User{Username: "bob"},
+			Author:  &discordgo.User{ID: "2", Username: "bob"},
 			Content: "What do you think?",
 		},
 	}
 	got := historyUserContent(m, "", "")
-	want := `alice (replying to bob: "What do you think?"): I agree`
+	want := `alice (<@1>) (replying to bob (<@2>): "What do you think?"): I agree`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -191,10 +205,10 @@ func TestHistoryUserContentWithReply(t *testing.T) {
 
 func TestHistoryUserContentReplyWithImageOnly(t *testing.T) {
 	m := &discordgo.Message{
-		Author:  &discordgo.User{Username: "alice"},
+		Author:  &discordgo.User{ID: "1", Username: "alice"},
 		Content: "nice",
 		ReferencedMessage: &discordgo.Message{
-			Author:  &discordgo.User{Username: "bob"},
+			Author:  &discordgo.User{ID: "2", Username: "bob"},
 			Content: "",
 			Attachments: []*discordgo.MessageAttachment{
 				{ContentType: "image/png", URL: "https://cdn.example.com/img.png"},
@@ -202,7 +216,7 @@ func TestHistoryUserContentReplyWithImageOnly(t *testing.T) {
 		},
 	}
 	got := historyUserContent(m, "", "")
-	want := `alice (replying to bob: "[image]"): nice`
+	want := `alice (<@1>) (replying to bob (<@2>): "[image]"): nice`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -211,12 +225,12 @@ func TestHistoryUserContentReplyWithImageOnly(t *testing.T) {
 func TestHistoryUserContentReplyNoAuthor(t *testing.T) {
 	// ReferencedMessage exists but author is nil (deleted user) — should not panic
 	m := &discordgo.Message{
-		Author:            &discordgo.User{Username: "alice"},
+		Author:            &discordgo.User{ID: "1", Username: "alice"},
 		Content:           "hello",
 		ReferencedMessage: &discordgo.Message{},
 	}
 	got := historyUserContent(m, "", "")
-	want := "alice: hello"
+	want := "alice (<@1>): hello"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -228,7 +242,7 @@ func TestBuildUserMessageReferencedImage(t *testing.T) {
 	defer cleanup()
 
 	refMsg := &discordgo.Message{
-		Author:  &discordgo.User{Username: "bob"},
+		Author:  &discordgo.User{ID: "2", Username: "bob"},
 		Content: "",
 		Attachments: []*discordgo.MessageAttachment{
 			{ContentType: "image/jpeg", URL: srv.URL + "/ref.jpg"},
@@ -237,7 +251,7 @@ func TestBuildUserMessageReferencedImage(t *testing.T) {
 	m := &discordgo.MessageCreate{
 		Message: &discordgo.Message{
 			Content:           "look at this",
-			Author:            &discordgo.User{Username: "alice"},
+			Author:            &discordgo.User{ID: "1", Username: "alice"},
 			ReferencedMessage: refMsg,
 		},
 	}
@@ -275,7 +289,7 @@ func TestCollectImageDataURLsIncludesCurrentAndReferencedAttachments(t *testing.
 	defer srv.Close()
 
 	refMsg := &discordgo.Message{
-		Author: &discordgo.User{Username: "bob"},
+		Author: &discordgo.User{ID: "2", Username: "bob"},
 		Attachments: []*discordgo.MessageAttachment{
 			{ContentType: "image/jpeg", URL: srv.URL + "/ref.jpg"},
 			{ContentType: "video/mp4", URL: srv.URL + "/ignored.mp4"},
@@ -283,7 +297,7 @@ func TestCollectImageDataURLsIncludesCurrentAndReferencedAttachments(t *testing.
 	}
 	m := &discordgo.Message{
 		Content: "edit this",
-		Author:  &discordgo.User{Username: "alice"},
+		Author:  &discordgo.User{ID: "1", Username: "alice"},
 		Attachments: []*discordgo.MessageAttachment{
 			{ContentType: "image/png", URL: srv.URL + "/current.png"},
 		},
@@ -310,7 +324,7 @@ func msgAt(username, content string, ts time.Time) *discordgo.MessageCreate {
 	return &discordgo.MessageCreate{
 		Message: &discordgo.Message{
 			Content:   content,
-			Author:    &discordgo.User{Username: username},
+			Author:    &discordgo.User{ID: username, Username: username},
 			Timestamp: ts,
 		},
 	}
@@ -347,14 +361,14 @@ func TestBuildCombinedContentMessageLines(t *testing.T) {
 	if lines[1] != "" {
 		t.Errorf("expected blank separator line, got %q", lines[1])
 	}
-	if lines[2] != "alice: hello" {
-		t.Errorf("expected %q, got %q", "alice: hello", lines[2])
+	if lines[2] != "alice (<@alice>): hello" {
+		t.Errorf("expected %q, got %q", "alice (<@alice>): hello", lines[2])
 	}
-	if lines[3] != "bob: world" {
-		t.Errorf("expected %q, got %q", "bob: world", lines[3])
+	if lines[3] != "bob (<@bob>): world" {
+		t.Errorf("expected %q, got %q", "bob (<@bob>): world", lines[3])
 	}
-	if lines[4] != "alice: again" {
-		t.Errorf("expected %q, got %q", "alice: again", lines[4])
+	if lines[4] != "alice (<@alice>): again" {
+		t.Errorf("expected %q, got %q", "alice (<@alice>): again", lines[4])
 	}
 }
 
@@ -392,7 +406,7 @@ func TestBuildCombinedContentSingleMessage(t *testing.T) {
 	if !strings.HasPrefix(got, "[1 messages arrived rapidly in quick succession]") {
 		t.Errorf("unexpected output for single message: %q", got)
 	}
-	if !strings.Contains(got, "alice: solo") {
+	if !strings.Contains(got, "alice (<@alice>): solo") {
 		t.Errorf("expected message line in output, got %q", got)
 	}
 	// No timestamp suffix for the only (first) message
@@ -403,10 +417,10 @@ func TestBuildCombinedContentSingleMessage(t *testing.T) {
 
 func TestHistoryUserContentReplyWithVideoOnly(t *testing.T) {
 	m := &discordgo.Message{
-		Author:  &discordgo.User{Username: "alice"},
+		Author:  &discordgo.User{ID: "1", Username: "alice"},
 		Content: "nice",
 		ReferencedMessage: &discordgo.Message{
-			Author:  &discordgo.User{Username: "bob"},
+			Author:  &discordgo.User{ID: "2", Username: "bob"},
 			Content: "",
 			Attachments: []*discordgo.MessageAttachment{
 				{ContentType: "video/mp4", URL: "https://cdn.example.com/clip.mp4"},
@@ -414,7 +428,7 @@ func TestHistoryUserContentReplyWithVideoOnly(t *testing.T) {
 		},
 	}
 	got := historyUserContent(m, "", "")
-	want := `alice (replying to bob: "[video]"): nice`
+	want := `alice (<@1>) (replying to bob (<@2>): "[video]"): nice`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -422,10 +436,10 @@ func TestHistoryUserContentReplyWithVideoOnly(t *testing.T) {
 
 func TestHistoryUserContentReplyWithImageAndVideo(t *testing.T) {
 	m := &discordgo.Message{
-		Author:  &discordgo.User{Username: "alice"},
+		Author:  &discordgo.User{ID: "1", Username: "alice"},
 		Content: "cool",
 		ReferencedMessage: &discordgo.Message{
-			Author:  &discordgo.User{Username: "bob"},
+			Author:  &discordgo.User{ID: "2", Username: "bob"},
 			Content: "",
 			Attachments: []*discordgo.MessageAttachment{
 				{ContentType: "image/png", URL: "https://cdn.example.com/img.png"},
@@ -434,7 +448,7 @@ func TestHistoryUserContentReplyWithImageAndVideo(t *testing.T) {
 		},
 	}
 	got := historyUserContent(m, "", "")
-	want := `alice (replying to bob: "[image], [video]"): cool`
+	want := `alice (<@1>) (replying to bob (<@2>): "[image], [video]"): cool`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -468,7 +482,7 @@ func TestBuildUserMessageReferencedVideo(t *testing.T) {
 	defer cleanup()
 
 	refMsg := &discordgo.Message{
-		Author:  &discordgo.User{Username: "bob"},
+		Author:  &discordgo.User{ID: "2", Username: "bob"},
 		Content: "",
 		Attachments: []*discordgo.MessageAttachment{
 			{ContentType: "video/mp4", URL: srv.URL + "/ref.mp4"},
@@ -477,7 +491,7 @@ func TestBuildUserMessageReferencedVideo(t *testing.T) {
 	m := &discordgo.MessageCreate{
 		Message: &discordgo.Message{
 			Content:           "check this out",
-			Author:            &discordgo.User{Username: "alice"},
+			Author:            &discordgo.User{ID: "1", Username: "alice"},
 			ReferencedMessage: refMsg,
 		},
 	}
@@ -504,7 +518,7 @@ func TestBuildUserMessageVideoSkippedWhenTooLarge(t *testing.T) {
 	if len(m.ContentParts) != 0 {
 		t.Errorf("expected no content parts for oversized video, got %d", len(m.ContentParts))
 	}
-	if m.Content != "alice: big video" {
+	if m.Content != "alice (<@1>): big video" {
 		t.Errorf("unexpected content: %q", m.Content)
 	}
 }
@@ -545,10 +559,10 @@ func TestHasGifEmbeds(t *testing.T) {
 
 func TestHistoryUserContentReplyWithGif(t *testing.T) {
 	m := &discordgo.Message{
-		Author:  &discordgo.User{Username: "alice"},
+		Author:  &discordgo.User{ID: "1", Username: "alice"},
 		Content: "look",
 		ReferencedMessage: &discordgo.Message{
-			Author:  &discordgo.User{Username: "bob"},
+			Author:  &discordgo.User{ID: "2", Username: "bob"},
 			Content: "",
 			Embeds: []*discordgo.MessageEmbed{
 				{Type: discordgo.EmbedTypeGifv, Thumbnail: &discordgo.MessageEmbedThumbnail{URL: "https://tenor.com/thumb.jpg"}},
@@ -556,7 +570,7 @@ func TestHistoryUserContentReplyWithGif(t *testing.T) {
 		},
 	}
 	got := historyUserContent(m, "", "")
-	want := `alice (replying to bob: "[gif]"): look`
+	want := `alice (<@1>) (replying to bob (<@2>): "[gif]"): look`
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -570,7 +584,7 @@ func TestBuildUserMessageWithGifEmbed(t *testing.T) {
 	gifMsg := &discordgo.MessageCreate{
 		Message: &discordgo.Message{
 			Content: "check this gif",
-			Author:  &discordgo.User{Username: "alice"},
+			Author:  &discordgo.User{ID: "1", Username: "alice"},
 			Embeds: []*discordgo.MessageEmbed{
 				{
 					Type: discordgo.EmbedTypeGifv,
@@ -604,7 +618,7 @@ func TestBuildUserMessageGifEmbedNoThumbnail(t *testing.T) {
 	gifMsg := &discordgo.MessageCreate{
 		Message: &discordgo.Message{
 			Content: "a gif with no thumbnail",
-			Author:  &discordgo.User{Username: "alice"},
+			Author:  &discordgo.User{ID: "1", Username: "alice"},
 			Embeds: []*discordgo.MessageEmbed{
 				{Type: discordgo.EmbedTypeGifv}, // nil Thumbnail
 			},
@@ -614,7 +628,7 @@ func TestBuildUserMessageGifEmbedNoThumbnail(t *testing.T) {
 	if len(m.ContentParts) != 0 {
 		t.Errorf("expected no content parts for gifv embed with nil thumbnail, got %d", len(m.ContentParts))
 	}
-	if m.Content != "alice: a gif with no thumbnail" {
+	if m.Content != "alice (<@1>): a gif with no thumbnail" {
 		t.Errorf("unexpected content: %q", m.Content)
 	}
 }
@@ -627,7 +641,7 @@ func TestBuildCombinedUserMessageWithGifEmbed(t *testing.T) {
 	gifMsg := &discordgo.MessageCreate{
 		Message: &discordgo.Message{
 			Content: "check this gif",
-			Author:  &discordgo.User{Username: "alice"},
+			Author:  &discordgo.User{ID: "1", Username: "alice"},
 			Embeds: []*discordgo.MessageEmbed{
 				{
 					Type: discordgo.EmbedTypeGifv,
@@ -642,7 +656,7 @@ func TestBuildCombinedUserMessageWithGifEmbed(t *testing.T) {
 	plainMsg := &discordgo.MessageCreate{
 		Message: &discordgo.Message{
 			Content: "just a regular message",
-			Author:  &discordgo.User{Username: "bob"},
+			Author:  &discordgo.User{ID: "2", Username: "bob"},
 		},
 	}
 
@@ -1721,9 +1735,9 @@ func TestEarlierMediaPartsIncludesAllRecentMedia(t *testing.T) {
 	got := partSummaries(t, earlierMediaParts(context.Background(), srv.Client(), msgs, []*discordgo.Message{nil, replied}, "bot", "Machmonstrum"))
 
 	want := []string{
-		"text:[Earlier message in the channel] imagebot: ", "image:/other-bot.png", "image:/other-bot-2.png",
-		"text:[Earlier message in the channel] roytak: ani na sekundu neverim", "image:/manpage.png",
-		"text:[Earlier message in the channel] Mylan: ", "image:/tesla.png",
+		"text:[Earlier message in the channel] imagebot (<@b2>): ", "image:/other-bot.png", "image:/other-bot-2.png",
+		"text:[Earlier message in the channel] roytak (<@u1>): ani na sekundu neverim", "image:/manpage.png",
+		"text:[Earlier message in the channel] Mylan (<@u3>): ", "image:/tesla.png",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("parts = %q, want %q", got, want)
@@ -1749,7 +1763,7 @@ func TestEarlierMediaPartsSkipsVideos(t *testing.T) {
 
 	got := partSummaries(t, earlierMediaParts(context.Background(), srv.Client(), msgs, nil, "bot", "Machmonstrum"))
 
-	want := []string{"text:[Earlier message in the channel] roytak: photo and clip", "image:/photo.png"}
+	want := []string{"text:[Earlier message in the channel] roytak (<@u1>): photo and clip", "image:/photo.png"}
 	if !slices.Equal(got, want) {
 		t.Errorf("parts = %q, want %q", got, want)
 	}
@@ -1845,7 +1859,7 @@ func TestSearchMessagesTurnAnswersFromResults(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if len(chats) <= len(tc.steps) || !strings.Contains(chats[len(tc.steps)], "roytak: na pivo jdu v osm") {
+			if len(chats) <= len(tc.steps) || !strings.Contains(chats[len(tc.steps)], `roytak (\u003c@1\u003e): na pivo jdu v osm`) {
 				t.Errorf("the model never saw the search results in its %d steps", len(chats))
 			}
 		})

@@ -120,18 +120,26 @@ type ChannelAgent struct {
 	cancel     context.CancelFunc // cancels this agent's context
 }
 
-// resolveMentions replaces raw Discord mention syntax (<@ID> and <@!ID>) with
-// readable display names using the resolved User objects Discord provides.
+// resolveMentions adds display names to raw Discord mention syntax (<@ID> and
+// <@!ID>) using the resolved User objects Discord provides, keeping the tag so
+// the model can reuse it to ping that user.
 func resolveMentions(content string, mentions []*discordgo.User) string {
 	for _, u := range mentions {
-		name := u.GlobalName
-		if name == "" {
-			name = u.Username
-		}
-		content = strings.ReplaceAll(content, "<@"+u.ID+">", "@"+name)
-		content = strings.ReplaceAll(content, "<@!"+u.ID+">", "@"+name)
+		tagged := "@" + u.DisplayName() + " (<@" + u.ID + ">)"
+		content = strings.ReplaceAll(content, "<@"+u.ID+">", tagged)
+		content = strings.ReplaceAll(content, "<@!"+u.ID+">", tagged)
 	}
 	return content
+}
+
+// authorLabel names a message author by server nickname when Discord sent the
+// member (live messages only), else by display name, followed by the mention tag.
+func authorLabel(m *discordgo.Message) string {
+	name := m.Author.DisplayName()
+	if m.Member != nil && m.Member.Nick != "" {
+		name = m.Member.Nick
+	}
+	return name + " (<@" + m.Author.ID + ">)"
 }
 
 // hasImageAttachments reports whether the message has at least one image attachment.
@@ -212,12 +220,12 @@ func historyUserContent(m *discordgo.Message, botID, botName string) string {
 			}
 		}
 		return fmt.Sprintf("%s (replying to %s: %q): %s",
-			m.Author.Username,
-			m.ReferencedMessage.Author.Username,
+			authorLabel(m),
+			authorLabel(m.ReferencedMessage),
 			refContent,
 			content)
 	}
-	return fmt.Sprintf("%s: %s", m.Author.Username, content)
+	return fmt.Sprintf("%s: %s", authorLabel(m), content)
 }
 
 const maxVideoBytes = 50 * 1024 * 1024 // 50 MB
@@ -1332,6 +1340,7 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	now := time.Now()
 	fmt.Fprintf(&sb, "Current date and time: %s.\n\n", now.Format("Monday, January 2, 2006 15:04 MST (UTC-07:00)"))
 	sb.WriteString(a.soulText)
+	sb.WriteString("\n\nMessages name each person with their mention tag, like `Name (<@123>)`. To ping someone, write their tag `<@123>` in your reply; a plain @Name does not notify them.")
 	if len(memories) > 0 {
 		sb.WriteString("\n\n## Relevant Memories\n")
 		for _, m := range memories {

@@ -136,7 +136,7 @@ func (t *searchMessagesTool) Call(ctx context.Context, args json.RawMessage) (st
 	}
 	sb.WriteString(".\n")
 	for _, m := range msgs {
-		fmt.Fprintf(&sb, "[%s] %s: %s", m.Timestamp.In(time.Local).Format("2006-01-02 15:04"), m.Author.Username, m.ContentWithMentionsReplaced())
+		fmt.Fprintf(&sb, "[%s] %s (<@%s>): %s", m.Timestamp.In(time.Local).Format("2006-01-02 15:04"), m.Author.DisplayName(), m.Author.ID, m.ContentWithMentionsReplaced())
 		for _, a := range m.Attachments {
 			fmt.Fprintf(&sb, " [attachment %s]", a.Filename)
 		}
