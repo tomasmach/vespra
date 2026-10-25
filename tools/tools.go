@@ -255,7 +255,7 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 		return "", err
 	}
 	// Suppress stage directions passed through the reply tool (e.g. <IDLE/>, (silence)).
-	if isStageDirection(p.Content) {
+	if IsStageDirection(p.Content) {
 		return "Replied.", nil
 	}
 	// Guardrail: cap replies per turn to prevent runaway loops while still
@@ -287,16 +287,17 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	return "Replied.", nil
 }
 
-// isStageDirection reports whether s is a stage direction that the model emits
-// instead of a real reply, e.g. "(staying silent)", "[MLČÍM]", "<IDLE/>".
-func isStageDirection(s string) bool {
+// IsStageDirection reports whether s is a stage direction like "(staying silent)",
+// "[MLČÍM]", or "<IDLE/>" that the model sometimes emits as a non-reply.
+// Discord markup such as <@id>, <#id>, <:emoji:id> or <t:ts> is a real reply.
+func IsStageDirection(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" || strings.Contains(s, "\n") {
 		return false
 	}
 	return (strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")")) ||
 		(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) ||
-		(strings.HasPrefix(s, "<") && strings.HasSuffix(s, ">"))
+		(strings.HasPrefix(s, "<") && strings.HasSuffix(s, ">") && !strings.ContainsAny(s, "@#:"))
 }
 
 // utf16Len returns the number of UTF-16 code units for a rune.
