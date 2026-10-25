@@ -184,6 +184,28 @@ func TestReplyToolRateLimit(t *testing.T) {
 	}
 }
 
+func TestReplyToolSendsMentionOnlyRepliesButDropsStageDirections(t *testing.T) {
+	for content, wantSent := range map[string]bool{
+		"<@288374356944617472>": true,
+		"<@1> <@2>":             true,
+		"<:pepe:123>":           true,
+		"<IDLE/>":               false,
+		"(staying silent)":      false,
+		"[MLČÍM]":               false,
+	} {
+		var sent []string
+		send := func(c string) error { sent = append(sent, c); return nil }
+		r := tools.NewReplyOnlyRegistry(send, func(string) error { return nil }, 2)
+		args, _ := json.Marshal(map[string]string{"content": content})
+		if _, err := r.Dispatch(context.Background(), "reply", args); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(sent) == 1; got != wantSent {
+			t.Errorf("reply %q sent = %v, want %v", content, got, wantSent)
+		}
+	}
+}
+
 func TestReplyToolDuplicateSuppression(t *testing.T) {
 	sendCount := 0
 	send := func(content string) error {

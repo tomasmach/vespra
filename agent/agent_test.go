@@ -152,7 +152,7 @@ func TestBuildUserMessageEmptyText(t *testing.T) {
 	if len(m.ContentParts) != 2 {
 		t.Fatalf("expected 2 parts, got %d", len(m.ContentParts))
 	}
-	// text part should still carry the "alice: " prefix even with empty content
+	// text part should still carry the author prefix even with empty content
 	if m.ContentParts[0].Text != "alice (<@1>): " {
 		t.Errorf("unexpected text part: %q", m.ContentParts[0].Text)
 	}

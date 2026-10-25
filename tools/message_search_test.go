@@ -96,7 +96,7 @@ func TestSearchMessagesSendsFiltersAndFormatsResults(t *testing.T) {
 	}
 	for _, want := range []string{
 		"30 messages match. Showing 1-2; call again with offset 25 for more.\n",
-		"[2026-10-20 14:03] paulee5 (<@222>): kdo jde na pivo @roytak [attachment pivo.jpg] https://discord.com/channels/guild1/channel1/m1\n",
+		"[2026-10-20 14:03] paulee5 (<@222>): kdo jde na pivo @roytak (<@111>) [attachment pivo.jpg] https://discord.com/channels/guild1/channel1/m1\n",
 		"[2026-10-20 14:03] roytak (<@111>): já https://discord.com/channels/guild1/channel1/m2\n",
 	} {
 		if !strings.Contains(result, want) {

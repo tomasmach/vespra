@@ -136,7 +136,7 @@ func (t *searchMessagesTool) Call(ctx context.Context, args json.RawMessage) (st
 	}
 	sb.WriteString(".\n")
 	for _, m := range msgs {
-		fmt.Fprintf(&sb, "[%s] %s (<@%s>): %s", m.Timestamp.In(time.Local).Format("2006-01-02 15:04"), m.Author.DisplayName(), m.Author.ID, m.ContentWithMentionsReplaced())
+		fmt.Fprintf(&sb, "[%s] %s (<@%s>): %s", m.Timestamp.In(time.Local).Format("2006-01-02 15:04"), m.Author.DisplayName(), m.Author.ID, ResolveMentions(m.Content, m.Mentions))
 		for _, a := range m.Attachments {
 			fmt.Fprintf(&sb, " [attachment %s]", a.Filename)
 		}
@@ -234,4 +234,16 @@ func snowflakeAt(value string) (int64, error) {
 		return 0, fmt.Errorf("%q is not YYYY-MM-DD or YYYY-MM-DD HH:MM", value)
 	}
 	return (t.UnixMilli() - discordEpochMillis) << 22, nil
+}
+
+// ResolveMentions adds display names to raw Discord mention syntax (<@ID> and
+// <@!ID>) using the resolved User objects Discord provides, keeping the tag so
+// the model can reuse it to ping that user.
+func ResolveMentions(content string, mentions []*discordgo.User) string {
+	for _, u := range mentions {
+		tagged := "@" + u.DisplayName() + " (<@" + u.ID + ">)"
+		content = strings.ReplaceAll(content, "<@"+u.ID+">", tagged)
+		content = strings.ReplaceAll(content, "<@!"+u.ID+">", tagged)
+	}
+	return content
 }

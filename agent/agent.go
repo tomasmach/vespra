@@ -120,20 +120,8 @@ type ChannelAgent struct {
 	cancel     context.CancelFunc // cancels this agent's context
 }
 
-// resolveMentions adds display names to raw Discord mention syntax (<@ID> and
-// <@!ID>) using the resolved User objects Discord provides, keeping the tag so
-// the model can reuse it to ping that user.
-func resolveMentions(content string, mentions []*discordgo.User) string {
-	for _, u := range mentions {
-		tagged := "@" + u.DisplayName() + " (<@" + u.ID + ">)"
-		content = strings.ReplaceAll(content, "<@"+u.ID+">", tagged)
-		content = strings.ReplaceAll(content, "<@!"+u.ID+">", tagged)
-	}
-	return content
-}
-
-// authorLabel names a message author by server nickname when Discord sent the
-// member (live messages only), else by display name, followed by the mention tag.
+// authorLabel prefers the server nickname, which Discord sends only with live
+// messages, so history fetched over REST falls back to the display name.
 func authorLabel(m *discordgo.Message) string {
 	name := m.Author.DisplayName()
 	if m.Member != nil && m.Member.Nick != "" {
@@ -198,9 +186,9 @@ func formatMessageContent(content, botID, botName string) string {
 // annotating reply-to context when the message is a Discord reply and
 // sanitizing bot mentions into readable form.
 func historyUserContent(m *discordgo.Message, botID, botName string) string {
-	content := resolveMentions(formatMessageContent(m.Content, botID, botName), m.Mentions)
+	content := tools.ResolveMentions(formatMessageContent(m.Content, botID, botName), m.Mentions)
 	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil {
-		refContent := resolveMentions(formatMessageContent(m.ReferencedMessage.Content, botID, botName), m.ReferencedMessage.Mentions)
+		refContent := tools.ResolveMentions(formatMessageContent(m.ReferencedMessage.Content, botID, botName), m.ReferencedMessage.Mentions)
 		if len(refContent) > 200 {
 			refContent = refContent[:200] + "..."
 		}
@@ -1340,7 +1328,7 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	now := time.Now()
 	fmt.Fprintf(&sb, "Current date and time: %s.\n\n", now.Format("Monday, January 2, 2006 15:04 MST (UTC-07:00)"))
 	sb.WriteString(a.soulText)
-	sb.WriteString("\n\nMessages name each person with their mention tag, like `Name (<@123>)`. To ping someone, write their tag `<@123>` in your reply; a plain @Name does not notify them.")
+	sb.WriteString("\n\nMessages name each person with their mention tag, like `Name (<@123>)`. Write a tag like `<@123>` only when you want to notify that person; otherwise use their name. A plain @Name notifies nobody.")
 	if len(memories) > 0 {
 		sb.WriteString("\n\n## Relevant Memories\n")
 		for _, m := range memories {
@@ -1682,7 +1670,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	}
 
 	// Suppress stage-direction non-replies like "(staying silent)" in all modes.
-	if assistantContent != "" && !tp.reg.Replied && isStageDirection(assistantContent) {
+	if assistantContent != "" && !tp.reg.Replied && tools.IsStageDirection(assistantContent) {
 		a.logger.Debug("suppressed stage-direction non-reply", "content", assistantContent)
 		assistantContent = ""
 	}
@@ -1856,19 +1844,6 @@ func looksLikeToolCall(s string, defs []llm.ToolDefinition) bool {
 		}
 	}
 	return false
-}
-
-// isStageDirection reports whether s is a stage direction like "(staying silent)",
-// "[MLČÍM]", or "<IDLE/>" that the model sometimes emits as a non-reply.
-// Multi-line strings are never stage directions.
-func isStageDirection(s string) bool {
-	s = strings.TrimSpace(s)
-	if strings.Contains(s, "\n") {
-		return false
-	}
-	return (strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")")) ||
-		(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) ||
-		(strings.HasPrefix(s, "<") && strings.HasSuffix(s, ">"))
 }
 
 // buildMessages constructs the message slice for the LLM with system prompt prepended.
