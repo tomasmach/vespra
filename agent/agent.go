@@ -1679,7 +1679,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	// Log conversation on success -- either plain-text reply or reply-tool response.
 	// Internal turns (e.g., web search result delivery) are skipped to avoid polluting logs.
-	if !tp.internal && (assistantContent != "" || tp.reg.Replied) {
+	if !tp.internal && (assistantContent != "" || tp.reg.Replied || tp.reg.Polled) {
 		var toolCallsJSON string
 		if len(toolCalls) > 0 {
 			if b, err := json.Marshal(toolCalls); err == nil {
@@ -1720,7 +1720,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	}
 	tp.llmMsgs = sanitizeHistory(tp.llmMsgs)
 	a.history = tp.llmMsgs
-	if assistantContent != "" || tp.reg.Replied {
+	if assistantContent != "" || tp.reg.Replied || tp.reg.Polled {
 		a.turnCount++
 		if interval := cfg.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
 			a.runMemoryExtraction(ctx, a.history)
