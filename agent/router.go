@@ -141,16 +141,16 @@ func (r *Router) RouteReaction(s *discordgo.Session, reaction *discordgo.Message
 		return
 	}
 
-	user := reactionUser(s, reaction)
-	if user == nil || user.Bot {
-		return
-	}
 	msg, err := s.ChannelMessage(reaction.ChannelID, reaction.MessageID)
 	if err != nil {
 		slog.Warn("failed to fetch reacted message", "channel_id", reaction.ChannelID, "error", err)
 		return
 	}
 	if msg.Author == nil || msg.Author.ID != s.State.User.ID {
+		return
+	}
+	user := reactionUser(s, reaction)
+	if user == nil || user.Bot {
 		return
 	}
 
