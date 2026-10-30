@@ -3,6 +3,7 @@ package bot
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -189,10 +190,9 @@ func (w *wizardHandler) showChannelStepDeferred(s *discordgo.Session, i *discord
 		return
 	}
 
-	// Keep only text channels.
 	var textChannels []*discordgo.Channel
 	for _, ch := range channels {
-		if ch.Type == discordgo.ChannelTypeGuildText {
+		if slices.Contains(parentChannelTypes, ch.Type) {
 			textChannels = append(textChannels, ch)
 		}
 	}

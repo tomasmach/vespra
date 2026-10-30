@@ -17,6 +17,8 @@ func TestResolveResponseMode(t *testing.T) {
 				ResponseMode: "all",
 				Channels: []config.ChannelConfig{
 					{ID: "chan1", ResponseMode: "none"},
+					{ID: "thread1", ResponseMode: "mention"},
+					{ID: "forum1", ResponseMode: "smart"},
 				},
 			},
 		},
@@ -26,20 +28,26 @@ func TestResolveResponseMode(t *testing.T) {
 		name      string
 		serverID  string
 		channelID string
+		parentID  string
 		want      string
 	}{
-		{"channel override wins", "server1", "chan1", "none"},
-		{"agent-level default", "server1", "chan2", "all"},
-		{"global default for unknown server", "server2", "chan3", "smart"},
-		{"global default when no agent config", "", "chan4", "smart"},
+		{"channel override wins", "server1", "chan1", "", "none"},
+		{"agent-level default", "server1", "chan2", "", "all"},
+		{"global default for unknown server", "server2", "chan3", "", "smart"},
+		{"global default when no agent config", "", "chan4", "", "smart"},
+		{"thread inherits parent override", "server1", "thread2", "chan1", "none"},
+		{"thread override beats parent override", "server1", "thread1", "chan1", "mention"},
+		{"forum post inherits forum override", "server1", "post1", "forum1", "smart"},
+		{"thread of channel without override uses agent default", "server1", "thread3", "chan2", "all"},
+		{"thread on unknown server uses global default", "server2", "thread4", "chan1", "smart"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := cfg.ResolveResponseMode(tt.serverID, tt.channelID)
+			got := cfg.ResolveResponseMode(tt.serverID, tt.channelID, tt.parentID)
 			if got != tt.want {
-				t.Errorf("ResolveResponseMode(%q, %q) = %q, want %q",
-					tt.serverID, tt.channelID, got, tt.want)
+				t.Errorf("ResolveResponseMode(%q, %q, %q) = %q, want %q",
+					tt.serverID, tt.channelID, tt.parentID, got, tt.want)
 			}
 		})
 	}
@@ -161,7 +169,7 @@ func TestResolveResponseModeEmptyChannelOverride(t *testing.T) {
 			},
 		},
 	}
-	got := cfg.ResolveResponseMode("srv1", "chan1")
+	got := cfg.ResolveResponseMode("srv1", "chan1", "")
 	if got != "mention" {
 		t.Errorf("expected agent-level 'mention' when channel override is empty, got %q", got)
 	}

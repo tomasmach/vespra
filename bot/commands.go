@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -13,6 +14,21 @@ import (
 )
 
 var manageGuildPerm = int64(discordgo.PermissionManageServer)
+
+// parentChannelTypes are the channels the setup wizard offers. Threads and
+// forum posts without their own override inherit the override of their parent.
+var parentChannelTypes = []discordgo.ChannelType{
+	discordgo.ChannelTypeGuildText,
+	discordgo.ChannelTypeGuildNews,
+	discordgo.ChannelTypeGuildForum,
+}
+
+// overrideChannelTypes are the channels /channel can configure.
+var overrideChannelTypes = append(slices.Clone(parentChannelTypes),
+	discordgo.ChannelTypeGuildPublicThread,
+	discordgo.ChannelTypeGuildPrivateThread,
+	discordgo.ChannelTypeGuildNewsThread,
+)
 
 // modechoices are the valid response mode values shared across commands.
 var modeChoices = []*discordgo.ApplicationCommandOptionChoice{
@@ -58,7 +74,7 @@ var commandDefinitions = []*discordgo.ApplicationCommand{
 						Name:         "channel",
 						Description:  "The channel to configure",
 						Required:     true,
-						ChannelTypes: []discordgo.ChannelType{discordgo.ChannelTypeGuildText},
+						ChannelTypes: overrideChannelTypes,
 					},
 					{
 						Type:        discordgo.ApplicationCommandOptionString,
@@ -79,7 +95,7 @@ var commandDefinitions = []*discordgo.ApplicationCommand{
 						Name:         "channel",
 						Description:  "The channel to remove the override from",
 						Required:     true,
-						ChannelTypes: []discordgo.ChannelType{discordgo.ChannelTypeGuildText},
+						ChannelTypes: overrideChannelTypes,
 					},
 				},
 			},
