@@ -1865,3 +1865,69 @@ func TestSearchMessagesTurnAnswersFromResults(t *testing.T) {
 		})
 	}
 }
+
+func TestRecordReaction(t *testing.T) {
+	user := llm.Message{Role: "user", Content: "mach (<@1>): tell me a joke"}
+	reply := llm.Message{Role: "assistant", Content: "Why did the gopher cross the road?"}
+	laugh := reactionNote{userLabel: "mach (<@1>)", emoji: "😂", snippet: "Why did the gopher cross the road?"}
+	clap := reactionNote{userLabel: "roytak (<@2>)", emoji: ":clap:", snippet: "Why did the gopher cross the road?"}
+	other := reactionNote{userLabel: "roytak (<@2>)", emoji: "👍", snippet: "Earlier message"}
+
+	t.Run("adds a user note after the reply", func(t *testing.T) {
+		got := recordReaction([]llm.Message{user, reply}, laugh, 20)
+		want := `[reaction] mach (<@1>) reacted 😂 to your message: "Why did the gopher cross the road?"`
+		if len(got) != 3 || got[2].Role != "user" || got[2].Content != want {
+			t.Fatalf("got %+v, want trailing user note %q", got, want)
+		}
+		if got[1].Role != "assistant" || got[1].Content != reply.Content {
+			t.Errorf("assistant reply changed: %+v", got[1])
+		}
+	})
+
+	t.Run("merges reactions to the same message", func(t *testing.T) {
+		got := recordReaction(recordReaction([]llm.Message{user, reply}, laugh, 20), clap, 20)
+		want := `[reaction] mach (<@1>) reacted 😂, roytak (<@2>) reacted :clap: to your message: "Why did the gopher cross the road?"`
+		if len(got) != 3 || got[2].Content != want {
+			t.Fatalf("got %+v, want one merged note %q", got, want)
+		}
+	})
+
+	t.Run("keeps reactions to different messages apart", func(t *testing.T) {
+		got := recordReaction(recordReaction([]llm.Message{user, reply}, laugh, 20), other, 20)
+		if len(got) != 4 || !strings.Contains(got[3].Content, `"Earlier message"`) {
+			t.Fatalf("got %+v, want a second note", got)
+		}
+	})
+
+	t.Run("does not merge into a real user message", func(t *testing.T) {
+		got := recordReaction([]llm.Message{user}, laugh, 20)
+		if len(got) != 2 || got[0].Content != user.Content {
+			t.Fatalf("got %+v, want the user message untouched and a new note", got)
+		}
+	})
+
+	t.Run("leaves empty history for backfill", func(t *testing.T) {
+		if got := recordReaction(nil, laugh, 20); len(got) != 0 {
+			t.Fatalf("got %+v, want empty history", got)
+		}
+	})
+
+	t.Run("trim keeps history starting with a user message", func(t *testing.T) {
+		got := recordReaction([]llm.Message{user, reply}, laugh, 2)
+		if len(got) != 1 || got[0].Role != "user" || !strings.HasPrefix(got[0].Content, reactionNotePrefix) {
+			t.Fatalf("got %+v, want only the note after trimming the orphaned reply", got)
+		}
+	})
+}
+
+func TestReactionSnippet(t *testing.T) {
+	if got := reactionSnippet("  line one\nline two "); got != "line one line two" {
+		t.Errorf("got %q", got)
+	}
+	if got := reactionSnippet(""); got != "(no text)" {
+		t.Errorf("got %q", got)
+	}
+	if got := reactionSnippet(strings.Repeat("é", 100)); got != strings.Repeat("é", 80)+"…" {
+		t.Errorf("got %q", got)
+	}
+}

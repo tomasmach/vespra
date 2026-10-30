@@ -25,7 +25,7 @@ Vespra is a Discord AI companion with persistent memory and a web management UI.
 
 **`config/`** — TOML config loading and a thread-safe `Store` wrapper (used everywhere for hot-reload). `ResolveResponseMode(serverID, channelID)` implements channel → agent → global priority. `[[agents]]` array configures multiple Discord bots, each with their own `server_id`, optional `token`, `soul_file`, `db_path`, and per-channel overrides.
 
-**`bot/`** — Thin `discordgo` wrapper. Ignores self/bot messages, routes everything else to the agent router. Multiple bots can run simultaneously (one default + one per agent with a custom token).
+**`bot/`** — Thin `discordgo` wrapper. Ignores self/bot messages, routes everything else to the agent router, along with reactions to the bot's messages. Multiple bots can run simultaneously (one default + one per agent with a custom token).
 
 **`agent/`** — Core conversation logic:
 - `router.go`: maintains a map of per-channel goroutines. Spawns new agent or routes to existing; hot-loads newly configured agents from cfgStore without restart (custom-token agents require restart). `UnloadAgent(serverID)` evicts from cache when an agent is removed/updated.
@@ -79,6 +79,7 @@ go test -tags sqlite_fts5 ./...
 - One goroutine per active Discord channel; idle timeout after `IdleTimeoutMinutes`
 - Scheduled tasks persist in `schedule.db`, run on the channel agent goroutine, and use local time; recurring tasks skip missed runs after restart.
 - Conversation history is in-memory only (not persisted across restarts)
+- Reactions from people on the bot's own messages are added to a running channel agent's history as a `[reaction]` user note, so the next turn sees them. A reaction never wakes an agent, calls the LLM or triggers a reply
 - Embeddings stored as little-endian float32 blobs in SQLite
 - Soft-delete only for memories (`forgotten=1` flag)
 - Tool-call loop repeats until LLM produces plain text (no tool calls)

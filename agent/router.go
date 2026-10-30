@@ -126,6 +126,64 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 	r.channelAgent(channelID, serverID, resources).msgCh <- msg // guaranteed to succeed (buffer just created, size 100)
 }
 
+// RouteReaction records a reaction to one of the bot's own messages in the
+// running channel agent's history. It never spawns an agent, so a reaction
+// alone costs no LLM call. s is the session that received the event; with
+// several bots in a channel only the one owning the agent records it.
+func (r *Router) RouteReaction(s *discordgo.Session, reaction *discordgo.MessageReactionAdd) {
+	r.mu.Lock()
+	agent, ok := r.agents[reaction.ChannelID]
+	r.mu.Unlock()
+	if !ok || agent.resources.Session != s {
+		return
+	}
+	if cfg := agent.resources.Config; cfg != nil && slices.Contains(cfg.IgnoreUsers, reaction.UserID) {
+		return
+	}
+
+	msg, err := s.ChannelMessage(reaction.ChannelID, reaction.MessageID)
+	if err != nil {
+		slog.Warn("failed to fetch reacted message", "channel_id", reaction.ChannelID, "error", err)
+		return
+	}
+	if msg.Author == nil || msg.Author.ID != s.State.User.ID {
+		return
+	}
+	user := reactionUser(s, reaction)
+	if user == nil || user.Bot {
+		return
+	}
+
+	name := user.DisplayName()
+	if reaction.Member != nil && reaction.Member.Nick != "" {
+		name = reaction.Member.Nick
+	}
+	note := reactionNote{
+		userLabel: name + " (<@" + user.ID + ">)",
+		emoji:     reactionEmoji(reaction.Emoji),
+		snippet:   reactionSnippet(msg.Content),
+	}
+	select {
+	case agent.reactionCh <- note:
+	default:
+		slog.Warn("reaction buffer full, dropping", "channel_id", reaction.ChannelID)
+	}
+}
+
+// reactionUser returns who reacted. DM reactions carry no member, so the user
+// is fetched instead.
+func reactionUser(s *discordgo.Session, reaction *discordgo.MessageReactionAdd) *discordgo.User {
+	if reaction.Member != nil && reaction.Member.User != nil {
+		return reaction.Member.User
+	}
+	u, err := s.User(reaction.UserID)
+	if err != nil {
+		slog.Warn("failed to fetch reacting user", "user_id", reaction.UserID, "error", err)
+		return nil
+	}
+	return u
+}
+
 // channelAgent returns the active agent for channelID, spawning one if needed.
 // Must be called with r.mu held.
 func (r *Router) channelAgent(channelID, serverID string, resources *AgentResources) *ChannelAgent {
