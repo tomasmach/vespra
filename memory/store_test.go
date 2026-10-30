@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/tomasmach/vespra/config"
@@ -405,5 +407,71 @@ func TestRecallRespectsSimThreshold(t *testing.T) {
 	}
 	if len(results2) == 0 {
 		t.Error("expected results with threshold 0.35 (fake embeds have sim=1.0)")
+	}
+}
+
+func TestKeywordSearchMatchesAnyQueryWord(t *testing.T) {
+	store := newTestStore(t, nil)
+	ctx := context.Background()
+
+	insert := func(content string) string {
+		t.Helper()
+		id, err := newID()
+		if err != nil {
+			t.Fatalf("newID() error: %v", err)
+		}
+		if _, err := store.db.ExecContext(ctx,
+			`INSERT INTO memories (id, content, importance, server_id, created_at, updated_at, forgotten)
+			 VALUES (?, ?, 0.5, 'srv1', datetime('now'), datetime('now'), 0)`,
+			id, content,
+		); err != nil {
+			t.Fatalf("insert memory: %v", err)
+		}
+		if store.fts5Enabled {
+			if _, err := store.db.ExecContext(ctx,
+				`INSERT INTO memories_fts(memory_id, content) VALUES (?, ?)`, id, content,
+			); err != nil {
+				t.Fatalf("insert fts: %v", err)
+			}
+		}
+		return id
+	}
+	petrID := insert("Petr si koupil nové kolo")
+	simonID := insert("Šimon miluje svíčkovou")
+	insert("Anna jezdí vlakem")
+
+	searches := map[string]func(context.Context, string, string) ([]string, error){
+		"likeSearch": store.likeSearch,
+	}
+	if store.fts5Enabled {
+		searches["ftsSearch"] = store.ftsSearch
+	} else {
+		t.Log("FTS5 not available; only LIKE search is tested (run with -tags sqlite_fts5)")
+	}
+
+	tests := []struct {
+		query string
+		want  []string
+	}{
+		{"co dělá Petr s tím svým kolem", []string{petrID}},
+		{"koupil kolo", []string{petrID}},
+		{`kde je "Šimon" -NEAR( OR * ?`, []string{simonID}},
+		{"Šimon a Petr", []string{petrID, simonID}},
+		{"svíčk", []string{simonID}},
+		{"co s tím", nil},
+	}
+	for name, search := range searches {
+		for _, tt := range tests {
+			got, err := search(ctx, tt.query, "srv1")
+			if err != nil {
+				t.Fatalf("%s(%q) error: %v", name, tt.query, err)
+			}
+			want := append([]string(nil), tt.want...)
+			sort.Strings(got)
+			sort.Strings(want)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Errorf("%s(%q) = %v, want %v", name, tt.query, got, want)
+			}
+		}
 	}
 }
