@@ -77,7 +77,7 @@ go test -tags sqlite_fts5 ./...
 ## Key Design Decisions
 
 - One goroutine per active Discord channel; idle timeout after `IdleTimeoutMinutes`
-- Scheduled tasks persist in `schedule.db`, run on the channel agent goroutine, and use local time; recurring tasks skip missed runs after restart.
+- Scheduled tasks persist in `schedule.db`, run on the channel agent goroutine, and use local time; recurring tasks skip missed runs after restart. A task runs even in a channel with response mode `none`. Its turn gets `search_messages` (server channels), `list_tasks` and `cancel_task`, but not `schedule_task`.
 - Conversation history is in-memory only (not persisted across restarts)
 - Embeddings stored as little-endian float32 blobs in SQLite
 - Soft-delete only for memories (`forgotten=1` flag)

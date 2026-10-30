@@ -77,7 +77,7 @@ go test -tags sqlite_fts5 ./...
 ## Key Design Decisions
 
 - One goroutine per active Discord channel; idle timeout after `IdleTimeoutMinutes`
-- Scheduled tasks persist in `schedule.db`, run on the channel agent goroutine, and use local time; recurring tasks skip missed runs after restart.
+- Scheduled tasks persist in `schedule.db`, run on the channel agent goroutine, and use local time; recurring tasks skip missed runs after restart. A task runs even in a channel with response mode `none`. Its turn gets `search_messages` (server channels), `list_tasks` and `cancel_task`, but not `schedule_task`.
 - Conversation history is in-memory only (not persisted across restarts)
 - Images go straight to the main model when the gateway's `/models` list shows image input for it (cached per model); videos and text-only models get the `vision_model` description instead. The vision model also describes images in the background so history keeps their content without base64
 - Every turn also gets the images and GIFs from the last 30 channel messages, each labelled with its author and text, so the bot sees every recent image without anyone replying to it. Videos from earlier messages are left out because a few of them push a request past OpenRouter's 30 MB media limit
