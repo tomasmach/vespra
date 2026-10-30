@@ -1865,3 +1865,57 @@ func TestSearchMessagesTurnAnswersFromResults(t *testing.T) {
 		})
 	}
 }
+
+// channelTransport answers Discord's GET /channels/{id} without a network.
+type channelTransport map[string]*discordgo.Channel
+
+func (t channelTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	ch, ok := t[req.URL.Path[strings.LastIndex(req.URL.Path, "/")+1:]]
+	if !ok {
+		return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader(`{"message":"Unknown Channel","code":10003}`)), Header: http.Header{}, Request: req}, nil
+	}
+	body, err := json.Marshal(ch)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{"Content-Type": {"application/json"}}, Request: req}, nil
+}
+
+func TestThreadParentID(t *testing.T) {
+	session, err := discordgo.New("Bot fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.State.GuildAdd(&discordgo.Guild{ID: "g1", Channels: []*discordgo.Channel{
+		{ID: "chan1", GuildID: "g1", Type: discordgo.ChannelTypeGuildText},
+		{ID: "cachedThread", GuildID: "g1", Type: discordgo.ChannelTypeGuildPublicThread, ParentID: "chan1"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	session.Client = &http.Client{Transport: channelTransport{
+		"restPost": {ID: "restPost", GuildID: "g1", Type: discordgo.ChannelTypeGuildPublicThread, ParentID: "forum1"},
+		"restText": {ID: "restText", GuildID: "g1", Type: discordgo.ChannelTypeGuildText, ParentID: "category1"},
+	}}
+
+	tests := []struct {
+		name      string
+		serverID  string
+		channelID string
+		want      string
+	}{
+		{"cached thread", "g1", "cachedThread", "chan1"},
+		{"cached text channel", "g1", "chan1", ""},
+		{"forum post fetched over REST", "g1", "restPost", "forum1"},
+		{"text channel under category is not a thread", "g1", "restText", ""},
+		{"unknown channel", "g1", "missing", ""},
+		{"DM", "DM:user1", "dm1", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &ChannelAgent{channelID: tt.channelID, serverID: tt.serverID, resources: &AgentResources{Session: session}, logger: slog.Default()}
+			if got := a.threadParentID(context.Background()); got != tt.want {
+				t.Errorf("threadParentID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

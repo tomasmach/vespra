@@ -399,15 +399,21 @@ func (s *Store) Reload() (*Config, error) {
 }
 
 // ResolveResponseMode returns the effective response mode for a server/channel pair.
-// Priority: channel-level > agent-level > global default.
-func (cfg *Config) ResolveResponseMode(serverID, channelID string) string {
+// parentID is the parent channel of a thread or forum post, empty otherwise.
+// Priority: channel-level > parent channel-level > agent-level > global default.
+func (cfg *Config) ResolveResponseMode(serverID, channelID, parentID string) string {
 	for _, agent := range cfg.Agents {
 		if agent.ServerID != serverID {
 			continue
 		}
-		for _, ch := range agent.Channels {
-			if ch.ID == channelID && ch.ResponseMode != "" {
-				return ch.ResponseMode
+		for _, id := range []string{channelID, parentID} {
+			if id == "" {
+				continue
+			}
+			for _, ch := range agent.Channels {
+				if ch.ID == id && ch.ResponseMode != "" {
+					return ch.ResponseMode
+				}
 			}
 		}
 		if agent.ResponseMode != "" {

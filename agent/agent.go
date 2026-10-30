@@ -93,6 +93,7 @@ func sanitizeHistory(msgs []llm.Message) []llm.Message {
 type ChannelAgent struct {
 	channelID string
 	serverID  string
+	parentID  string // parent channel of a thread or forum post; set at the start of run()
 
 	cfgStore      *config.Store
 	llm           *llm.Client
@@ -497,8 +498,30 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 	}
 }
 
+// threadParentID returns the parent channel ID when the agent's channel is a
+// thread or forum post, so the thread inherits the parent's response mode.
+func (a *ChannelAgent) threadParentID(ctx context.Context) string {
+	if a.resources == nil || a.resources.Session == nil || strings.HasPrefix(a.serverID, "DM:") {
+		return ""
+	}
+	session := a.resources.Session
+	ch, err := session.State.Channel(a.channelID)
+	if err != nil {
+		ch, err = session.Channel(a.channelID, discordgo.WithContext(ctx))
+		if err != nil {
+			a.logger.Warn("look up channel for thread parent", "error", err)
+			return ""
+		}
+	}
+	if !ch.IsThread() {
+		return ""
+	}
+	return ch.ParentID
+}
+
 func (a *ChannelAgent) run(ctx context.Context) {
 	a.ctx = ctx
+	a.parentID = a.threadParentID(ctx)
 	// Wait for all in-flight background goroutines before returning,
 	// so that SQLite connections are not closed while they are still running.
 	defer a.extractionWg.Wait()
@@ -795,7 +818,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	a.lastActive.Store(time.Now().UnixNano())
 
 	cfg := a.cfgStore.Get()
-	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
+	mode := cfg.ResolveResponseMode(a.serverID, msg.ChannelID, a.parentID)
 	botID := a.resources.Session.State.User.ID
 	botName := a.resources.Session.State.User.Username
 	addressed := isAddressedToBot(msg, botID, botName)
@@ -1036,7 +1059,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	botID := a.resources.Session.State.User.ID
 	botName := a.resources.Session.State.User.Username
 	lastMsg := msgs[len(msgs)-1]
-	mode := cfg.ResolveResponseMode(a.serverID, lastMsg.ChannelID)
+	mode := cfg.ResolveResponseMode(a.serverID, lastMsg.ChannelID, a.parentID)
 
 	var anyAddressed bool
 	var addressedAuthorID string
@@ -1175,7 +1198,7 @@ func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Ta
 	}
 	a.lastActive.Store(time.Now().UnixNano())
 	cfg := a.cfgStore.Get()
-	mode := cfg.ResolveResponseMode(a.serverID, a.channelID)
+	mode := cfg.ResolveResponseMode(a.serverID, a.channelID, a.parentID)
 	if mode == config.ModeNone {
 		return
 	}
@@ -1221,7 +1244,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	a.lastActive.Store(time.Now().UnixNano())
 
 	cfg := a.cfgStore.Get()
-	mode := cfg.ResolveResponseMode(a.serverID, a.channelID)
+	mode := cfg.ResolveResponseMode(a.serverID, a.channelID, a.parentID)
 	stopTyping := a.startTyping(ctx)
 	defer stopTyping()
 
