@@ -76,16 +76,16 @@ func (s *Store) Recall(ctx context.Context, query, serverID string, topN int, si
 	// Keyword search: use FTS5 when available, otherwise fall back to LIKE.
 	var keywordIDs []string
 	if s.fts5Enabled {
-		keywordIDs, err = s.ftsSearch(ctx, query, serverID)
+		keywordIDs, err = s.ftsSearch(ctx, query, serverID, topN)
 		if err != nil {
 			slog.Warn("fts search failed, falling back to LIKE", "error", err)
-			keywordIDs, err = s.likeSearch(ctx, query, serverID)
+			keywordIDs, err = s.likeSearch(ctx, query, serverID, topN)
 			if err != nil {
 				return nil, fmt.Errorf("keyword search: %w", err)
 			}
 		}
 	} else {
-		keywordIDs, err = s.likeSearch(ctx, query, serverID)
+		keywordIDs, err = s.likeSearch(ctx, query, serverID, topN)
 		if err != nil {
 			return nil, fmt.Errorf("keyword search: %w", err)
 		}
@@ -143,8 +143,18 @@ func (s *Store) RecallByUser(ctx context.Context, serverID, userID string, limit
 }
 
 // minKeywordRunes is the shortest query word used for keyword search. Shorter
-// words ("a", "co", "s") match nearly every memory.
-const minKeywordRunes = 3
+// words ("a", "co", "the") match nearly every memory.
+const minKeywordRunes = 4
+
+// keywordStopwords are common longer words that would otherwise make every
+// message match a large share of memories.
+var keywordStopwords = map[string]bool{
+	"jsem": true, "jsme": true, "jste": true, "jsou": true, "není": true, "bude": true,
+	"když": true, "jako": true, "taky": true, "také": true, "tady": true, "proč": true,
+	"nebo": true, "tohle": true, "něco": true, "ještě": true, "prostě": true,
+	"that": true, "this": true, "with": true, "have": true, "from": true, "what": true,
+	"there": true, "they": true, "just": true, "like": true, "about": true, "your": true,
+}
 
 // keywordTokens splits a query into distinct words of letters and digits.
 // Everything else, including FTS5 operators and quotes, separates words. Case is
@@ -156,7 +166,7 @@ func keywordTokens(query string) []string {
 	seen := make(map[string]bool, len(words))
 	var tokens []string
 	for _, w := range words {
-		if utf8.RuneCountInString(w) < minKeywordRunes || seen[w] {
+		if utf8.RuneCountInString(w) < minKeywordRunes || seen[w] || keywordStopwords[strings.ToLower(w)] {
 			continue
 		}
 		seen[w] = true
@@ -167,7 +177,7 @@ func keywordTokens(query string) []string {
 
 // ftsSearch returns memory IDs that contain any query word as a word prefix,
 // via FTS5 full-text search.
-func (s *Store) ftsSearch(ctx context.Context, query, serverID string) ([]string, error) {
+func (s *Store) ftsSearch(ctx context.Context, query, serverID string, limit int) ([]string, error) {
 	tokens := keywordTokens(query)
 	if len(tokens) == 0 {
 		return nil, nil
@@ -181,8 +191,8 @@ func (s *Store) ftsSearch(ctx context.Context, query, serverID string) ([]string
 		 JOIN memories m ON m.id = f.memory_id
 		 WHERE m.server_id = ? AND m.forgotten = 0
 		 AND memories_fts MATCH ?
-		 ORDER BY rank`,
-		serverID, strings.Join(terms, " OR "),
+		 ORDER BY rank LIMIT ?`,
+		serverID, strings.Join(terms, " OR "), limit,
 	)
 	if err != nil {
 		return nil, err
@@ -192,7 +202,7 @@ func (s *Store) ftsSearch(ctx context.Context, query, serverID string) ([]string
 
 // likeSearch returns memory IDs whose content contains any query word, via SQL
 // LIKE substring search. Used when FTS5 is unavailable or its search fails.
-func (s *Store) likeSearch(ctx context.Context, query, serverID string) ([]string, error) {
+func (s *Store) likeSearch(ctx context.Context, query, serverID string, limit int) ([]string, error) {
 	tokens := keywordTokens(query)
 	if len(tokens) == 0 {
 		return nil, nil
@@ -203,8 +213,9 @@ func (s *Store) likeSearch(ctx context.Context, query, serverID string) ([]strin
 		conditions[i] = `content LIKE ? ESCAPE '\'`
 		args = append(args, "%"+escapeLIKE(t)+"%")
 	}
+	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id FROM memories WHERE server_id = ? AND forgotten = 0 AND (`+strings.Join(conditions, " OR ")+`)`,
+		`SELECT id FROM memories WHERE server_id = ? AND forgotten = 0 AND (`+strings.Join(conditions, " OR ")+`) LIMIT ?`,
 		args...,
 	)
 	if err != nil {
