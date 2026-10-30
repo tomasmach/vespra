@@ -159,6 +159,7 @@ CREATE TABLE embeddings (
 | `web_search` | Search the web (disabled if no `tools.web_search_key` configured) |
 | `generate_image` | Generate images from prompts or edit attached/replied-to images via fal.ai |
 | `search_messages` | Search the current channel's whole history by author, mentioned person, time range, content or attachment type (server channels only) |
+| `create_poll` | Post a native Discord poll with 2-10 answers, optional duration (default 24 hours) and multiselect (server channels only) |
 
 ---
 

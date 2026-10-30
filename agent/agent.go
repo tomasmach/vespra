@@ -849,6 +849,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 	if msg.GuildID != "" {
 		tools.RegisterMessageSearch(reg, a.resources.Session, msg.GuildID, msg.ChannelID, msg.Mentions)
+		tools.RegisterPoll(reg, a.resources.Session, msg.ChannelID)
 	}
 
 	userMsg := buildUserMessage(ctx, a.httpClient, msg, botID, botName)
@@ -1122,6 +1123,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 			mentions = append(mentions, m.Mentions...)
 		}
 		tools.RegisterMessageSearch(reg, a.resources.Session, lastMsg.GuildID, lastMsg.ChannelID, mentions)
+		tools.RegisterPoll(reg, a.resources.Session, lastMsg.ChannelID)
 	}
 
 	combinedUserMsg := a.buildCombinedUserMessage(ctx, msgs, botID, botName)
@@ -1605,7 +1607,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 
 		// If the LLM produced multi-line content alongside only side-effect tool calls
-		// (memory ops, react — not web_fetch, search_messages or web_search), treat it as the final reply
+		// (memory ops, react, create_poll — not web_fetch, search_messages or web_search), treat it as the final reply
 		// and stop. Multi-line content indicates a structured answer (e.g. a formatted
 		// stock list); single-line content is a transitional status comment (e.g.
 		// "Ukládám si tvoji strategii...") and should not be treated as a final reply.
@@ -1651,7 +1653,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 		}
 	}
 
-	if tp.mode == "smart" && !tp.reg.Replied && !tp.reg.Reacted && assistantContent == "" {
+	if tp.mode == "smart" && !tp.reg.Replied && !tp.reg.Reacted && !tp.reg.Polled && assistantContent == "" {
 		a.logger.Debug("smart mode: LLM chose not to respond", "addressed", tp.addressed)
 	}
 
@@ -1677,7 +1679,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 
 	// Log conversation on success -- either plain-text reply or reply-tool response.
 	// Internal turns (e.g., web search result delivery) are skipped to avoid polluting logs.
-	if !tp.internal && (assistantContent != "" || tp.reg.Replied) {
+	if !tp.internal && (assistantContent != "" || tp.reg.Replied || tp.reg.Polled) {
 		var toolCallsJSON string
 		if len(toolCalls) > 0 {
 			if b, err := json.Marshal(toolCalls); err == nil {
@@ -1718,7 +1720,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	}
 	tp.llmMsgs = sanitizeHistory(tp.llmMsgs)
 	a.history = tp.llmMsgs
-	if assistantContent != "" || tp.reg.Replied {
+	if assistantContent != "" || tp.reg.Replied || tp.reg.Polled {
 		a.turnCount++
 		if interval := cfg.Agent.MemoryExtractionInterval; interval > 0 && a.turnCount%interval == 0 {
 			a.runMemoryExtraction(ctx, a.history)
@@ -1750,10 +1752,10 @@ func shouldSuppressSmartMode(mode string, hasContent bool, reg *tools.Registry, 
 }
 
 // producedNoOutput reports whether the bot was directly addressed but produced
-// no visible output at all — no reply, no image, no reaction, and no plain-text
+// no visible output at all — no reply, no image, no reaction, no poll, and no plain-text
 // content.
 func producedNoOutput(internal bool, reg *tools.Registry, hasContent, addressed bool) bool {
-	return !internal && !reg.Replied && !reg.ImageGenCalled && !reg.WebSearchCalled && !reg.Reacted && !hasContent && addressed
+	return !internal && !reg.Replied && !reg.ImageGenCalled && !reg.WebSearchCalled && !reg.Reacted && !reg.Polled && !hasContent && addressed
 }
 
 // runMemoryExtraction launches a background goroutine that reviews recent history
