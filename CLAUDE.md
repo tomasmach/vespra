@@ -82,6 +82,7 @@ go test -tags sqlite_fts5 ./...
 - Images go straight to the main model when the gateway's `/models` list shows image input for it (cached per model); videos and text-only models get the `vision_model` description instead. The vision model also describes images in the background so history keeps their content without base64
 - Every turn also gets the images and GIFs from the last 30 channel messages, each labelled with its author and text, so the bot sees every recent image without anyone replying to it. Videos from earlier messages are left out because a few of them push a request past OpenRouter's 30 MB media limit
 - The model sees every message author and mentioned user as `Name (<@ID>)`, using the server nickname when Discord sends it, so it can ping people by writing the tag
+- In server channels the system prompt lists up to 50 of the server's custom emoji as `<:name:id>` (`<a:name:id>` for animated), taken from the gateway state cache with a REST fallback and cached per agent for 10 minutes. The `react` tool accepts the same tags
 - Embeddings stored as little-endian float32 blobs in SQLite
 - Soft-delete only for memories (`forgotten=1` flag)
 - Tool-call loop repeats until LLM produces plain text (no tool calls)

@@ -1865,3 +1865,51 @@ func TestSearchMessagesTurnAnswersFromResults(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatServerEmoji(t *testing.T) {
+	emojis := []*discordgo.Emoji{
+		{ID: "111", Name: "kek", Available: true},
+		{ID: "222", Name: "wave", Animated: true, Available: true},
+		{ID: "333", Name: "gone", Available: false},
+	}
+	got := formatServerEmoji(emojis)
+	for _, want := range []string{"<:kek:111>", "<a:wave:222>", "react tool"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in output, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "gone") {
+		t.Errorf("unavailable emoji should be skipped, got:\n%s", got)
+	}
+}
+
+func TestFormatServerEmojiEmptyAndCapped(t *testing.T) {
+	if got := formatServerEmoji([]*discordgo.Emoji{{ID: "1", Name: "x", Available: false}}); got != "" {
+		t.Errorf("expected empty output when no emoji are usable, got %q", got)
+	}
+	var many []*discordgo.Emoji
+	for i := range maxPromptEmoji + 10 {
+		many = append(many, &discordgo.Emoji{ID: fmt.Sprint(1000 + i), Name: fmt.Sprintf("e%d", i), Available: true})
+	}
+	got := formatServerEmoji(many)
+	lines := strings.Split(got, "\n")
+	if n := strings.Count(lines[len(lines)-1], "<:e"); n != maxPromptEmoji {
+		t.Errorf("expected %d emoji tags, got %d", maxPromptEmoji, n)
+	}
+}
+
+func TestBuildSystemPromptListsGuildEmojiFromState(t *testing.T) {
+	session := newTestDiscordSession("bot1", "Vespra")
+	if err := session.State.GuildAdd(&discordgo.Guild{ID: "g1", Emojis: []*discordgo.Emoji{{ID: "111", Name: "kek", Available: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	a := &ChannelAgent{serverID: "g1", soulText: "You are a test bot.", resources: &AgentResources{Session: session}}
+	if got := a.buildSystemPrompt(&config.Config{}, "always", "c1", nil, "Vespra", false, false); !strings.Contains(got, "<:kek:111>") {
+		t.Errorf("expected guild emoji in system prompt, got:\n%s", got)
+	}
+
+	dm := &ChannelAgent{serverID: "DM:u1", soulText: "You are a test bot.", resources: &AgentResources{Session: session}}
+	if got := dm.buildSystemPrompt(&config.Config{}, "always", "c1", nil, "Vespra", false, false); strings.Contains(got, "Server emoji") {
+		t.Errorf("DM prompt should not list server emoji, got:\n%s", got)
+	}
+}

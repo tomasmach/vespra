@@ -368,7 +368,7 @@ func (t *reactTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
         "type": "object",
         "properties": {
-            "emoji": {"type": "string", "description": "The emoji to react with."}
+            "emoji": {"type": "string", "description": "The emoji to react with: a Unicode emoji or a server emoji tag like <:name:id>."}
         },
         "required": ["emoji"]
     }`)

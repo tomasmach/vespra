@@ -1364,6 +1364,9 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
+	if a.serverID != "" && !strings.HasPrefix(a.serverID, "DM:") && a.resources != nil {
+		sb.WriteString(formatServerEmoji(a.resources.guildEmojis(a.serverID)))
+	}
 	if !strings.HasPrefix(a.serverID, "DM:") {
 		sb.WriteString("\n\nThe earlier messages in this conversation are recent channel history, and most of them were not addressed to you. Reply only to the latest message. Do not answer, revisit, or correct earlier messages unless the latest message asks about them.")
 	}
@@ -1377,6 +1380,60 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 		}
 	}
 	return sb.String()
+}
+
+const (
+	maxPromptEmoji       = 50
+	emojiRefreshInterval = 10 * time.Minute
+)
+
+// guildEmojis returns the guild's custom emoji, preferring the gateway state
+// cache and falling back to REST. The result is cached so a busy server does
+// not fetch the list on every turn.
+func (r *AgentResources) guildEmojis(guildID string) []*discordgo.Emoji {
+	if r.Session == nil {
+		return nil
+	}
+	r.emojiMu.Lock()
+	defer r.emojiMu.Unlock()
+	if !r.emojiFetchedAt.IsZero() && time.Since(r.emojiFetchedAt) < emojiRefreshInterval {
+		return r.emojis
+	}
+	r.emojiFetchedAt = time.Now()
+	if guild, err := r.Session.State.Guild(guildID); err == nil {
+		r.Session.State.RLock()
+		r.emojis = slices.Clone(guild.Emojis)
+		r.Session.State.RUnlock()
+		return r.emojis
+	}
+	emojis, err := r.Session.GuildEmojis(guildID)
+	if err != nil {
+		slog.Warn("failed to fetch guild emoji", "guild_id", guildID, "error", err)
+		r.emojis = nil
+		return nil
+	}
+	r.emojis = emojis
+	return r.emojis
+}
+
+// formatServerEmoji lists up to maxPromptEmoji usable custom emoji in the
+// form the model must write them. Unavailable emoji are skipped because
+// Discord does not render them.
+func formatServerEmoji(emojis []*discordgo.Emoji) string {
+	var tags []string
+	for _, e := range emojis {
+		if len(tags) >= maxPromptEmoji {
+			break
+		}
+		if e == nil || e.ID == "" || e.Name == "" || !e.Available {
+			continue
+		}
+		tags = append(tags, e.MessageFormat())
+	}
+	if len(tags) == 0 {
+		return ""
+	}
+	return "\n\n## Server emoji\nThis server has its own custom emoji. To use one, write its tag exactly as listed, for example " + tags[0] + ". The react tool accepts the same tags. Use them now and then where a member of this server would, not in every message.\n" + strings.Join(tags, " ")
 }
 
 func (a *ChannelAgent) buildCombinedUserMessage(ctx context.Context, msgs []*discordgo.MessageCreate, botID, botName string) llm.Message {
