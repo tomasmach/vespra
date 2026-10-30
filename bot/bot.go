@@ -41,7 +41,8 @@ func New(token string) (*Bot, error) {
 	session.Identify.Intents = discordgo.IntentsGuilds |
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentsDirectMessages |
-		discordgo.IntentsMessageContent
+		discordgo.IntentsMessageContent |
+		discordgo.IntentsGuildEmojis
 
 	b := &Bot{session: session}
 	session.AddHandler(b.onMessageCreate)
