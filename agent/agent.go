@@ -481,6 +481,44 @@ func (a *ChannelAgent) rateLimitedSendFn(raw func(string) error) func(string) er
 	}
 }
 
+// safeMentions lets bot messages ping users but never @everyone, @here or
+// roles, whatever a fetched web page or the model puts into the text.
+// RepliedUser keeps Discord's default ping of the author a reply quotes.
+func safeMentions() *discordgo.MessageAllowedMentions {
+	return &discordgo.MessageAllowedMentions{
+		Parse:       []discordgo.AllowedMentionType{discordgo.AllowedMentionTypeUsers},
+		RepliedUser: true,
+	}
+}
+
+// replyReference quotes trigger only in a server channel where other messages
+// arrived after it. Otherwise a plain message is clear, as a person would answer.
+func replyReference(trigger *discordgo.Message, newerMessages bool) *discordgo.MessageReference {
+	if trigger == nil || trigger.GuildID == "" || !newerMessages {
+		return nil
+	}
+	return trigger.SoftReference()
+}
+
+// channelSendFn returns a send function for channelID. Only its first message
+// may quote replyTo; later parts and a nil replyTo are sent plainly.
+func (a *ChannelAgent) channelSendFn(channelID string, replyTo *discordgo.Message) func(string) error {
+	var sent atomic.Bool // image generation sends its errors from a background goroutine
+	return func(content string) error {
+		var ref *discordgo.MessageReference
+		if !sent.Swap(true) {
+			// Messages that arrived while this turn ran wait in msgCh.
+			ref = replyReference(replyTo, len(a.msgCh) > 0)
+		}
+		_, err := a.resources.Session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+			Content:         content,
+			Reference:       ref,
+			AllowedMentions: safeMentions(),
+		})
+		return err
+	}
+}
+
 func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClient *llm.Client, resources *AgentResources) *ChannelAgent {
 	return &ChannelAgent{
 		channelID:  channelID,
@@ -832,10 +870,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	memories := a.recallMemories(ctx, cfg, userID, msg.Content)
 	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed, directedAtOther)
 
-	sendFn := a.rateLimitedSendFn(func(content string) error {
-		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
-		return err
-	})
+	sendFn := a.rateLimitedSendFn(a.channelSendFn(msg.ChannelID, msg.Message))
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
@@ -1096,10 +1131,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 
 	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed, allDirectedAtOther)
 
-	sendFn := a.rateLimitedSendFn(func(content string) error {
-		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
-		return err
-	})
+	sendFn := a.rateLimitedSendFn(a.channelSendFn(lastMsg.ChannelID, lastMsg.Message))
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
 	}
@@ -1194,10 +1226,7 @@ func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Ta
 	systemPrompt := a.buildSystemPrompt(cfg, mode, a.channelID, memories, botName, true, false)
 	systemPrompt += fmt.Sprintf("\n\nCarry out this scheduled task now. You MUST post a text reply in this channel using the reply tool. If the task is for the person who created it, mention them as <@%s> so Discord notifies them.", task.UserID)
 	// No send rate limit: tasks are capped per server, and a dropped reminder is lost.
-	sendFn := func(content string) error {
-		_, err := a.resources.Session.ChannelMessageSend(a.channelID, content)
-		return err
-	}
+	sendFn := a.channelSendFn(a.channelID, nil)
 	reactFn := func(emoji string) error {
 		return fmt.Errorf("scheduled tasks have no message to react to; use reply")
 	}
@@ -1237,10 +1266,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
 
-	sendFn := a.rateLimitedSendFn(func(text string) error {
-		_, err := a.resources.Session.ChannelMessageSend(a.channelID, text)
-		return err
-	})
+	sendFn := a.rateLimitedSendFn(a.channelSendFn(a.channelID, nil))
 	reactFn := func(emoji string) error { return nil }
 	// Minimal registry: only reply + react. No memory tools, no web_search/web_fetch.
 	// The LLM's only job is to summarize the search snippets and reply.
@@ -1468,8 +1494,9 @@ func (a *ChannelAgent) webSearchDeps() *tools.WebSearchDeps {
 func (a *ChannelAgent) makeSendImageFn(channelID string) tools.SendImageFunc {
 	return func(filename string, data io.Reader, caption string) error {
 		_, err := a.resources.Session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
-			Content: caption,
-			Files:   []*discordgo.File{{Name: filename, Reader: data}},
+			Content:         caption,
+			Files:           []*discordgo.File{{Name: filename, Reader: data}},
+			AllowedMentions: safeMentions(),
 		})
 		return err
 	}
