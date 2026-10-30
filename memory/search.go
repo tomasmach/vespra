@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 type MemoryRow struct {
@@ -140,18 +142,47 @@ func (s *Store) RecallByUser(ctx context.Context, serverID, userID string, limit
 	return out, rows.Err()
 }
 
-// ftsSearch returns memory IDs matching the query via FTS5 full-text search.
+// minKeywordRunes is the shortest query word used for keyword search. Shorter
+// words ("a", "co", "s") match nearly every memory.
+const minKeywordRunes = 3
+
+// keywordTokens splits a query into distinct words of letters and digits.
+// Everything else, including FTS5 operators and quotes, separates words. Case is
+// kept because SQLite LIKE folds only ASCII case; FTS5 folds case on its own.
+func keywordTokens(query string) []string {
+	words := strings.FieldsFunc(query, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.IsMark(r)
+	})
+	seen := make(map[string]bool, len(words))
+	var tokens []string
+	for _, w := range words {
+		if utf8.RuneCountInString(w) < minKeywordRunes || seen[w] {
+			continue
+		}
+		seen[w] = true
+		tokens = append(tokens, w)
+	}
+	return tokens
+}
+
+// ftsSearch returns memory IDs that contain any query word as a word prefix,
+// via FTS5 full-text search.
 func (s *Store) ftsSearch(ctx context.Context, query, serverID string) ([]string, error) {
-	// FTS5 MATCH uses its own syntax (AND, OR, -, ", *, NEAR). Wrap the query
-	// in double quotes to treat it as a phrase, escaping embedded quotes.
-	ftsQuery := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+	tokens := keywordTokens(query)
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+	terms := make([]string, len(tokens))
+	for i, t := range tokens {
+		terms[i] = `"` + t + `"*`
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT f.memory_id FROM memories_fts f
 		 JOIN memories m ON m.id = f.memory_id
 		 WHERE m.server_id = ? AND m.forgotten = 0
 		 AND memories_fts MATCH ?
 		 ORDER BY rank`,
-		serverID, ftsQuery,
+		serverID, strings.Join(terms, " OR "),
 	)
 	if err != nil {
 		return nil, err
@@ -159,12 +190,22 @@ func (s *Store) ftsSearch(ctx context.Context, query, serverID string) ([]string
 	return scanIDs(rows)
 }
 
-// likeSearch returns memory IDs matching the query via SQL LIKE substring search.
-// Used as fallback when FTS5 search fails (e.g., syntax errors in query).
+// likeSearch returns memory IDs whose content contains any query word, via SQL
+// LIKE substring search. Used when FTS5 is unavailable or its search fails.
 func (s *Store) likeSearch(ctx context.Context, query, serverID string) ([]string, error) {
+	tokens := keywordTokens(query)
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+	conditions := make([]string, len(tokens))
+	args := []any{serverID}
+	for i, t := range tokens {
+		conditions[i] = `content LIKE ? ESCAPE '\'`
+		args = append(args, "%"+escapeLIKE(t)+"%")
+	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id FROM memories WHERE server_id = ? AND forgotten = 0 AND content LIKE ? ESCAPE '\'`,
-		serverID, "%"+escapeLIKE(query)+"%",
+		`SELECT id FROM memories WHERE server_id = ? AND forgotten = 0 AND (`+strings.Join(conditions, " OR ")+`)`,
+		args...,
 	)
 	if err != nil {
 		return nil, err
