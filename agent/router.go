@@ -108,7 +108,10 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 	blocked, justBlocked := r.checkSpam(serverID, msg.Author.ID, r.shouldCheckSpam(msg, resources))
 	if blocked {
 		if justBlocked && resources.Session != nil {
-			go resources.Session.ChannelMessageSend(channelID, fmt.Sprintf("<@%s> You've been sending too many messages. I'll be back in %s.", msg.Author.ID, spamCooldown))
+			go resources.Session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+				Content:         fmt.Sprintf("<@%s> You've been sending too many messages. I'll be back in %s.", msg.Author.ID, spamCooldown),
+				AllowedMentions: safeMentions(),
+			})
 		}
 		return
 	}

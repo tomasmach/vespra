@@ -86,6 +86,7 @@ go test -tags sqlite_fts5 ./...
 - Soft-delete only for memories (`forgotten=1` flag)
 - Tool-call loop repeats until LLM produces plain text (no tool calls)
 - Discord messages split at 2000-char limit
+- Bot messages may ping users but never @everyone, @here or roles. In a server channel the first part of an answer is a Discord reply to the triggering message only when other messages arrived after it; later parts, scheduled tasks and search results are plain messages
 - Threads are treated as independent channels
 - DMs are always served using the default bot session and default memory DB, without needing an `[[agents]]` entry
 - Agents without custom tokens can be hot-loaded from config changes; custom-token agents require a restart to open a new Discord session
