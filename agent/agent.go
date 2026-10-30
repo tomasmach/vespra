@@ -224,6 +224,10 @@ const maxImageEditSourceImages = 14
 // internal turn; chaining two web_fetch calls before replying would tighten the budget unexpectedly.
 const internalTurnMaxIter = 3
 
+// scheduledTaskMinIter keeps room in a scheduled task turn for a history search,
+// a reply and the step after it, even when max_tool_iterations is set lower.
+const scheduledTaskMinIter = 4
+
 // classifyAttachments partitions attachments into images and videos,
 // skipping videos that exceed maxVideoBytes.
 func classifyAttachments(attachments []*discordgo.MessageAttachment) (images, videos []*discordgo.MessageAttachment) {
@@ -1157,7 +1161,8 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 }
 
 // handleScheduledTask carries out a due scheduled task as an addressed turn in
-// this channel. The schedule tools are left out so a task cannot reschedule itself.
+// this channel. schedule_task is left out so a task cannot create more tasks;
+// list_tasks and cancel_task stay so a recurring task can stop itself.
 // A one-shot task is deleted here, after its attempt, and not when it fires.
 func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Task) {
 	if a.scheduleStore != nil {
@@ -1175,10 +1180,9 @@ func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Ta
 	}
 	a.lastActive.Store(time.Now().UnixNano())
 	cfg := a.cfgStore.Get()
+	// Mode none still runs the task: a user scheduled it explicitly, and skipping
+	// would delete a one-shot reminder without ever sending it.
 	mode := cfg.ResolveResponseMode(a.serverID, a.channelID)
-	if mode == config.ModeNone {
-		return
-	}
 	stopTyping := a.startTyping(ctx)
 	defer stopTyping()
 	if len(a.history) == 0 {
@@ -1193,6 +1197,13 @@ func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Ta
 	memories := a.recallMemories(ctx, cfg, task.UserID, task.Prompt)
 	systemPrompt := a.buildSystemPrompt(cfg, mode, a.channelID, memories, botName, true, false)
 	systemPrompt += fmt.Sprintf("\n\nCarry out this scheduled task now. You MUST post a text reply in this channel using the reply tool. If the task is for the person who created it, mention them as <@%s> so Discord notifies them.", task.UserID)
+	guild := !strings.HasPrefix(a.serverID, "DM:")
+	if guild {
+		systemPrompt += " For a recap or a look back at earlier messages, search the channel history with search_messages before replying."
+	}
+	if task.Cron != "" {
+		systemPrompt += fmt.Sprintf(" This task repeats. If it says when to stop and that time has come, cancel it with cancel_task (task ID %d).", task.ID)
+	}
 	// No send rate limit: tasks are capped per server, and a dropped reminder is lost.
 	sendFn := func(content string) error {
 		_, err := a.resources.Session.ChannelMessageSend(a.channelID, content)
@@ -1202,6 +1213,12 @@ func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Ta
 		return fmt.Errorf("scheduled tasks have no message to react to; use reply")
 	}
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, cfg.Agent.MemoryDedupThreshold, cfg.Agent.MemoryRecallLimit, sendFn, reactFn, a.webSearchDeps(), a.imageGenDeps(a.makeSendImageFn(a.channelID), sendFn, nil, a.channelID, ""), cfg.Agent.MaxReplyParts)
+	if a.scheduleStore != nil {
+		tools.RegisterTaskManagementTools(reg, a.scheduleStore, a.serverID)
+	}
+	if guild {
+		tools.RegisterMessageSearch(reg, a.resources.Session, a.serverID, a.channelID, nil)
+	}
 	llmMsgs := append(slices.Clone(a.history), llm.Message{Role: "user", Content: content})
 	a.processTurn(ctx, cfg, turnParams{
 		mode:         mode,
@@ -1211,6 +1228,7 @@ func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Ta
 		llmMsgs:      llmMsgs,
 		userMsgText:  content,
 		addressed:    true,
+		maxIter:      max(cfg.Agent.MaxToolIterations, scheduledTaskMinIter),
 	})
 }
 

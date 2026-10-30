@@ -11,6 +11,12 @@ import (
 
 func RegisterScheduleTools(reg *Registry, store *schedule.Store, serverID, channelID, userID string) {
 	reg.Register(&scheduleTaskTool{store: store, serverID: serverID, channelID: channelID, userID: userID})
+	RegisterTaskManagementTools(reg, store, serverID)
+}
+
+// RegisterTaskManagementTools registers list_tasks and cancel_task without
+// schedule_task, for scheduled task turns that must not create more tasks.
+func RegisterTaskManagementTools(reg *Registry, store *schedule.Store, serverID string) {
 	reg.Register(&listTasksTool{store: store, serverID: serverID})
 	reg.Register(&cancelTaskTool{store: store, serverID: serverID})
 }
