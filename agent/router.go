@@ -41,6 +41,10 @@ type AgentResources struct {
 	Config  *config.AgentConfig
 	Memory  *memory.Store
 	Session *discordgo.Session
+
+	emojiMu        sync.Mutex
+	emojis         []*discordgo.Emoji
+	emojiFetchedAt time.Time
 }
 
 // Router manages per-channel ChannelAgents.
