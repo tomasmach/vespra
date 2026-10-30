@@ -21,7 +21,7 @@
 
 Vespra runs one goroutine per active Discord channel. When a message arrives, the bot checks the configured response mode, recalls relevant memories via hybrid search, builds a system prompt from the agent's soul file and recalled memories, then calls an LLM through the [Experiential Labs](https://platform.experientiallabs.ai) gateway. The LLM can invoke tools — saving or recalling memories, reacting to messages, searching the web — in a loop until it produces a plain text reply.
 
-Conversation history lives in memory per channel goroutine and is not persisted across restarts. Memories are different: they survive restarts, are scoped per server, and are stored in SQLite with vector embeddings for semantic recall. Each server gets its own database file and can have its own personality via a `soul.md` file.
+Conversation history lives in memory per channel goroutine and is not persisted across restarts. When people react to the bot's messages in an active channel, the reactions are added to that history so the next reply knows how earlier ones landed; a reaction alone never makes the bot reply. Memories are different: they survive restarts, are scoped per server, and are stored in SQLite with vector embeddings for semantic recall. Each server gets its own database file and can have its own personality via a `soul.md` file.
 
 DMs are handled automatically by the default bot using a synthetic server ID (`DM:<user_id>`), giving each user an isolated memory space without any extra config.
 
