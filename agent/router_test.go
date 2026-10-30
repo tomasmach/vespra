@@ -18,6 +18,7 @@ import (
 
 	"github.com/tomasmach/vespra/config"
 	"github.com/tomasmach/vespra/llm"
+	"github.com/tomasmach/vespra/memory"
 	"github.com/tomasmach/vespra/schedule"
 )
 
@@ -449,14 +450,17 @@ func TestScheduledTaskRunsOnChannelAgent(t *testing.T) {
 					t.Errorf("wrong channel %s", channel)
 				}
 			}
-			for _, def := range chats[0].Tools {
-				if strings.Contains(def.Function.Name, "task") {
-					t.Errorf("scheduled turn has schedule tool %s", def.Function.Name)
-				}
+			offers := func(chat int, name string) bool {
+				return slices.ContainsFunc(chats[chat].Tools, func(def llm.ToolDefinition) bool { return def.Function.Name == name })
 			}
-			hasSearch := slices.ContainsFunc(chats[2].Tools, func(def llm.ToolDefinition) bool { return def.Function.Name == "search_messages" })
-			if hasSearch == tc.dm {
-				t.Errorf("follow-up turn offers search_messages: %v, dm: %v", hasSearch, tc.dm)
+			if offers(0, "schedule_task") || !offers(0, "list_tasks") || !offers(0, "cancel_task") {
+				t.Errorf("scheduled turn tools: %+v", chats[0].Tools)
+			}
+			if offers(0, "search_messages") == tc.dm {
+				t.Errorf("scheduled turn offers search_messages: %v, dm: %v", offers(0, "search_messages"), tc.dm)
+			}
+			if offers(2, "search_messages") == tc.dm {
+				t.Errorf("follow-up turn offers search_messages: %v, dm: %v", offers(2, "search_messages"), tc.dm)
 			}
 			if !strings.Contains(chats[0].Messages[0].Content, "Current date and time:") || !strings.Contains(chats[0].Messages[0].Content, "UTC") {
 				t.Error("system prompt lacks local clock")
@@ -498,24 +502,76 @@ func TestFireTaskDropsRemovedAgent(t *testing.T) {
 	}
 }
 
-func TestScheduledTaskSkipsDisabledChannel(t *testing.T) {
-	r := newTestRouter(t)
-	r.cfgStore.Get().Response.DefaultMode = config.ModeNone
-	a := newChannelAgent("channel", "server", r.cfgStore, r.llm, nil)
-	a.scheduleStore = openTestScheduleStore(t)
-	task, err := a.scheduleStore.Create(context.Background(), "server", "channel", "user", "remind me", time.Now().Add(time.Hour).Format("2006-01-02 15:04"), "")
+// A task runs even in a channel with mode none, because a user scheduled it
+// explicitly, and it may search history and then reply although
+// max_tool_iterations is lower than that needs.
+func TestScheduledTaskSearchesHistoryInDisabledChannel(t *testing.T) {
+	var mu sync.Mutex
+	var chats int
+	var searched bool
+	var sent []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.HasSuffix(req.URL.Path, "/guilds/server/messages/search"):
+			searched = true
+			fmt.Fprint(w, `{"total_results":1,"messages":[[{"id":"m1","channel_id":"channel","timestamp":"2026-10-20T14:03:00Z","content":"grilovačka v sobotu","author":{"id":"1","username":"alice"}}]]}`)
+		case strings.HasSuffix(req.URL.Path, "/chat/completions"):
+			chats++
+			switch chats {
+			case 1:
+				fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"s1","type":"function","function":{"name":"search_messages","arguments":"{\"content\":\"grilovačka\"}"}}]}}]}`)
+			case 2:
+				fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"r1","type":"function","function":{"name":"reply","arguments":"{\"content\":\"Tento týden: grilovačka v sobotu.\"}"}}]}}]}`)
+			default:
+				fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":""}}]}`)
+			}
+		case req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/channels/channel/messages"):
+			var body struct {
+				Content string `json:"content"`
+			}
+			json.NewDecoder(req.Body).Decode(&body)
+			sent = append(sent, body.Content)
+			fmt.Fprint(w, `{"id":"reply"}`)
+		case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/messages"):
+			fmt.Fprint(w, `[]`)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+	cfgStore := config.NewStoreFromConfig(&config.Config{
+		LLM:      config.LLMConfig{BaseURL: srv.URL, Model: "test", RequestTimeoutSeconds: 2},
+		Agent:    config.TurnConfig{HistoryLimit: 20, MaxToolIterations: 1, MaxReplyParts: 2},
+		Response: config.ResponseConfig{DefaultMode: config.ModeNone},
+	})
+	client := llm.New(cfgStore)
+	mem, err := memory.New(&config.MemoryConfig{DBPath: filepath.Join(t.TempDir(), "memory.db")}, client)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A cancelled context, as during shutdown, must still delete the finished task.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	a.handleScheduledTask(ctx, task)
-	if len(a.history) != 0 {
-		t.Error("disabled channel processed task")
+	session, err := discordgo.New("Bot fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.State.User = &discordgo.User{ID: "bot", Username: "Vespra"}
+	session.Client = &http.Client{Transport: scheduledTaskTransport{baseURL: srv.URL}, Timeout: 2 * time.Second}
+	a := newChannelAgent("channel", "server", cfgStore, client, &AgentResources{Memory: mem, Session: session})
+	a.scheduleStore = openTestScheduleStore(t)
+	task, err := a.scheduleStore.Create(context.Background(), "server", "channel", "user", "recap this week", time.Now().Add(time.Hour).Format("2006-01-02 15:04"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.handleScheduledTask(context.Background(), task)
+	mu.Lock()
+	defer mu.Unlock()
+	if !searched || len(sent) != 1 || sent[0] != "Tento týden: grilovačka v sobotu." {
+		t.Errorf("searched %v, sent %q", searched, sent)
 	}
 	if exists, err := a.scheduleStore.Exists(context.Background(), task.ID); err != nil || exists {
-		t.Errorf("finished one-shot task kept for retry: %v, %v", exists, err)
+		t.Errorf("finished one-shot task kept: %v, %v", exists, err)
 	}
 }
 
