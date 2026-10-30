@@ -439,8 +439,9 @@ func TestKeywordSearchMatchesAnyQueryWord(t *testing.T) {
 	petrID := insert("Petr si koupil nové kolo")
 	simonID := insert("Šimon miluje svíčkovou")
 	insert("Anna jezdí vlakem")
+	insert("Jsem rád, že tady nikdo není")
 
-	searches := map[string]func(context.Context, string, string) ([]string, error){
+	searches := map[string]func(context.Context, string, string, int) ([]string, error){
 		"likeSearch": store.likeSearch,
 	}
 	if store.fts5Enabled {
@@ -459,10 +460,11 @@ func TestKeywordSearchMatchesAnyQueryWord(t *testing.T) {
 		{"Šimon a Petr", []string{petrID, simonID}},
 		{"svíčk", []string{simonID}},
 		{"co s tím", nil},
+		{"jsem tady a není to ono", nil},
 	}
 	for name, search := range searches {
 		for _, tt := range tests {
-			got, err := search(ctx, tt.query, "srv1")
+			got, err := search(ctx, tt.query, "srv1", 10)
 			if err != nil {
 				t.Fatalf("%s(%q) error: %v", name, tt.query, err)
 			}
