@@ -25,7 +25,7 @@ Vespra is a Discord AI companion with persistent memory and a web management UI.
 
 **`config/`** — TOML config loading and a thread-safe `Store` wrapper (used everywhere for hot-reload). `ResolveResponseMode(serverID, channelID)` implements channel → agent → global priority. `[[agents]]` array configures multiple Discord bots, each with their own `server_id`, optional `token`, `soul_file`, `db_path`, and per-channel overrides.
 
-**`bot/`** — Thin `discordgo` wrapper. Ignores self/bot messages, routes everything else to the agent router. Multiple bots can run simultaneously (one default + one per agent with a custom token).
+**`bot/`** — Thin `discordgo` wrapper. Ignores self/bot messages, routes everything else to the agent router, along with reactions to the bot's messages. Multiple bots can run simultaneously (one default + one per agent with a custom token).
 
 **`agent/`** — Core conversation logic:
 - `router.go`: maintains a map of per-channel goroutines. Spawns new agent or routes to existing; hot-loads newly configured agents from cfgStore without restart (custom-token agents require restart). `UnloadAgent(serverID)` evicts from cache when an agent is removed/updated.
@@ -79,6 +79,7 @@ go test -tags sqlite_fts5 ./...
 - One goroutine per active Discord channel; idle timeout after `IdleTimeoutMinutes`
 - Scheduled tasks persist in `schedule.db`, run on the channel agent goroutine, and use local time; recurring tasks skip missed runs after restart.
 - Conversation history is in-memory only (not persisted across restarts)
+- Reactions from people on the bot's own messages are added to a running channel agent's history as a `[reaction]` user note, so the next turn sees them. A reaction never wakes an agent, calls the LLM or triggers a reply
 - Images go straight to the main model when the gateway's `/models` list shows image input for it (cached per model); videos and text-only models get the `vision_model` description instead. The vision model also describes images in the background so history keeps their content without base64
 - Every turn also gets the images and GIFs from the last 30 channel messages, each labelled with its author and text, so the bot sees every recent image without anyone replying to it. Videos from earlier messages are left out because a few of them push a request past OpenRouter's 30 MB media limit
 - The model sees every message author and mentioned user as `Name (<@ID>)`, using the server nickname when Discord sends it, so it can ping people by writing the tag

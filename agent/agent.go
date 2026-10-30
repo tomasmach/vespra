@@ -117,6 +117,7 @@ type ChannelAgent struct {
 	msgCh      chan *discordgo.MessageCreate // buffered 100
 	taskCh     chan schedule.Task
 	internalCh chan string        // buffered; receives system messages (e.g., web search results)
+	reactionCh chan reactionNote  // buffered; reactions to the bot's messages, recorded without a reply
 	cancel     context.CancelFunc // cancels this agent's context
 }
 
@@ -492,6 +493,7 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 		soulText:   soul.Load(cfgStore.Get(), serverID),
 		msgCh:      make(chan *discordgo.MessageCreate, 100),
 		internalCh: make(chan string, 10),
+		reactionCh: make(chan reactionNote, 100),
 		taskCh:     make(chan schedule.Task, 100),
 		logger:     slog.With("server_id", serverID, "channel_id", channelID),
 	}
@@ -593,6 +595,9 @@ func (a *ChannelAgent) run(ctx context.Context) {
 		drained:
 			a.handleInternalMessage(ctx, intMsg)
 
+		case note := <-a.reactionCh:
+			a.history = recordReaction(a.history, note, a.cfgStore.Get().Agent.HistoryLimit)
+
 		case <-timerC(debounceTimer):
 			flush(ctx)
 			resetIdleTimer()
@@ -654,6 +659,57 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 		}
 	}
 	return history
+}
+
+// reactionNote is a reaction someone added to one of the bot's messages.
+type reactionNote struct {
+	userLabel string
+	emoji     string
+	snippet   string
+}
+
+const reactionNotePrefix = "[reaction] "
+
+// recordReaction adds a reaction to history as a user note, so the next turn
+// sees how people reacted without the reaction causing a reply. Reactions to
+// the same message in a row share one note. An empty history stays empty,
+// because a note would stop the next message from backfilling channel history.
+func recordReaction(history []llm.Message, note reactionNote, limit int) []llm.Message {
+	if len(history) == 0 {
+		return history
+	}
+	entry := note.userLabel + " reacted " + note.emoji
+	target := " to your message: \"" + note.snippet + "\""
+	if last := &history[len(history)-1]; last.Role == "user" && len(last.ContentParts) == 0 &&
+		strings.HasPrefix(last.Content, reactionNotePrefix) && strings.HasSuffix(last.Content, target) {
+		last.Content = strings.TrimSuffix(last.Content, target) + ", " + entry + target
+		return history
+	}
+	history = append(history, llm.Message{Role: "user", Content: reactionNotePrefix + entry + target})
+	if limit > 0 && len(history) > limit {
+		history = history[len(history)-limit:]
+	}
+	return sanitizeHistory(history)
+}
+
+// reactionEmoji names a custom emoji, since the model cannot see its image.
+func reactionEmoji(e discordgo.Emoji) string {
+	if e.ID != "" {
+		return ":" + e.Name + ":"
+	}
+	return e.Name
+}
+
+// reactionSnippet returns the start of the reacted message on one line.
+func reactionSnippet(content string) string {
+	content = strings.Join(strings.Fields(content), " ")
+	if content == "" {
+		return "(no text)"
+	}
+	if runes := []rune(content); len(runes) > 80 {
+		return string(runes[:80]) + "…"
+	}
+	return content
 }
 
 // isAddressedToBot reports whether a Discord message is directly addressed to

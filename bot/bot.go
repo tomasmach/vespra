@@ -41,10 +41,13 @@ func New(token string) (*Bot, error) {
 	session.Identify.Intents = discordgo.IntentsGuilds |
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentsDirectMessages |
-		discordgo.IntentsMessageContent
+		discordgo.IntentsMessageContent |
+		discordgo.IntentsGuildMessageReactions |
+		discordgo.IntentsDirectMessageReactions
 
 	b := &Bot{session: session}
 	session.AddHandler(b.onMessageCreate)
+	session.AddHandler(b.onMessageReactionAdd)
 	session.AddHandler(b.onInteractionCreate)
 	session.AddHandler(b.onGuildCreate)
 
@@ -124,4 +127,13 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, msg *discordgo.MessageCreate
 		return
 	}
 	b.router.Route(msg)
+}
+
+// onMessageReactionAdd hands reactions to the router, which keeps only those
+// from people on this bot's own messages.
+func (b *Bot) onMessageReactionAdd(s *discordgo.Session, r *discordgo.MessageReactionAdd) {
+	if r.MessageReaction == nil || r.UserID == s.State.User.ID || b.router == nil {
+		return
+	}
+	b.router.RouteReaction(s, r)
 }
