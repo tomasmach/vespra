@@ -25,6 +25,7 @@ const (
 	ToolNameImageGen           = "generate_image"
 	ToolNameVisualMemorySave   = "visual_memory_save"
 	ToolNameVisualMemoryRecall = "visual_memory_recall"
+	ToolNameCreatePoll         = "create_poll"
 )
 
 // Tool is the interface every tool must implement.
@@ -45,6 +46,7 @@ type Registry struct {
 	WebSearchCalled bool   // set to true when web_search is invoked
 	ImageGenCalled  bool   // set to true when generate_image is invoked
 	Reacted         bool   // set to true when the react tool is called
+	Polled          bool   // set to true when create_poll posts a poll
 }
 
 // NewRegistry creates an empty registry.
