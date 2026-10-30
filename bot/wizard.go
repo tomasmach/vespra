@@ -219,7 +219,7 @@ func (w *wizardHandler) showChannelStepDeferred(s *discordgo.Session, i *discord
 
 	content := "**Step 2/3 — Channel Setup**\nSelect channels to restrict where I'm active. Skip or leave empty to use all channels."
 	if truncated {
-		content += "\n\n*This server has more than 25 text channels. Showing the first 25 — use the web dashboard for full control.*"
+		content += "\n\n*This server has more than 25 channels. Showing the first 25 — use the web dashboard for full control.*"
 	}
 
 	maxValues := len(textChannels)
