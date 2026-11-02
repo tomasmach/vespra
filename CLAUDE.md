@@ -83,6 +83,7 @@ go test -tags sqlite_fts5 ./...
 - Every turn also gets the images and GIFs from the last 30 channel messages, each labelled with its author and text, so the bot sees every recent image without anyone replying to it. Videos from earlier messages are left out because a few of them push a request past OpenRouter's 30 MB media limit
 - The model sees every message author and mentioned user as `Name (<@ID>)`, using the server nickname when Discord sends it, so it can ping people by writing the tag
 - Embeddings stored as little-endian float32 blobs in SQLite
+- Bot messages suppress link previews; generated images still show because they are uploaded as attachments
 - Soft-delete only for memories (`forgotten=1` flag)
 - Tool-call loop repeats until LLM produces plain text (no tool calls)
 - Discord messages split at 2000-char limit

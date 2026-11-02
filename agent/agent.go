@@ -833,8 +833,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	systemPrompt := a.buildSystemPrompt(cfg, mode, msg.ChannelID, memories, botName, addressed, directedAtOther)
 
 	sendFn := a.rateLimitedSendFn(func(content string) error {
-		_, err := a.resources.Session.ChannelMessageSend(msg.ChannelID, content)
-		return err
+		return a.sendText(msg.ChannelID, content)
 	})
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
@@ -1097,8 +1096,7 @@ func (a *ChannelAgent) handleMessages(ctx context.Context, msgs []*discordgo.Mes
 	systemPrompt := a.buildSystemPrompt(cfg, mode, lastMsg.ChannelID, memories, botName, anyAddressed, allDirectedAtOther)
 
 	sendFn := a.rateLimitedSendFn(func(content string) error {
-		_, err := a.resources.Session.ChannelMessageSend(lastMsg.ChannelID, content)
-		return err
+		return a.sendText(lastMsg.ChannelID, content)
 	})
 	reactFn := func(emoji string) error {
 		return a.resources.Session.MessageReactionAdd(lastMsg.ChannelID, lastMsg.ID, emoji)
@@ -1195,8 +1193,7 @@ func (a *ChannelAgent) handleScheduledTask(ctx context.Context, task schedule.Ta
 	systemPrompt += fmt.Sprintf("\n\nCarry out this scheduled task now. You MUST post a text reply in this channel using the reply tool. If the task is for the person who created it, mention them as <@%s> so Discord notifies them.", task.UserID)
 	// No send rate limit: tasks are capped per server, and a dropped reminder is lost.
 	sendFn := func(content string) error {
-		_, err := a.resources.Session.ChannelMessageSend(a.channelID, content)
-		return err
+		return a.sendText(a.channelID, content)
 	}
 	reactFn := func(emoji string) error {
 		return fmt.Errorf("scheduled tasks have no message to react to; use reply")
@@ -1238,8 +1235,7 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	}
 
 	sendFn := a.rateLimitedSendFn(func(text string) error {
-		_, err := a.resources.Session.ChannelMessageSend(a.channelID, text)
-		return err
+		return a.sendText(a.channelID, text)
 	})
 	reactFn := func(emoji string) error { return nil }
 	// Minimal registry: only reply + react. No memory tools, no web_search/web_fetch.
@@ -1470,9 +1466,19 @@ func (a *ChannelAgent) makeSendImageFn(channelID string) tools.SendImageFunc {
 		_, err := a.resources.Session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 			Content: caption,
 			Files:   []*discordgo.File{{Name: filename, Reader: data}},
+			Flags:   discordgo.MessageFlagsSuppressEmbeds,
 		})
 		return err
 	}
+}
+
+// sendText suppresses link previews so links stay plain text. Attachments are not embeds, so they still show.
+func (a *ChannelAgent) sendText(channelID, content string) error {
+	_, err := a.resources.Session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Content: content,
+		Flags:   discordgo.MessageFlagsSuppressEmbeds,
+	})
+	return err
 }
 
 func (a *ChannelAgent) imageGenConfigured(cfg *config.Config) bool {
