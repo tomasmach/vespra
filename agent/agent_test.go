@@ -2022,6 +2022,25 @@ func TestRecordReaction(t *testing.T) {
 	})
 }
 
+func TestRecordPendingReactionsBeforeTurn(t *testing.T) {
+	a := &ChannelAgent{
+		cfgStore:   config.NewStoreFromConfig(&config.Config{Agent: config.TurnConfig{HistoryLimit: 20}}),
+		reactionCh: make(chan reactionNote, 2),
+		history: []llm.Message{
+			{Role: "user", Content: "mach (<@1>): tell me a joke"},
+			{Role: "assistant", Content: "Why did the gopher cross the road?"},
+		},
+	}
+	a.reactionCh <- reactionNote{userLabel: "mach (<@1>)", emoji: "😂", snippet: "Why did the gopher cross the road?"}
+	a.recordPendingReactions()
+	if len(a.history) != 3 || !strings.Contains(a.history[2].Content, "reacted 😂") {
+		t.Fatalf("queued reaction not in history before the turn: %+v", a.history)
+	}
+	if len(a.reactionCh) != 0 {
+		t.Errorf("reaction channel not drained")
+	}
+}
+
 func TestReactionSnippet(t *testing.T) {
 	if got := reactionSnippet("  line one\nline two "); got != "line one line two" {
 		t.Errorf("got %q", got)

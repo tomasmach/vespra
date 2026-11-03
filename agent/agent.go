@@ -595,6 +595,7 @@ func (a *ChannelAgent) run(ctx context.Context) {
 	}
 
 	flush := func(fctx context.Context) {
+		a.recordPendingReactions()
 		if len(coalesceBuffer) == 0 {
 			return
 		}
@@ -623,6 +624,7 @@ func (a *ChannelAgent) run(ctx context.Context) {
 
 			cfg := a.cfgStore.Get()
 			if cfg.Agent.CoalesceDisabled {
+				a.recordPendingReactions()
 				a.handleMessage(ctx, msg)
 			} else {
 				coalesceBuffer = append(coalesceBuffer, msg)
@@ -719,6 +721,20 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 		}
 	}
 	return history
+}
+
+// recordPendingReactions records queued reactions before a turn. select picks
+// ready channels at random, so a message can be read before a reaction that
+// arrived earlier.
+func (a *ChannelAgent) recordPendingReactions() {
+	for {
+		select {
+		case note := <-a.reactionCh:
+			a.history = recordReaction(a.history, note, a.cfgStore.Get().Agent.HistoryLimit)
+		default:
+			return
+		}
+	}
 }
 
 // reactionNote is a reaction someone added to one of the bot's messages.
