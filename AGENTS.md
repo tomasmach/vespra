@@ -44,6 +44,7 @@ Vespra is a Discord AI companion with persistent memory and a web management UI.
 
 - `schedule_task`, `list_tasks`, `cancel_task` manage persistent reminders and recurring tasks in the current server and channel.
 - `search_messages` searches the current channel's whole history through Discord's guild message search (author, mentions, time range, content, attachments). Server channels only; Discord has no search for DMs.
+- `create_poll` posts a native Discord poll in the current channel (2-10 answers, 1-768 hours, default 24, optional multiselect). Server channels only, one poll per turn.
 
 **`web/`** — Embedded HTTP management UI (`web/static/`). REST API:
 - `GET/POST /api/config` — read/write raw TOML config (validates before applying, hot-reloads)
