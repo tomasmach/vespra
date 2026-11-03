@@ -54,7 +54,7 @@ func TestBotMessagesSuppressLinkPreviewsButKeepImages(t *testing.T) {
 	session.Client = &http.Client{Transport: scheduledTaskTransport{baseURL: srv.URL}, Timeout: 2 * time.Second}
 	a := &ChannelAgent{resources: &AgentResources{Session: session}}
 
-	if err := a.sendText("channel1", "see https://example.com"); err != nil {
+	if err := a.sendText("channel1", "see https://example.com", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.makeSendImageFn("channel1")("cat.png", strings.NewReader("png"), "made at https://example.com"); err != nil {
