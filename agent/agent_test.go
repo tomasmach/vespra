@@ -1661,6 +1661,9 @@ func TestBuildSystemPromptAlwaysIncludesHumanizer(t *testing.T) {
 		if !strings.Contains(got, soul.Humanizer) {
 			t.Errorf("mode %q: system prompt is missing the humanizer block", mode)
 		}
+		if !strings.Contains(got, soul.DiscordFormatting) {
+			t.Errorf("mode %q: system prompt is missing the Discord formatting block", mode)
+		}
 	}
 }
 

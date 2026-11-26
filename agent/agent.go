@@ -1497,6 +1497,8 @@ func (a *ChannelAgent) buildSystemPrompt(cfg *config.Config, mode, channelID str
 	}
 	sb.WriteString("\n\n")
 	sb.WriteString(soul.Humanizer)
+	sb.WriteString("\n")
+	sb.WriteString(soul.DiscordFormatting)
 	if lang := cfg.ResolveLanguage(a.serverID, channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
@@ -1900,7 +1902,7 @@ func (a *ChannelAgent) processTurn(ctx context.Context, cfg *config.Config, tp t
 	}
 
 	if assistantContent != "" && !tp.reg.Replied {
-		parts := tools.SplitAndCapMessage(assistantContent, 2000, cfg.Agent.MaxReplyParts)
+		parts := tools.FormatForDiscord(assistantContent, 2000, cfg.Agent.MaxReplyParts)
 		for _, p := range parts {
 			if err := tp.sendFn(p); err != nil {
 				a.logger.Error("send message", "error", err)
