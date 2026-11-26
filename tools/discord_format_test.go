@@ -124,6 +124,7 @@ func TestFormatForDiscordKeepsTextThatFitsTheCap(t *testing.T) {
 	}{
 		{"early line break would overflow", strings.Repeat("x", 1001) + "\n" + strings.Repeat("abcdef ", 380), 2, true},
 		{"space right at the last fitting spot", strings.Repeat("abc ", 497) + "x " + strings.Repeat("b", 20) + strings.Repeat(" xyz", 495), 2, true},
+		{"three full parts", strings.Repeat("abcd ", 399) + "abc " + strings.Repeat("abcd ", 400) + strings.Repeat("abcd ", 399) + "abcde", 3, true},
 		{"emoji at part edges", strings.Repeat("a", 1499) + "\n" + strings.Repeat("b", 1999) + "😀" + strings.Repeat("c", 1997) + "😀" + strings.Repeat("d", 1999), 4, false},
 	}
 	for _, tt := range tests {
@@ -137,8 +138,10 @@ func TestFormatForDiscordKeepsTextThatFitsTheCap(t *testing.T) {
 					t.Errorf("part %d has %d UTF-16 units", i, utf16Units(p))
 				}
 			}
-			if tt.atSpace && !strings.HasSuffix(parts[0], " ") {
-				t.Errorf("first part ends mid-word: %q", parts[0][len(parts[0])-10:])
+			for i, p := range parts[:len(parts)-1] {
+				if tt.atSpace && !strings.HasSuffix(p, " ") {
+					t.Errorf("part %d ends mid-word: %q", i, p[len(p)-10:])
+				}
 			}
 		})
 	}

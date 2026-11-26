@@ -12,7 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/tomasmach/vespra/llm"
 	"github.com/tomasmach/vespra/memory"
@@ -320,61 +319,54 @@ func SplitMessage(s string, limit int) []string {
 }
 
 // splitMessage is SplitMessage that, when maxParts > 0, only takes a break
-// that leaves a rest the remaining parts can hold. A cut in front of a
-// surrogate pair can leave a part one unit short of limit, so every part but
-// the last is counted as holding limit-1 units.
+// after which the rest still fits in the remaining parts.
 func splitMessage(s string, limit, maxParts int) []string {
 	var parts []string
 	for {
-		end := prefixWithin(s, limit)
-		if end == 0 {
-			_, end = utf8.DecodeRuneInString(s)
-		}
+		end := cutAt(s, limit)
 		if end == len(s) {
 			return append(parts, s)
 		}
-		minEnd := 0
-		if maxParts > 0 {
-			room, capacity := maxParts-len(parts)-1, 0
-			if room > 0 {
-				capacity = (room-1)*(limit-1) + limit
-			}
-			minEnd = prefixWithin(s, utf16Units(s)-capacity-1) + 1
+		fits := func(b int) bool {
+			return maxParts <= 0 || hardParts(s[b:], limit) <= maxParts-len(parts)-1
 		}
-		end = lastBreak(s[:end], minEnd)
+		end = lastBreak(s[:end], fits)
 		parts = append(parts, s[:end])
 		s = s[end:]
 	}
 }
 
 // lastBreak returns where head should end: after its last line break in the
-// second half, else after its last space, else at its end. A break must end
-// at minEnd or later.
-func lastBreak(head string, minEnd int) int {
-	if i := strings.LastIndex(head, "\n"); i >= len(head)/2 && i+1 >= minEnd {
+// second half, else after its last space, else at its end. A break is taken
+// only when fits accepts it.
+func lastBreak(head string, fits func(int) bool) int {
+	if i := strings.LastIndex(head, "\n"); i >= len(head)/2 && fits(i+1) {
 		return i + 1
 	}
-	if i := strings.LastIndex(head, " "); i > 0 && i+1 >= minEnd {
+	if i := strings.LastIndex(head, " "); i > 0 && fits(i+1) {
 		return i + 1
 	}
 	return len(head)
 }
 
-func utf16Units(s string) int {
-	n := 0
-	for _, r := range s {
-		n += utf16Len(r)
+// hardParts returns how many parts s needs when every cut is at the limit.
+// No other split of s needs fewer.
+func hardParts(s string, limit int) int {
+	n := 1
+	for end := cutAt(s, limit); end < len(s); end = cutAt(s, limit) {
+		s = s[end:]
+		n++
 	}
 	return n
 }
 
-// prefixWithin returns the byte length of the longest prefix of s that fits
-// in limit UTF-16 code units.
-func prefixWithin(s string, limit int) int {
+// cutAt returns the byte length of the longest prefix of s that fits in limit
+// UTF-16 code units, and at least one rune.
+func cutAt(s string, limit int) int {
 	units := 0
 	for i, r := range s {
 		units += utf16Len(r)
-		if units > limit {
+		if units > limit && i > 0 {
 			return i
 		}
 	}
