@@ -1371,7 +1371,8 @@ func (a *ChannelAgent) handleInternalMessage(ctx context.Context, content string
 	if botName != "" {
 		fmt.Fprintf(&sb, "Your Discord username is %s.\n\n", botName)
 	}
-	sb.WriteString("You are receiving web search results. Summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Do NOT reference or claim to have previously told the user anything — you have not spoken to them yet in this context. Focus on presenting only the new information clearly, with relevant sources and links. Reply IMMEDIATELY with the data — do NOT send a status message first. You MUST call the reply tool exactly once with the complete answer.")
+	sb.WriteString("You are receiving web search results. Summarize the findings for the user. Do NOT repeat or rephrase anything you said earlier in the conversation. Do NOT reference or claim to have previously told the user anything — you have not spoken to them yet in this context. Focus on presenting only the new information clearly, with relevant sources and links. Reply IMMEDIATELY with the data — do NOT send a status message first. You MUST call the reply tool exactly once with the complete answer.\n")
+	sb.WriteString(soul.DiscordFormatting)
 	if lang := cfg.ResolveLanguage(a.serverID, a.channelID); lang != "" {
 		fmt.Fprintf(&sb, "\n\nAlways respond in %s.", lang)
 	}
