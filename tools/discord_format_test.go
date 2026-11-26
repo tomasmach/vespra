@@ -119,14 +119,20 @@ func TestFormatForDiscordKeepsTextThatFitsTheCap(t *testing.T) {
 	msg := strings.Repeat("x", 1001) + "\n" + strings.Repeat("abcdef ", 380)
 	parts := tools.FormatForDiscord(msg, 2000, 2)
 	if len(parts) != 2 || strings.Join(parts, "") != msg {
-		t.Errorf("want the whole %d-unit message in 2 parts, got %d parts", utf16Units(msg), len(parts))
+		t.Fatalf("want the whole %d-unit message in 2 parts, got %d parts", utf16Units(msg), len(parts))
+	}
+	if !strings.HasSuffix(parts[0], " ") {
+		t.Errorf("first part ends mid-word: %q", parts[0][len(parts[0])-10:])
 	}
 }
 
 func TestFormatForDiscordTruncatedPartFitsLimit(t *testing.T) {
-	parts := tools.FormatForDiscord(strings.Repeat("a", 7000), 2000, 2)
+	parts := tools.FormatForDiscord(strings.Repeat("abcdef ", 1000), 2000, 2)
 	if len(parts) != 2 || !strings.HasSuffix(parts[1], "…") {
 		t.Fatalf("want 2 parts ending with …, got %d", len(parts))
+	}
+	if !strings.HasSuffix(parts[0], " ") {
+		t.Errorf("first part ends mid-word: %q", parts[0][len(parts[0])-10:])
 	}
 	for i, p := range parts {
 		if utf16Units(p) > 2000 {

@@ -316,10 +316,12 @@ func utf16Len(r rune) int {
 // A chunk ends after a line break when one falls in its second half, else
 // after a space, so words and short lines stay whole.
 func SplitMessage(s string, limit int) []string {
-	return splitMessage(s, limit, true)
+	return splitMessage(s, limit, 0)
 }
 
-func splitMessage(s string, limit int, atBreaks bool) []string {
+// splitMessage is SplitMessage that, when maxParts > 0, only takes a break
+// that leaves the rest small enough for the remaining parts.
+func splitMessage(s string, limit, maxParts int) []string {
 	var parts []string
 	for {
 		end := prefixWithin(s, limit)
@@ -329,22 +331,32 @@ func splitMessage(s string, limit int, atBreaks bool) []string {
 		if end == len(s) {
 			return append(parts, s)
 		}
-		if atBreaks {
-			end = lastBreak(s[:end])
+		minEnd := 0
+		if maxParts > 0 {
+			minEnd = prefixWithin(s, utf16Units(s)-(maxParts-len(parts)-1)*limit)
 		}
+		end = lastBreak(s[:end], minEnd)
 		parts = append(parts, s[:end])
 		s = s[end:]
 	}
 }
 
-func lastBreak(head string) int {
-	if i := strings.LastIndex(head, "\n"); i >= len(head)/2 {
+func lastBreak(head string, minEnd int) int {
+	if i := strings.LastIndex(head, "\n"); i >= len(head)/2 && i >= minEnd {
 		return i + 1
 	}
-	if i := strings.LastIndex(head, " "); i > 0 {
+	if i := strings.LastIndex(head, " "); i > 0 && i >= minEnd {
 		return i + 1
 	}
 	return len(head)
+}
+
+func utf16Units(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16Len(r)
+	}
+	return n
 }
 
 // prefixWithin returns the byte length of the longest prefix of s that fits
@@ -360,22 +372,20 @@ func prefixWithin(s string, limit int) int {
 	return len(s)
 }
 
-// FormatForDiscord converts markdown tables to lists, splits s into chunks
-// and caps at maxParts. When splitting at line breaks and spaces needs more
-// than maxParts chunks, it splits at the limit instead so no text is lost.
-// When parts are still truncated, the last kept part gets one unit of room
-// and a "…" so Discord users can see that content was cut off.
+// FormatForDiscord converts markdown tables to lists and splits s into at
+// most maxParts chunks, breaking at line ends and spaces where the rest still
+// fits. Text that does not fit is cut, and the last kept part gets one unit
+// of room and a "…" so Discord users can see that content was cut off.
 func FormatForDiscord(s string, limit int, maxParts int) []string {
 	s = ConvertTables(s)
-	parts := splitMessage(s, limit, true)
-	if len(parts) <= maxParts {
-		return parts
+	parts := splitMessage(s, limit, maxParts)
+	if len(parts) > maxParts {
+		parts = SplitMessage(s, limit-1)
 	}
-	parts = splitMessage(s, limit, false)
 	if len(parts) > maxParts {
 		slog.Warn("truncated SplitMessage output", "original_parts", len(parts))
-		parts = splitMessage(s, limit-1, false)[:maxParts]
-		parts[maxParts-1] += "…"
+		parts = parts[:maxParts]
+		parts[maxParts-1] = strings.TrimRight(parts[maxParts-1], " \n") + "…"
 	}
 	return parts
 }
