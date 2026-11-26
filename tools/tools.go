@@ -320,7 +320,9 @@ func SplitMessage(s string, limit int) []string {
 }
 
 // splitMessage is SplitMessage that, when maxParts > 0, only takes a break
-// that leaves the rest small enough for the remaining parts.
+// that leaves a rest the remaining parts can hold. A cut in front of a
+// surrogate pair can leave a part one unit short of limit, so every part but
+// the last is counted as holding limit-1 units.
 func splitMessage(s string, limit, maxParts int) []string {
 	var parts []string
 	for {
@@ -333,7 +335,11 @@ func splitMessage(s string, limit, maxParts int) []string {
 		}
 		minEnd := 0
 		if maxParts > 0 {
-			minEnd = prefixWithin(s, utf16Units(s)-(maxParts-len(parts)-1)*limit)
+			room, capacity := maxParts-len(parts)-1, 0
+			if room > 0 {
+				capacity = (room-1)*(limit-1) + limit
+			}
+			minEnd = prefixWithin(s, utf16Units(s)-capacity-1) + 1
 		}
 		end = lastBreak(s[:end], minEnd)
 		parts = append(parts, s[:end])
@@ -341,11 +347,14 @@ func splitMessage(s string, limit, maxParts int) []string {
 	}
 }
 
+// lastBreak returns where head should end: after its last line break in the
+// second half, else after its last space, else at its end. A break must end
+// at minEnd or later.
 func lastBreak(head string, minEnd int) int {
-	if i := strings.LastIndex(head, "\n"); i >= len(head)/2 && i >= minEnd {
+	if i := strings.LastIndex(head, "\n"); i >= len(head)/2 && i+1 >= minEnd {
 		return i + 1
 	}
-	if i := strings.LastIndex(head, " "); i > 0 && i >= minEnd {
+	if i := strings.LastIndex(head, " "); i > 0 && i+1 >= minEnd {
 		return i + 1
 	}
 	return len(head)

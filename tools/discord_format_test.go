@@ -116,13 +116,31 @@ func TestSplitMessageBreaksAtLineThenSpace(t *testing.T) {
 }
 
 func TestFormatForDiscordKeepsTextThatFitsTheCap(t *testing.T) {
-	msg := strings.Repeat("x", 1001) + "\n" + strings.Repeat("abcdef ", 380)
-	parts := tools.FormatForDiscord(msg, 2000, 2)
-	if len(parts) != 2 || strings.Join(parts, "") != msg {
-		t.Fatalf("want the whole %d-unit message in 2 parts, got %d parts", utf16Units(msg), len(parts))
+	tests := []struct {
+		name     string
+		msg      string
+		maxParts int
+		atSpace  bool
+	}{
+		{"early line break would overflow", strings.Repeat("x", 1001) + "\n" + strings.Repeat("abcdef ", 380), 2, true},
+		{"space right at the last fitting spot", strings.Repeat("abc ", 497) + "x " + strings.Repeat("b", 20) + strings.Repeat(" xyz", 495), 2, true},
+		{"emoji at part edges", strings.Repeat("a", 1499) + "\n" + strings.Repeat("b", 1999) + "😀" + strings.Repeat("c", 1997) + "😀" + strings.Repeat("d", 1999), 4, false},
 	}
-	if !strings.HasSuffix(parts[0], " ") {
-		t.Errorf("first part ends mid-word: %q", parts[0][len(parts[0])-10:])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parts := tools.FormatForDiscord(tt.msg, 2000, tt.maxParts)
+			if len(parts) > tt.maxParts || strings.Join(parts, "") != tt.msg {
+				t.Fatalf("want the whole %d-unit message in %d parts, got %d parts", utf16Units(tt.msg), tt.maxParts, len(parts))
+			}
+			for i, p := range parts {
+				if utf16Units(p) > 2000 {
+					t.Errorf("part %d has %d UTF-16 units", i, utf16Units(p))
+				}
+			}
+			if tt.atSpace && !strings.HasSuffix(parts[0], " ") {
+				t.Errorf("first part ends mid-word: %q", parts[0][len(parts[0])-10:])
+			}
+		})
 	}
 }
 
