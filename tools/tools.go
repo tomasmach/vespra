@@ -316,6 +316,10 @@ func utf16Len(r rune) int {
 // A chunk ends after a line break when one falls in its second half, else
 // after a space, so words and short lines stay whole.
 func SplitMessage(s string, limit int) []string {
+	return splitMessage(s, limit, true)
+}
+
+func splitMessage(s string, limit int, atBreaks bool) []string {
 	var parts []string
 	for {
 		end := prefixWithin(s, limit)
@@ -325,15 +329,22 @@ func SplitMessage(s string, limit int) []string {
 		if end == len(s) {
 			return append(parts, s)
 		}
-		head := s[:end]
-		if i := strings.LastIndex(head, "\n"); i >= len(head)/2 {
-			end = i + 1
-		} else if i := strings.LastIndex(head, " "); i > 0 {
-			end = i + 1
+		if atBreaks {
+			end = lastBreak(s[:end])
 		}
 		parts = append(parts, s[:end])
 		s = s[end:]
 	}
+}
+
+func lastBreak(head string) int {
+	if i := strings.LastIndex(head, "\n"); i >= len(head)/2 {
+		return i + 1
+	}
+	if i := strings.LastIndex(head, " "); i > 0 {
+		return i + 1
+	}
+	return len(head)
 }
 
 // prefixWithin returns the byte length of the longest prefix of s that fits
@@ -350,14 +361,21 @@ func prefixWithin(s string, limit int) int {
 }
 
 // FormatForDiscord converts markdown tables to lists, splits s into chunks
-// and caps at maxParts. When parts are truncated, "…" is appended to the last
-// kept part so Discord users can see that content was cut off.
+// and caps at maxParts. When splitting at line breaks and spaces needs more
+// than maxParts chunks, it splits at the limit instead so no text is lost.
+// When parts are still truncated, the last kept part gets one unit of room
+// and a "…" so Discord users can see that content was cut off.
 func FormatForDiscord(s string, limit int, maxParts int) []string {
-	parts := SplitMessage(ConvertTables(s), limit)
+	s = ConvertTables(s)
+	parts := splitMessage(s, limit, true)
+	if len(parts) <= maxParts {
+		return parts
+	}
+	parts = splitMessage(s, limit, false)
 	if len(parts) > maxParts {
 		slog.Warn("truncated SplitMessage output", "original_parts", len(parts))
-		parts = parts[:maxParts]
-		parts[len(parts)-1] += "…"
+		parts = splitMessage(s, limit-1, false)[:maxParts]
+		parts[maxParts-1] += "…"
 	}
 	return parts
 }

@@ -103,7 +103,7 @@ func TestSplitMessageBreaksAtLineThenSpace(t *testing.T) {
 		t.Errorf("want split after the first paragraph, got parts of %d and %d chars", len(parts[0]), len(parts[len(parts)-1]))
 	}
 
-	words := strings.Repeat("abcdefg ", 400)
+	words := strings.Repeat("abcdef ", 400)
 	parts = tools.SplitMessage(words, 2000)
 	if strings.Join(parts, "") != words {
 		t.Fatal("SplitMessage() lost content")
@@ -111,6 +111,26 @@ func TestSplitMessageBreaksAtLineThenSpace(t *testing.T) {
 	for i, p := range parts[:len(parts)-1] {
 		if !strings.HasSuffix(p, " ") {
 			t.Errorf("part %d ends mid-word: %q", i, p[len(p)-10:])
+		}
+	}
+}
+
+func TestFormatForDiscordKeepsTextThatFitsTheCap(t *testing.T) {
+	msg := strings.Repeat("x", 1001) + "\n" + strings.Repeat("abcdef ", 380)
+	parts := tools.FormatForDiscord(msg, 2000, 2)
+	if len(parts) != 2 || strings.Join(parts, "") != msg {
+		t.Errorf("want the whole %d-unit message in 2 parts, got %d parts", utf16Units(msg), len(parts))
+	}
+}
+
+func TestFormatForDiscordTruncatedPartFitsLimit(t *testing.T) {
+	parts := tools.FormatForDiscord(strings.Repeat("a", 7000), 2000, 2)
+	if len(parts) != 2 || !strings.HasSuffix(parts[1], "…") {
+		t.Fatalf("want 2 parts ending with …, got %d", len(parts))
+	}
+	for i, p := range parts {
+		if utf16Units(p) > 2000 {
+			t.Errorf("part %d has %d UTF-16 units, over Discord's 2000 limit", i, utf16Units(p))
 		}
 	}
 }

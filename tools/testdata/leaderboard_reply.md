@@ -22,6 +22,6 @@ Tabulka podle dostupných leaderboardů (stav k 20.–25. 11. 2026). Pozor: jedn
 - https://library.mikesailab.com/news/ai-news/model-benchmark-watch/november-2026/2026-11-20/
 - https://geotoolbox.ai/blog/best-ai-model
 
-Tldr pro jackyho: tvoje „google modely jsou shit“ neobstojí — Neon je 61, tedy hned za GPT-6.2 Astra (62) a Fable 5.2 (65) třetí nejvyšší publikované skóre. Že ho to přepíná na nižší tier je věc rate limitů, ne kvality. <:kekw:1234567890123456789>
+Tldr pro Petra: tvoje „google modely jsou shit“ neobstojí — Neon je 61, tedy hned za GPT-6.2 Astra (62) a Fable 5.2 (65) třetí nejvyšší publikované skóre. Že ho to přepíná na nižší tier je věc rate limitů, ne kvality. <:kekw:1234567890123456789>
 
-Ramsay: Neon na dogrillování klidně, ale pokud jde o coding/agenta, Opus 5.5 nebo Fable 5.2 budou dál.
+Ondra: Neon na dogrillování klidně, ale pokud jde o coding/agenta, Opus 5.5 nebo Fable 5.2 budou dál.
