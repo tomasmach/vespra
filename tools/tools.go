@@ -276,7 +276,7 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 	if *t.replyCount > 0 && !*t.fetched {
 		return "Reply already sent in this turn. Do not send another reply.", nil
 	}
-	parts := SplitAndCapMessage(p.Content, 2000, t.maxReplyParts)
+	parts := FormatForDiscord(p.Content, 2000, t.maxReplyParts)
 	for _, part := range parts {
 		if err := t.send(part); err != nil {
 			return "", err
@@ -312,43 +312,81 @@ func utf16Len(r rune) int {
 
 // SplitMessage splits s into chunks of at most limit UTF-16 code units,
 // matching Discord's 2000-character limit which is measured in UTF-16 units.
+// A chunk ends after a line break when one falls in its second half, else
+// after a space, so words and short lines stay whole.
 func SplitMessage(s string, limit int) []string {
-	// fast path: count total UTF-16 units
-	total := 0
-	for _, r := range s {
-		total += utf16Len(r)
-	}
-	if total <= limit {
-		return []string{s}
-	}
-	var parts []string
-	var buf strings.Builder
-	units := 0
-	for _, r := range s {
-		rLen := utf16Len(r)
-		if units+rLen > limit {
-			parts = append(parts, buf.String())
-			buf.Reset()
-			units = 0
-		}
-		buf.WriteRune(r)
-		units += rLen
-	}
-	if buf.Len() > 0 {
-		parts = append(parts, buf.String())
-	}
-	return parts
+	return splitMessage(s, limit, 0)
 }
 
-// SplitAndCapMessage splits s into chunks and caps at maxParts.
-// When parts are truncated, "…" is appended to the last kept part so
-// Discord users can see that content was cut off.
-func SplitAndCapMessage(s string, limit int, maxParts int) []string {
-	parts := SplitMessage(s, limit)
+// splitMessage is SplitMessage that, when maxParts > 0, only takes a break
+// after which the rest still fits in the remaining parts.
+func splitMessage(s string, limit, maxParts int) []string {
+	var parts []string
+	for {
+		end := cutAt(s, limit)
+		if end == len(s) {
+			return append(parts, s)
+		}
+		fits := func(b int) bool {
+			return maxParts <= 0 || hardParts(s[b:], limit) <= maxParts-len(parts)-1
+		}
+		end = lastBreak(s[:end], fits)
+		parts = append(parts, s[:end])
+		s = s[end:]
+	}
+}
+
+// lastBreak returns where head should end: after its last line break in the
+// second half, else after its last space, else at its end. A break is taken
+// only when fits accepts it.
+func lastBreak(head string, fits func(int) bool) int {
+	if i := strings.LastIndex(head, "\n"); i >= len(head)/2 && fits(i+1) {
+		return i + 1
+	}
+	if i := strings.LastIndex(head, " "); i > 0 && fits(i+1) {
+		return i + 1
+	}
+	return len(head)
+}
+
+// hardParts returns how many parts s needs when every cut is at the limit.
+// No other split of s needs fewer.
+func hardParts(s string, limit int) int {
+	n := 1
+	for end := cutAt(s, limit); end < len(s); end = cutAt(s, limit) {
+		s = s[end:]
+		n++
+	}
+	return n
+}
+
+// cutAt returns the byte length of the longest prefix of s that fits in limit
+// UTF-16 code units, and at least one rune.
+func cutAt(s string, limit int) int {
+	units := 0
+	for i, r := range s {
+		units += utf16Len(r)
+		if units > limit && i > 0 {
+			return i
+		}
+	}
+	return len(s)
+}
+
+// FormatForDiscord converts markdown tables to lists and splits s into at
+// most maxParts chunks, breaking at line ends and spaces where the rest still
+// fits. Text that does not fit is cut, and the last kept part gets one unit
+// of room and a "…" so Discord users can see that content was cut off.
+func FormatForDiscord(s string, limit int, maxParts int) []string {
+	s = ConvertTables(s)
+	parts := splitMessage(s, limit, maxParts)
+	if len(parts) > maxParts {
+		parts = SplitMessage(s, limit-1)
+	}
 	if len(parts) > maxParts {
 		slog.Warn("truncated SplitMessage output", "original_parts", len(parts))
 		parts = parts[:maxParts]
-		parts[len(parts)-1] += "…"
+		parts[maxParts-1] = strings.TrimRight(parts[maxParts-1], " \n") + "…"
 	}
 	return parts
 }

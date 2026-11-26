@@ -89,7 +89,7 @@ go test -tags sqlite_fts5 ./...
 - Bot messages suppress link previews; generated images still show because they are uploaded as attachments
 - Soft-delete only for memories (`forgotten=1` flag)
 - Tool-call loop repeats until LLM produces plain text (no tool calls)
-- Discord messages split at 2000-char limit
+- Discord messages split at the 2000-char limit, after a line break or space so words stay whole. Discord has no tables, so the prompt forbids them and any markdown table outside a code block is sent as a list
 - Bot messages may ping users but never @everyone, @here or roles. In a server channel the first part of an answer is a Discord reply to the triggering message only when other messages arrived after it; later parts, scheduled tasks and search results are plain messages
 - Threads are treated as independent channels; a thread without its own override inherits its parent channel's response mode (forum posts are threads too)
 - DMs are always served using the default bot session and default memory DB, without needing an `[[agents]]` entry

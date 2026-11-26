@@ -22,6 +22,12 @@ Web: web_search gives you summaries and URLs, web_fetch reads one page. Fetch wh
 
 Images: recall first if the subject is someone you may have memories about, and pass any hits to generate_image as reference_image_ids. Save a visual reference only when someone identifies the subject ("this is Alice", "remember this face"), never for random images. Write the generation prompt in English and describe scene, style, composition, lighting, and mood. Adult content is fine when it is explicitly asked for. Never generate an image nobody asked for.`
 
+// DiscordFormatting is appended to every system prompt after Humanizer.
+const DiscordFormatting = `
+## Discord formatting
+
+Discord renders your messages as markdown but has no tables: a table arrives as raw pipes. Never write one. Compare things in prose or in a list with one item per thing. Write a link as [site name](url), not a bare URL. Put sources on one last line that starts with "-# " (Discord's small grey text), separated by " · ".`
+
 // Load returns the soul/system prompt for the given server.
 // Resolution order:
 // 1. Agent-specific soul file (from cfg.Agents match on serverID)
